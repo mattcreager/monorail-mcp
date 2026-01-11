@@ -2,7 +2,7 @@
 // Monorail Figma Plugin
 // Converts IR (deck spec) into Figma Slides
 // Show the UI
-figma.showUI(__html__, { width: 400, height: 500 });
+figma.showUI(__html__, { width: 320, height: 280 });
 // Colors - dark theme
 const COLORS = {
     bg: { r: 0.06, g: 0.06, b: 0.1 }, // Dark blue-black background

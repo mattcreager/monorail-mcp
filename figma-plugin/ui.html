@@ -29,112 +29,12 @@
       content: "🚝";
     }
     
-    .section {
-      margin-bottom: 20px;
-    }
-    
-    label {
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      color: #999;
-      margin-bottom: 8px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    textarea {
-      width: 100%;
-      height: 180px;
-      background: #2d2d2d;
-      border: 1px solid #444;
-      border-radius: 6px;
-      color: #fff;
-      font-family: 'SF Mono', Monaco, monospace;
-      font-size: 11px;
-      padding: 12px;
-      resize: vertical;
-    }
-    
-    textarea:focus {
-      outline: none;
-      border-color: #0d99ff;
-    }
-    
-    textarea::placeholder {
-      color: #666;
-    }
-    
-    .btn {
-      width: 100%;
-      padding: 12px 16px;
-      border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-      margin-bottom: 8px;
-    }
-    
-    .btn-primary {
-      background: #0d99ff;
-      color: white;
-    }
-    
-    .btn-primary:hover {
-      background: #0b87e0;
-    }
-    
-    .btn-secondary {
-      background: #3d3d3d;
-      color: #fff;
-    }
-    
-    .btn-secondary:hover {
-      background: #4d4d4d;
-    }
-    
-    .status {
-      padding: 12px;
-      border-radius: 6px;
-      font-size: 12px;
-      margin-top: 12px;
-      display: none;
-    }
-    
-    .status.success {
-      display: block;
-      background: rgba(52, 199, 89, 0.15);
-      border: 1px solid rgba(52, 199, 89, 0.3);
-      color: #34c759;
-    }
-    
-    .status.error {
-      display: block;
-      background: rgba(255, 59, 48, 0.15);
-      border: 1px solid rgba(255, 59, 48, 0.3);
-      color: #ff3b30;
-    }
-    
-    .divider {
-      height: 1px;
-      background: #333;
-      margin: 20px 0;
-    }
-    
-    .help {
-      font-size: 11px;
-      color: #666;
-      margin-top: 8px;
-    }
-    
     /* WebSocket connection status */
     .ws-status {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 8px 12px;
+      padding: 10px 12px;
       background: #2d2d2d;
       border-radius: 6px;
       margin-bottom: 16px;
@@ -146,6 +46,7 @@
       height: 8px;
       border-radius: 50%;
       background: #666;
+      flex-shrink: 0;
     }
     
     .ws-indicator.connected {
@@ -186,6 +87,220 @@
     .ws-btn:hover {
       background: #4d4d4d;
     }
+    
+    /* Activity feed */
+    .activity-section {
+      margin-bottom: 16px;
+    }
+    
+    .activity-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    
+    .activity-feed {
+      background: #2d2d2d;
+      border-radius: 6px;
+      padding: 8px 0;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    
+    .activity-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #ccc;
+    }
+    
+    .activity-item:first-child {
+      color: #fff;
+    }
+    
+    .activity-icon {
+      font-size: 11px;
+      width: 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    
+    .activity-text {
+      flex: 1;
+    }
+    
+    .activity-time {
+      color: #666;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    
+    .activity-empty {
+      padding: 12px;
+      text-align: center;
+      color: #666;
+      font-size: 12px;
+    }
+    
+    /* Collapsible section */
+    .collapsible {
+      border: 1px solid #333;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    
+    .collapsible-header {
+      display: flex;
+      align-items: center;
+      padding: 10px 12px;
+      background: #2a2a2a;
+      cursor: pointer;
+      user-select: none;
+    }
+    
+    .collapsible-header:hover {
+      background: #333;
+    }
+    
+    .collapsible-arrow {
+      margin-right: 8px;
+      transition: transform 0.2s;
+      color: #666;
+      font-size: 10px;
+    }
+    
+    .collapsible.open .collapsible-arrow {
+      transform: rotate(90deg);
+    }
+    
+    .collapsible-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #999;
+    }
+    
+    .collapsible-content {
+      display: none;
+      padding: 12px;
+      background: #252525;
+    }
+    
+    .collapsible.open .collapsible-content {
+      display: block;
+    }
+    
+    /* Form elements */
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #777;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    textarea {
+      width: 100%;
+      height: 120px;
+      background: #1e1e1e;
+      border: 1px solid #444;
+      border-radius: 4px;
+      color: #fff;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 10px;
+      padding: 8px;
+      resize: vertical;
+      margin-bottom: 8px;
+    }
+    
+    textarea:focus {
+      outline: none;
+      border-color: #0d99ff;
+    }
+    
+    textarea::placeholder {
+      color: #555;
+    }
+    
+    .btn {
+      width: 100%;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: 6px;
+    }
+    
+    .btn-primary {
+      background: #0d99ff;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #0b87e0;
+    }
+    
+    .btn-secondary {
+      background: #3d3d3d;
+      color: #fff;
+    }
+    
+    .btn-secondary:hover {
+      background: #4d4d4d;
+    }
+    
+    .help {
+      font-size: 10px;
+      color: #555;
+      margin-top: 4px;
+    }
+    
+    .divider {
+      height: 1px;
+      background: #333;
+      margin: 12px 0;
+    }
+    
+    /* Toast notification */
+    .toast {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      right: 16px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.2s;
+      pointer-events: none;
+    }
+    
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    
+    .toast.success {
+      background: rgba(52, 199, 89, 0.9);
+      color: white;
+    }
+    
+    .toast.error {
+      background: rgba(255, 59, 48, 0.9);
+      color: white;
+    }
   </style>
 </head>
 <body>
@@ -198,53 +313,99 @@
     <button class="ws-btn" id="ws-connect-btn">Connect</button>
   </div>
   
-  <div class="section">
-    <label>Paste IR (JSON)</label>
-    <textarea id="ir-input" placeholder='{
-  "slides": [
-    {
-      "id": "slide-1",
-      "archetype": "title",
-      "status": "draft",
-      "content": {
-        "headline": "Your Title Here",
-        "subline": "Your subtitle"
-      }
-    }
-  ]
-}'></textarea>
-    <button class="btn btn-primary" id="apply-btn">Apply to Deck</button>
-    <p class="help">Paste the IR JSON from Claude, then click Apply.</p>
+  <!-- Activity Feed -->
+  <div class="activity-section">
+    <div class="activity-header">Activity</div>
+    <div class="activity-feed" id="activity-feed">
+      <div class="activity-empty">No activity yet</div>
+    </div>
   </div>
   
-  <div class="divider"></div>
-  
-  <div class="section">
-    <label>Export Current Deck</label>
-    <button class="btn btn-secondary" id="export-btn">Export as IR</button>
-    <textarea id="ir-output" placeholder="Exported IR will appear here..." readonly></textarea>
-    <button class="btn btn-secondary" id="copy-btn" style="display: none;">Copy to Clipboard</button>
+  <!-- Manual Controls (collapsed) -->
+  <div class="collapsible" id="manual-controls">
+    <div class="collapsible-header" onclick="toggleCollapsible('manual-controls')">
+      <span class="collapsible-arrow">▶</span>
+      <span class="collapsible-title">Manual Controls</span>
+    </div>
+    <div class="collapsible-content">
+      <label>Paste IR (JSON)</label>
+      <textarea id="ir-input" placeholder='{"slides": [...]}'></textarea>
+      <button class="btn btn-primary" id="apply-btn">Apply to Deck</button>
+      
+      <div class="divider"></div>
+      
+      <label>Export Current Deck</label>
+      <button class="btn btn-secondary" id="export-btn">Export as IR</button>
+      <textarea id="ir-output" placeholder="Exported IR..." readonly></textarea>
+      <button class="btn btn-secondary" id="copy-btn" style="display: none;">Copy to Clipboard</button>
+    </div>
   </div>
   
-  <div class="status" id="status"></div>
+  <!-- Toast notification -->
+  <div class="toast" id="toast"></div>
   
   <script>
+    // Elements
+    const wsIndicator = document.getElementById('ws-indicator');
+    const wsStatusText = document.getElementById('ws-status-text');
+    const wsConnectBtn = document.getElementById('ws-connect-btn');
+    const activityFeed = document.getElementById('activity-feed');
     const irInput = document.getElementById('ir-input');
     const irOutput = document.getElementById('ir-output');
     const applyBtn = document.getElementById('apply-btn');
     const exportBtn = document.getElementById('export-btn');
     const copyBtn = document.getElementById('copy-btn');
-    const status = document.getElementById('status');
+    const toast = document.getElementById('toast');
     
-    // WebSocket elements
-    const wsIndicator = document.getElementById('ws-indicator');
-    const wsStatusText = document.getElementById('ws-status-text');
-    const wsConnectBtn = document.getElementById('ws-connect-btn');
-    
-    // WebSocket state
+    // State
     let ws = null;
     const WS_URL = 'ws://localhost:9876';
+    const activities = [];
     
+    // Activity feed
+    function addActivity(icon, text) {
+      const time = new Date().toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false 
+      });
+      
+      activities.unshift({ icon, text, time });
+      if (activities.length > 20) activities.pop();
+      
+      renderActivities();
+    }
+    
+    function renderActivities() {
+      if (activities.length === 0) {
+        activityFeed.innerHTML = '<div class="activity-empty">No activity yet</div>';
+        return;
+      }
+      
+      activityFeed.innerHTML = activities.map((a, i) => `
+        <div class="activity-item">
+          <span class="activity-icon">${a.icon}</span>
+          <span class="activity-text">${a.text}</span>
+          <span class="activity-time">${a.time}</span>
+        </div>
+      `).join('');
+    }
+    
+    // Collapsible sections
+    function toggleCollapsible(id) {
+      document.getElementById(id).classList.toggle('open');
+    }
+    
+    // Toast notifications
+    function showToast(message, isError = false) {
+      toast.textContent = message;
+      toast.className = 'toast ' + (isError ? 'error' : 'success') + ' show';
+      setTimeout(() => {
+        toast.className = 'toast';
+      }, 2500);
+    }
+    
+    // WebSocket
     function updateWsStatus(state, text) {
       wsIndicator.className = 'ws-indicator ' + state;
       wsStatusText.textContent = text;
@@ -265,8 +426,8 @@
         ws.onopen = () => {
           console.log('[WS] Connected to server');
           updateWsStatus('connected', 'Connected to MCP server');
+          addActivity('●', 'Connected to Claude');
           
-          // Send hello message
           ws.send(JSON.stringify({
             type: 'hello',
             plugin: 'monorail-figma',
@@ -280,17 +441,19 @@
             const msg = JSON.parse(event.data);
             
             if (msg.type === 'hello-ack') {
-              showStatus('WebSocket connected to ' + msg.server);
+              // Already logged connection
             } else if (msg.type === 'push-ir') {
-              // Server is pushing IR to apply
+              const count = msg.ir?.slides?.length || 0;
               irInput.value = JSON.stringify(msg.ir, null, 2);
-              showStatus('Received IR from server');
-              // Auto-apply if requested
+              addActivity('↓', `Received ${count} slides from Claude`);
+              
               if (msg.autoApply) {
                 parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir) } }, '*');
+              } else {
+                showToast(`Received ${count} slides`);
               }
             } else if (msg.type === 'request-export') {
-              // Server requesting current deck state
+              addActivity('↑', 'Claude requested deck export');
               parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
             }
           } catch (e) {
@@ -301,6 +464,7 @@
         ws.onclose = () => {
           console.log('[WS] Disconnected');
           updateWsStatus('disconnected', 'Disconnected');
+          addActivity('○', 'Disconnected');
           ws = null;
         };
         
@@ -320,64 +484,61 @@
     // Auto-connect on load
     setTimeout(connectWebSocket, 500);
     
-    function showStatus(message, isError = false) {
-      status.textContent = message;
-      status.className = 'status ' + (isError ? 'error' : 'success');
-      setTimeout(() => {
-        status.className = 'status';
-      }, 3000);
-    }
-    
+    // Manual controls
     applyBtn.onclick = () => {
       const ir = irInput.value.trim();
       if (!ir) {
-        showStatus('Please paste IR first', true);
+        showToast('Please paste IR first', true);
         return;
       }
       
       try {
-        JSON.parse(ir); // Validate JSON
+        const parsed = JSON.parse(ir);
         parent.postMessage({ pluginMessage: { type: 'apply-ir', ir } }, '*');
+        addActivity('▶', `Manual apply: ${parsed.slides?.length || 0} slides`);
       } catch (e) {
-        showStatus('Invalid JSON: ' + e.message, true);
+        showToast('Invalid JSON: ' + e.message, true);
       }
     };
     
     exportBtn.onclick = () => {
       parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
+      addActivity('◀', 'Manual export requested');
     };
     
     copyBtn.onclick = async () => {
       try {
         await navigator.clipboard.writeText(irOutput.value);
-        showStatus('Copied to clipboard!');
+        showToast('Copied to clipboard!');
       } catch (e) {
-        showStatus('Failed to copy', true);
+        showToast('Failed to copy', true);
       }
     };
     
+    // Messages from plugin
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
       if (!msg) return;
       
       if (msg.type === 'applied') {
-        showStatus(`Applied ${msg.count} slides!`);
+        addActivity('✓', `Applied ${msg.count} slides`);
+        showToast(`Applied ${msg.count} slides!`);
         irInput.value = '';
         
-        // Notify server if connected
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'applied', count: msg.count }));
         }
       }
       
       if (msg.type === 'exported') {
+        const parsed = JSON.parse(msg.ir);
+        const count = parsed.slides?.length || 0;
+        addActivity('✓', `Exported ${count} slides`);
         irOutput.value = msg.ir;
         copyBtn.style.display = 'block';
-        showStatus('Deck exported!');
         
-        // Send to server if connected
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'exported', ir: JSON.parse(msg.ir) }));
+          ws.send(JSON.stringify({ type: 'exported', ir: parsed }));
         }
       }
     };

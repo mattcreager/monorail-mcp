@@ -2,7 +2,7 @@
 // Converts IR (deck spec) into Figma Slides
 
 // Show the UI
-figma.showUI(__html__, { width: 400, height: 500 });
+figma.showUI(__html__, { width: 320, height: 280 });
 
 // Types for our IR format
 interface SlideContent {

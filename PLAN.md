@@ -342,7 +342,7 @@ With WebSocket, Claude can: send test IR, get logs, diagnose issues, retry — t
 ---
 
 ### Session 8 (2026-01-11)
-**Task:** Implement WebSocket push/pull tools
+**Task:** Implement WebSocket push/pull tools + refresh plugin UI
 
 **Completed:**
 - ✅ Implemented `monorail_push_ir` — pushes IR directly to plugin, optional auto-apply
@@ -351,12 +351,15 @@ With WebSocket, Claude can: send test IR, get logs, diagnose issues, retry — t
 - ✅ Added monorail to Cursor MCP config (`~/.cursor/mcp.json`)
 - ✅ Created `docs/decisions/local-mcp.md` — documented why local > remote for this use case
 - ✅ **Tested full round-trip: pull → modify → push works!**
+- ✅ Refreshed plugin UI: activity feed + collapsible manual controls
+- ✅ Made plugin window smaller (320×280)
 
 **Key findings:**
 - Cursor starts MCP server as child process; WebSocket server runs alongside stdio
 - If multiple MCP processes start, only one can bind port 9876 — can cause connection issues
 - Plugin must reconnect when MCP server restarts
 - Local MCP is the right architecture (privacy, latency, simplicity)
+- Manual paste/export still useful as fallback, but collapsed since WebSocket is primary
 
 **The copy/paste-free loop works:**
 ```
@@ -468,9 +471,27 @@ The full collaboration loop works — **no copy/paste required:**
 ## Key Files
 
 - `figma-plugin/code.ts` — the plugin (Apply + Export)
-- `figma-plugin/ui.html` — plugin UI (WebSocket client)
+- `figma-plugin/ui.html` — plugin UI (activity feed + WebSocket client)
 - `src/index.ts` — MCP server (WebSocket server + tools)
 - `docs/decisions/websocket-bridge.md` — protocol design
 - `docs/decisions/local-mcp.md` — why local not remote
 - `docs/failures.md` — learnings and gotchas
+
+---
+
+## Open Discovery Tasks
+
+From PLAN.md "What's Next" section:
+
+1. **Visual feedback loop** — Claude is currently blind to rendered output
+   - Can't see: text overflow, overlapping elements, broken layouts
+   - Options: Plugin exports screenshot, Figma REST API image export, HTML preview
+   - Research: Can Figma plugin export slide as image? Can Claude process it?
+
+2. **Event-driven updates** — decks that stay in sync with reality
+   - Webhook triggers: project status, metrics, sprint completion
+   - Agent updates specific slides without human intervention
+   - Architecture: MCP server as webhook receiver? Scheduled refresh?
+
+3. **Polish tasks** — improve archetype detection, handle edge cases
 ```
