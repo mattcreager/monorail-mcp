@@ -221,3 +221,38 @@ We generate raw text nodes instead of using Figma's layout system.
   - **Hybrid**: Default template + brand detection
 - Research: Can Plugin API read template styles? Generate layout instances?
 - Added to plan as design decision to explore
+
+---
+
+### 2026-01-11 - HTML output is far more beautiful than Figma output
+
+**What we found:** The HTML deck (`examples/monorail-deck-v0.html`) demonstrates design capabilities our Figma plugin doesn't match:
+
+| Feature | HTML Deck | Figma Plugin |
+|---------|-----------|--------------|
+| Call-and-response | Grid-aligned Q→A rows | Body text with newlines |
+| Loop diagram | Visual boxes with arrows | Text only |
+| Callouts | Styled box with border | Doesn't exist |
+| Bullet styling | Red dot accents | Plain `•` character |
+| Quote | Q/A in different colors | Single string |
+| Backgrounds | Gradients | Flat color |
+
+**Root cause:** Claude is fluent in HTML/CSS but weak in Figma Plugin API. We're routing through its weakest channel.
+
+**The asymmetry:**
+```
+Claude's fluency:  HTML/CSS ████████████  Figma API █████░░░░░░
+Design fidelity:   HTML     ████████████  Figma     █████░░░░░░
+```
+
+**Impact:** We can co-create content but not design. The rendered output is functional, not beautiful.
+
+**Path forward:**
+- First: Audit Figma Plugin API capabilities (what's actually possible?)
+- Then decide architecture:
+  - Enrich IR to express design
+  - HTML-first workflow
+  - Separation (human designs, Claude fills)
+  - Teach Claude Figma primitives
+  - HTML → Figma converter
+- Goal: Aspire to co-create design, not just content

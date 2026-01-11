@@ -140,6 +140,25 @@ See `docs/failures.md` for details.
   - ✅ Documented local MCP decision (`docs/decisions/local-mcp.md`)
 
 **Design decisions needed:**
+- [ ] **Design co-creation: understanding the constraints** — NEXT STEP
+  - **The asymmetry:** Claude is fluent in HTML/CSS, weak in Figma Plugin API
+  - **Evidence:** HTML deck (`examples/monorail-deck-v0.html`) is beautiful — diagrams, callouts, styled Q&A, visual loops. Our Figma output is functional text dumps.
+  - **The gap:** IR → Plugin API loses Claude's design strength
+  - **Before deciding architecture, research: what's actually possible?**
+  - Next session task: **Figma Plugin API capabilities audit**
+    - Can Plugin API create Auto Layout frames?
+    - Can it create styled rectangles, borders, gradients?
+    - Can it read/use template styles?
+    - Can it create component instances?
+    - What visual primitives are available beyond text nodes?
+  - Then decide between:
+    - **Enrich IR + Plugin** — express design in IR, build sophisticated renderer
+    - **HTML-first workflow** — iterate in HTML, Figma for final
+    - **Separation of concerns** — human designs templates, Claude fills content
+    - **Teach Claude Figma** — add Plugin API patterns as resource
+    - **HTML → Figma bridge** — research if conversion tooling exists
+  - Goal: Co-create design, not just content
+
 - [ ] **Template integration strategy** — our archetypes bypass Figma's native template system
   - Current: Hardcoded colors, fonts, layouts in plugin code
   - Figma-native: Templates define colors, fonts, slide layouts that users pick from
