@@ -2216,7 +2216,7 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
         uri: "monorail://archetypes",
         name: "Slide Archetypes",
         description:
-          "The 10 constrained slide templates with word limits and usage guidance.",
+          "The 11 constrained slide templates with word limits and usage guidance.",
         mimeType: "text/markdown",
       },
       {
@@ -2307,6 +2307,39 @@ Table comparing options/features.
 Closing slide with key takeaways.
 - headline: ≤8 words
 - items: max 3, each ≤12 words
+
+## position-cards
+Strategic positioning with 3-column cards. Use for product pillars, frameworks.
+- eyebrow: ≤4 words (cyan label above headline)
+- headline: ≤15 words
+- subline: ≤10 words
+- cards: exactly 3, each with:
+  - label: category name (e.g., "THE FOUNDATION")
+  - title: short title (e.g., "Identity")
+  - body: description (2 lines max)
+  - badge: status text (e.g., "✓ Built")
+  - badge_color: green | cyan | orange
+- features: array of { label, description } for bottom row (optional)
+
+Example:
+\`\`\`json
+{
+  "archetype": "position-cards",
+  "content": {
+    "eyebrow": "OUR POSITION",
+    "headline": "Identity is the pillar. ACP is north.",
+    "subline": "The wedge shows us what's next.",
+    "cards": [
+      { "label": "THE FOUNDATION", "title": "Identity", "body": "Description here.", "badge": "✓ Built", "badge_color": "green" },
+      { "label": "THE DIRECTION", "title": "Control Plane", "body": "Description here.", "badge": "North Star", "badge_color": "cyan" },
+      { "label": "THE GOAL", "title": "Customer Needs", "body": "Description here.", "badge": "Our Guide", "badge_color": "orange" }
+    ],
+    "features": [
+      { "label": "Feature 1", "description": "what it does" }
+    ]
+  }
+}
+\`\`\`
 `,
 
     "monorail://ir-format": `# IR Format Reference
