@@ -256,3 +256,92 @@ Design fidelity:   HTML     ████████████  Figma     █�
   - Teach Claude Figma primitives
   - HTML → Figma converter
 - Goal: Aspire to co-create design, not just content
+
+---
+
+### 2026-01-11 - Plugin API Capabilities Audit: The gap is USAGE, not capability
+
+**What we found:** The Figma Plugin API can do FAR more than we're using. We audited capabilities against what the HTML deck demonstrates:
+
+| Capability | API Support | Current Plugin | Gap |
+|------------|-------------|----------------|-----|
+| **Auto Layout** | ✅ `layoutMode`, `itemSpacing`, `padding*` | ❌ Absolute positioning | Not using |
+| **Rounded corners** | ✅ `cornerRadius`, individual corners | ❌ None | Not using |
+| **Borders/strokes** | ✅ `strokes`, `strokeWeight`, `dashPattern` | ⚠️ Chart placeholder only | Minimal |
+| **Gradients** | ✅ `GRADIENT_LINEAR`, `gradientStops` | ❌ Flat fills only | Not using |
+| **Lines with arrows** | ✅ `createLine()` + `strokeCap = 'ARROW_LINES'` | ❌ None | Not using |
+| **Circles/ellipses** | ✅ `createEllipse()` | ⚠️ Timeline markers only | Minimal |
+| **SVG import** | ✅ `createNodeFromSvg(svgString)` | ❌ None | **KEY CAPABILITY** |
+| **Component instances** | ✅ `component.createInstance()` | ❌ Raw nodes only | Not using |
+| **Read local styles** | ✅ `getLocalPaintStylesAsync()`, etc. | ❌ Hardcoded colors | Not using |
+
+**The key insight:** We blamed the API for HTML→Figma quality gap, but the API CAN do it — we're just not using it.
+
+**Auto Layout example (from API docs):**
+```javascript
+const frame = figma.createFrame();
+frame.layoutMode = 'VERTICAL';
+frame.primaryAxisSizingMode = 'AUTO';
+frame.counterAxisSizingMode = 'AUTO';
+frame.paddingTop = frame.paddingBottom = 10;
+frame.itemSpacing = 10;
+```
+
+**Gradient example:**
+```javascript
+rect.fills = [{
+  type: 'GRADIENT_LINEAR',
+  gradientStops: [
+    { position: 0, color: { r: 0.06, g: 0.06, b: 0.1 } },
+    { position: 1, color: { r: 0.1, g: 0.1, b: 0.18 } }
+  ],
+  gradientTransform: [[1, 0, 0], [0, 1, 0]]
+}];
+```
+
+**SVG import (game changer):**
+```javascript
+const svg = `<svg><circle cx="50" cy="50" r="40" fill="red"/></svg>`;
+const node = figma.createNodeFromSvg(svg);
+```
+
+**Connectors/arrows in FigJam only:** `createConnector()` works in FigJam, not Figma Slides. For arrows we need `createLine()` + `strokeCap = 'ARROW_LINES'`.
+
+**Impact:** The path to design co-creation is clear — enrich the plugin, not change architecture.
+
+**Path forward (recommended priority):**
+
+1. **Short-term: Auto Layout archetypes** (High impact, moderate effort)
+   - Wrap archetype content in Auto Layout frames
+   - Text reflows instead of overflowing
+   - Spacing maintains automatically
+   - Example: Bullets become `VERTICAL` frame with `itemSpacing`
+
+2. **Short-term: Styled containers** (High impact, low effort)  
+   - Add `cornerRadius` to frames
+   - Add gradient backgrounds for title slides
+   - Add accent borders to callouts
+   - Match the HTML deck's visual polish
+
+3. **Medium-term: SVG diagrams** (High impact, moderate effort)
+   - Add `diagram?: string` field to IR (SVG string)
+   - Claude generates diagrams as SVG (its strong channel!)
+   - Plugin uses `createNodeFromSvg()` to render
+   - Enables: flowcharts, loops, connectors, icons
+
+4. **Medium-term: Read user's styles** (Medium impact, moderate effort)
+   - Use `getLocalPaintStylesAsync()` to find user's brand colors
+   - Use `getLocalTextStylesAsync()` for font preferences
+   - Adapt generated content to match user's design system
+
+5. **Long-term: Component-based generation** (High impact, high effort)
+   - Create Monorail component library (or ship one)
+   - Generate slides as component instances
+   - Users customize the library → all decks update
+   - Aligns with how teams actually use Figma
+
+**HTML → Figma conversion:**
+- No native HTML import in Plugin API
+- But SVG import covers the key gap (diagrams, visual elements)
+- For pure HTML conversion, third-party tools exist (html.to.design, etc.)
+- Recommendation: Don't build an HTML parser; leverage SVG for visuals

@@ -139,39 +139,32 @@ See `docs/failures.md` for details.
   - ✅ Copy/paste-free workflow achieved
   - ✅ Documented local MCP decision (`docs/decisions/local-mcp.md`)
 
-**Design decisions needed:**
-- [ ] **Design co-creation: understanding the constraints** — NEXT STEP
-  - **The asymmetry:** Claude is fluent in HTML/CSS, weak in Figma Plugin API
-  - **Evidence:** HTML deck (`examples/monorail-deck-v0.html`) is beautiful — diagrams, callouts, styled Q&A, visual loops. Our Figma output is functional text dumps.
-  - **The gap:** IR → Plugin API loses Claude's design strength
-  - **Before deciding architecture, research: what's actually possible?**
-  - Next session task: **Figma Plugin API capabilities audit**
-    - Can Plugin API create Auto Layout frames?
-    - Can it create styled rectangles, borders, gradients?
-    - Can it read/use template styles?
-    - Can it create component instances?
-    - What visual primitives are available beyond text nodes?
-  - Then decide between:
-    - **Enrich IR + Plugin** — express design in IR, build sophisticated renderer
-    - **HTML-first workflow** — iterate in HTML, Figma for final
-    - **Separation of concerns** — human designs templates, Claude fills content
-    - **Teach Claude Figma** — add Plugin API patterns as resource
-    - **HTML → Figma bridge** — research if conversion tooling exists
-  - Goal: Co-create design, not just content
+**Design co-creation: STRATEGY DEFINED ✅** (See Session 10 + `docs/decisions/design-system-strategy.md`)
 
-- [ ] **Template integration strategy** — our archetypes bypass Figma's native template system
-  - Current: Hardcoded colors, fonts, layouts in plugin code
-  - Figma-native: Templates define colors, fonts, slide layouts that users pick from
-  - Options to explore:
-    - **A) Opinionated** — ship Monorail template, users install it, plugin uses it
-    - **B) Adaptive** — read user's existing template, generate matching slides
-    - **C) Hybrid** — ship default template, but detect/adapt to user's brand
-  - Experiment with both to see what feels best
-  - Key questions:
-    - Can Plugin API read template styles? (colors, fonts)
-    - Can we generate slides as template layout instances?
-    - What's the onboarding like for each approach?
-  - See: `docs/decisions/` for eventual write-up
+**The Vision: Two-Phase Collaboration**
+1. **Sketch Phase** — Claude + human iterate on structure/argument. Visuals are rough.
+2. **Production Phase** — "Make it match our design system." Claude reads system, applies it.
+
+**Implementation priorities (revised):**
+
+- [x] **Auto Layout archetypes** — DONE ✅
+  - `bullets` uses Auto Layout, text wraps properly
+  - `title` has gradient background
+- [ ] **Monorail Design System** — HIGH PRIORITY (NEXT)
+  - Build reference design system in Figma
+  - Prove Claude can read it and apply it
+  - This validates the entire Production Phase vision
+  - See: `docs/decisions/design-system-strategy.md`
+- [ ] **Styled containers** — MEDIUM PRIORITY
+  - Add `cornerRadius` to frames
+  - Accent borders for callouts
+- [ ] **SVG diagram support** — MEDIUM PRIORITY
+  - Add `diagram?: string` field to IR
+  - Claude generates diagrams as SVG
+- [ ] **Design system generalization** — AFTER PROOF OF CONCEPT
+  - Export any user's design system
+  - "Bring your own" workflow
+  - Screenshot-based style inference
 
 **Documentation refresh:**
 - [ ] **Update README.md** — currently stale, says "v0 under construction"
@@ -473,6 +466,48 @@ Claude                              Figma Plugin
 
 ---
 
+### Session 10 (2026-01-11)
+**Task:** Figma Plugin API Capabilities Audit + Design System Strategy
+
+**Part 1: Plugin API Audit**
+
+Key finding: The gap is USAGE, not capability! The API can do everything we need.
+
+| Feature | API Support | Current Usage |
+|---------|-------------|---------------|
+| Auto Layout | ✅ `layoutMode`, `itemSpacing`, `padding*` | ❌ → ✅ Implemented! |
+| Gradients | ✅ `GRADIENT_LINEAR`, `gradientStops` | ❌ → ✅ Implemented! |
+| Rounded corners | ✅ `cornerRadius` | ❌ Not using |
+| Lines + arrows | ✅ `createLine()` + `strokeCap = 'ARROW_LINES'` | ❌ Not using |
+| SVG import | ✅ `createNodeFromSvg(svgString)` | ❌ Not using |
+| Component instances | ✅ `component.createInstance()` | ❌ Not using |
+| Read local styles | ✅ `getLocalPaintStylesAsync()` | ❌ Not using |
+
+**Implemented this session:**
+- ✅ `bullets` archetype now uses Auto Layout — text wraps properly!
+- ✅ `title` archetype has gradient background
+- ✅ Helper functions: `createAutoLayoutFrame()`, `addAutoLayoutText()`
+- ✅ Tested in Figma Slides — works!
+
+**Part 2: Design System Strategy Discussion**
+
+Big insight from discussion: The real collaboration problem isn't "can the plugin do it" — it's "how does Claude know what to do?"
+
+**Two-phase collaboration model:**
+1. **Sketch phase** — Human + Claude iterate on structure/argument. Visuals are rough.
+2. **Production phase** — "Make it consistent with our design system." Claude reads and applies the system.
+
+**Design system sources (layered):**
+1. **Bring your own** — User's work brand, conference theme. Claude learns from file/description/screenshot.
+2. **Generate one** — Claude proposes based on content + best practice.
+3. **Monorail default** — Reference implementation, also our lighthouse/dogfood.
+
+**Key decision:** Build the Monorail Design System as proof of concept. If it works for us, it works for anyone.
+
+**Documented in:** `docs/decisions/design-system-strategy.md`
+
+---
+
 ## Completion Criteria (v0)
 
 The loop works end-to-end:
@@ -541,7 +576,7 @@ We use this iterative development approach. Please follow it:
 
 ## Current State
 
-**v0 loop is COMPLETE. WebSocket push/pull WORKING! ✅**
+**v0 loop is COMPLETE. WebSocket push/pull WORKING! Plugin API audit DONE! ✅**
 
 The full collaboration loop works — **no copy/paste required:**
 1. `monorail_pull_ir` → Claude gets current deck from Figma
@@ -549,6 +584,8 @@ The full collaboration loop works — **no copy/paste required:**
 3. `monorail_push_ir` → sends updated IR directly to plugin (auto-applies)
 4. Human edits in Figma (move, restyle, add content)
 5. Repeat until deck lands
+
+**Plugin API audit finding:** The gap is USAGE, not capability. API supports Auto Layout, gradients, SVG import — we're just not using them yet.
 
 ---
 
@@ -579,37 +616,48 @@ The full collaboration loop works — **no copy/paste required:**
 
 ---
 
-## Next Session Task: Figma Plugin API Capabilities Audit
+## Next Session Task: Build Monorail Design System (Proof of Concept)
 
-**Goal:** Understand what's actually possible with the Figma Plugin API before deciding architecture for design co-creation.
+**Goal:** Create a Figma design system that Claude can read and apply. This validates the entire "Production Phase" vision.
 
-**Context from Session 9:**
-- The HTML deck (`examples/monorail-deck-v0.html`) is beautiful — diagrams, callouts, styled Q&A, visual loops
-- Our Figma output is functional text dumps
-- **The asymmetry:** Claude is fluent in HTML/CSS, weak in Figma Plugin API
-- We're routing through Claude's weakest channel
+**Context from Session 10:**
+- Auto Layout + gradients working ✅
+- Design system strategy documented
+- Need to prove: Claude can read a system → apply it intelligently
 
-**Research questions:**
-1. Can Plugin API create **Auto Layout frames**? (responsive spacing)
-2. Can it create **styled rectangles** with borders, rounded corners, gradients?
-3. Can it create **lines/arrows** for diagrams?
-4. Can it read/apply **template styles**? (colors, fonts from user's template)
-5. Can it create **component instances**? (use template layouts)
-6. What **visual primitives** exist beyond text nodes and basic shapes?
-7. Is there an **HTML → Figma** conversion approach?
+**Step 1: Create Monorail Design System in Figma**
+Create a new Figma file with:
+- **Color styles** (named semantically):
+  - `monorail/background` → #0f0f1a
+  - `monorail/headline` → #fef3c7
+  - `monorail/body` → #d4d4d8
+  - `monorail/accent` → #dc2626
+  - `monorail/muted` → #9ca3af
+- **Text styles**:
+  - `monorail/headline` → Inter Bold 56px
+  - `monorail/subline` → Inter Regular 32px
+  - `monorail/body` → Inter Regular 28px
+- **Slide components** (one per archetype):
+  - Title Slide, Bullets Slide, Quote Slide, etc.
+  - Using the color/text styles above
 
-**How to approach this:**
-1. Read Figma Plugin API docs (search web for current 2026 docs)
-2. Experiment in `figma-plugin/code.ts` — try creating styled elements
-3. Document findings in `docs/failures.md`
-4. Update plan with architecture recommendation
+**Step 2: Export Design System**
+- Add `monorail_pull_design_system` tool (or extend pull_ir)
+- Use `getLocalPaintStylesAsync()`, `getLocalTextStylesAsync()`
+- Return structured data Claude can understand
+- Test: Can Claude describe what it sees?
 
-**After this, decide between:**
-- Enrich IR + Plugin (express design in IR)
-- HTML-first workflow (iterate in HTML, Figma for final)
-- Separation of concerns (human designs, Claude fills content)
-- Teach Claude Figma (add Plugin API patterns as resource)
-- HTML → Figma bridge (if tooling exists)
+**Step 3: Apply Using Design System**
+- Modify Apply to use component instances or style references
+- Instead of `fills = [{ color: COLORS.headline }]`
+- Use `fillStyleId = headlineStyleId`
+- Test: Does output match the design system?
+
+**Success criteria:**
+- Figma file with Monorail design system exists
+- Export tool returns system info Claude can read
+- Apply uses the system (not hardcoded colors)
+- Claude can describe the system and apply it to new content
 
 ---
 
@@ -627,4 +675,54 @@ For future sessions:
    - Agent updates specific slides without human intervention
 
 3. **Polish tasks** — improve archetype detection, handle edge cases
+
+---
+
+## Plugin API Quick Reference (from Session 10 audit)
+
+**Auto Layout:**
+```typescript
+frame.layoutMode = 'VERTICAL' | 'HORIZONTAL';
+frame.primaryAxisSizingMode = 'AUTO';
+frame.counterAxisSizingMode = 'AUTO';
+frame.paddingTop = frame.paddingBottom = 10;
+frame.itemSpacing = 24;
+```
+
+**Styled rectangles:**
+```typescript
+rect.cornerRadius = 8;  // or individual: topLeftRadius, etc.
+rect.fills = [{ type: 'SOLID', color: {...} }];
+rect.strokes = [{ type: 'SOLID', color: {...} }];
+rect.strokeWeight = 2;
+```
+
+**Gradient fills:**
+```typescript
+rect.fills = [{
+  type: 'GRADIENT_LINEAR',
+  gradientStops: [
+    { position: 0, color: { r: 0.06, g: 0.06, b: 0.1 } },
+    { position: 1, color: { r: 0.1, g: 0.1, b: 0.18 } }
+  ],
+  gradientTransform: [[1, 0, 0], [0, 1, 0]]
+}];
+```
+
+**Lines with arrows:**
+```typescript
+const line = figma.createLine();
+line.strokeCap = 'ARROW_LINES';  // adds arrowheads!
+```
+
+**SVG import:**
+```typescript
+const node = figma.createNodeFromSvg('<svg>...</svg>');
+```
+
+**Read local styles:**
+```typescript
+const paintStyles = await figma.getLocalPaintStylesAsync();
+const textStyles = await figma.getLocalTextStylesAsync();
+```
 ```

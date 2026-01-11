@@ -134,6 +134,76 @@ function addRect(
   return rect;
 }
 
+// Helper to create Auto Layout frame
+function createAutoLayoutFrame(
+  parent: SceneNode & ChildrenMixin,
+  name: string,
+  x: number,
+  y: number,
+  direction: 'VERTICAL' | 'HORIZONTAL' = 'VERTICAL',
+  spacing: number = 24,
+  padding: number = 0
+): FrameNode {
+  const frame = figma.createFrame();
+  frame.name = name;
+  frame.x = x;
+  frame.y = y;
+  
+  // Enable Auto Layout
+  frame.layoutMode = direction;
+  frame.primaryAxisSizingMode = 'AUTO';  // Height adjusts to content
+  frame.counterAxisSizingMode = 'AUTO';  // Width adjusts to content
+  frame.itemSpacing = spacing;
+  
+  // Padding (uniform for simplicity)
+  frame.paddingTop = padding;
+  frame.paddingBottom = padding;
+  frame.paddingLeft = padding;
+  frame.paddingRight = padding;
+  
+  // Transparent background (inherits slide bg)
+  frame.fills = [];
+  
+  // Clip content that overflows
+  frame.clipsContent = false;
+  
+  parent.appendChild(frame);
+  return frame;
+}
+
+// Helper to add text inside Auto Layout (no x/y - layout handles position)
+async function addAutoLayoutText(
+  parent: FrameNode,
+  text: string,
+  fontSize: number,
+  bold: boolean = false,
+  color: RGB = COLORS.white,
+  maxWidth?: number,
+  nodeName?: string
+): Promise<TextNode> {
+  const textNode = figma.createText();
+  
+  if (nodeName) {
+    textNode.name = nodeName;
+  }
+  
+  const fontName = { family: 'Inter', style: bold ? 'Bold' : 'Regular' };
+  await figma.loadFontAsync(fontName);
+  
+  textNode.fontName = fontName;
+  textNode.fontSize = fontSize;
+  textNode.fills = [{ type: 'SOLID', color }];
+  textNode.characters = text;
+  
+  if (maxWidth) {
+    textNode.resize(maxWidth, textNode.height);
+    textNode.textAutoResize = 'HEIGHT';
+  }
+  
+  parent.appendChild(textNode);
+  return textNode;
+}
+
 // Set slide background color directly (for SlideNode)
 function setSlideBackground(node: SceneNode): void {
   // SlideNode has a fills property we can set directly
@@ -188,6 +258,23 @@ async function addContentToParent(parent: SceneNode & ChildrenMixin, slide: Slid
   
   switch (slide.archetype) {
     case 'title':
+      // Add gradient background frame for title slides
+      {
+        const gradientBg = figma.createRectangle();
+        gradientBg.name = 'title-gradient-bg';
+        gradientBg.resize(SLIDE_WIDTH, SLIDE_HEIGHT);
+        gradientBg.x = 0;
+        gradientBg.y = 0;
+        gradientBg.fills = [{
+          type: 'GRADIENT_LINEAR',
+          gradientStops: [
+            { position: 0, color: { ...COLORS.bg, a: 1 } },
+            { position: 1, color: { r: 0.1, g: 0.1, b: 0.18, a: 1 } }
+          ],
+          gradientTransform: [[0.7, 0.7, 0], [-0.7, 0.7, 0.5]]  // 135deg diagonal
+        }];
+        parent.appendChild(gradientBg);
+      }
       if (c.headline) await addText(parent, c.headline, 200, 420, 96, true, COLORS.headline, undefined, 'headline');
       if (c.subline) await addText(parent, c.subline, 200, 550, 36, false, COLORS.muted, undefined, 'subline');
       break;
@@ -204,8 +291,27 @@ async function addContentToParent(parent: SceneNode & ChildrenMixin, slide: Slid
     case 'bullets':
       if (c.headline) await addText(parent, c.headline, 200, 180, 56, true, COLORS.headline, undefined, 'headline');
       if (c.bullets) {
+        // Create Auto Layout container for bullets
+        const bulletsContainer = createAutoLayoutFrame(
+          parent,
+          'bullets-container',
+          200,      // x position
+          300,      // y position (below headline)
+          'VERTICAL',
+          32        // spacing between bullets
+        );
+        
+        // Add bullets as children (Auto Layout handles positioning)
         for (let i = 0; i < c.bullets.length; i++) {
-          await addText(parent, `• ${c.bullets[i]}`, 200, 320 + i * 100, 36, false, COLORS.body, undefined, `bullet-${i}`);
+          await addAutoLayoutText(
+            bulletsContainer,
+            `• ${c.bullets[i]}`,
+            36,
+            false,
+            COLORS.body,
+            1520,     // max width for text wrapping
+            `bullet-${i}`
+          );
         }
       }
       break;
@@ -315,12 +421,28 @@ function parseIR(irString: string): DeckIR | null {
   }
 }
 
-// Find a named text node within a parent
+// Find a named text node within a parent (searches recursively for Auto Layout containers)
 function findNamedTextNode(parent: SceneNode & ChildrenMixin, name: string): TextNode | null {
   const children = (parent as any).children || [];
   for (const child of children) {
     if (child.type === 'TEXT' && child.name === name) {
       return child as TextNode;
+    }
+    // Recursively search inside frames (for Auto Layout containers)
+    if (child.type === 'FRAME' && 'children' in child) {
+      const found = findNamedTextNode(child as FrameNode, name);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Find a named frame within a parent
+function findNamedFrame(parent: SceneNode & ChildrenMixin, name: string): FrameNode | null {
+  const children = (parent as any).children || [];
+  for (const child of children) {
+    if (child.type === 'FRAME' && child.name === name) {
+      return child as FrameNode;
     }
   }
   return null;
@@ -439,11 +561,17 @@ async function updateContentInPlace(parent: SceneNode & ChildrenMixin, slide: Sl
 function detectExistingArchetype(parent: SceneNode & ChildrenMixin): string {
   const children = (parent as any).children || [];
   const textNodes = children.filter((n: any) => n.type === 'TEXT') as TextNode[];
+  const frameNodes = children.filter((n: any) => n.type === 'FRAME') as FrameNode[];
   const names = new Set(textNodes.map(t => t.name));
+  const frameNames = new Set(frameNodes.map(f => f.name));
+  
+  // Check for Auto Layout container (new style)
+  if (frameNames.has('bullets-container')) return 'bullets';
   
   // Check for archetype-specific node names
   if (names.has('quote') && names.has('attribution')) return 'quote';
   if (names.has('left-title') || names.has('right-title')) return 'two-column';
+  // Legacy bullets detection (old style without container)
   if (Array.from(names).some(n => n.startsWith('bullet-'))) return 'bullets';
   if (Array.from(names).some(n => n.startsWith('item-'))) return 'summary';
   if (Array.from(names).some(n => n.startsWith('stage-'))) return 'timeline';
