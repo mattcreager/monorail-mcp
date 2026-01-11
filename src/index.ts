@@ -1430,6 +1430,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description:
                 "The deck IR as a JSON string. Each slide needs: id, archetype (title/section/big-idea/bullets/two-column/quote/chart/timeline/comparison/summary), status (draft/locked/stub), and content object.",
             },
+            mode: {
+              type: "string",
+              enum: ["append", "replace"],
+              description:
+                "How to handle existing slides. 'append' (default) adds new slides after existing ones. 'replace' deletes ALL existing slides first, then creates new ones. Use 'replace' for full deck rewrites.",
+            },
             autoApply: {
               type: "boolean",
               description:
@@ -1438,7 +1444,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             start_index: {
               type: "number",
               description:
-                "Position to insert new slides (0-based). If omitted, appends to end. Use monorail_pull to see current slide order.",
+                "Position to insert new slides (0-based). Only applies in 'append' mode. If omitted, appends to end.",
             },
           },
           required: ["ir"],
@@ -1706,6 +1712,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const autoApply = args?.autoApply !== false; // Default to true
+      const mode = (args?.mode as string) || "append"; // Default to append for backwards compatibility
       const startIndex = args?.start_index as number | undefined;
 
       // Send to plugin
@@ -1714,7 +1721,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           type: "push-ir",
           ir: ir,
           autoApply: autoApply,
-          startIndex: startIndex,
+          mode: mode,
+          startIndex: mode === "append" ? startIndex : undefined, // startIndex only applies in append mode
         })
       );
 
@@ -1725,7 +1733,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? `\n\nWarnings:\n${warnings.map((w) => `- ${w.slideId}: ${w.message}`).join("\n")}`
         : "";
       
-      const positionText = startIndex !== undefined
+      const modeText = mode === "replace" ? " (replaced existing deck)" : "";
+      const positionText = mode === "append" && startIndex !== undefined
         ? ` at position ${startIndex}`
         : "";
 
@@ -1733,7 +1742,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [
           {
             type: "text" as const,
-            text: `✓ Pushed ${ir.slides.length} slides to Figma${positionText}${warningText}`,
+            text: `✓ Pushed ${ir.slides.length} slides to Figma${modeText}${positionText}${warningText}`,
           },
         ],
       };

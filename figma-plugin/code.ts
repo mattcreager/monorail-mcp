@@ -1440,7 +1440,7 @@ async function applyPatches(patches: PatchRequest): Promise<{ updated: number; f
 }
 
 // Main message handler
-figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchRequest; startIndex?: number }) => {
+figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchRequest; mode?: 'append' | 'replace'; startIndex?: number }) => {
   try {
     if (msg.type === 'apply-ir') {
       if (!msg.ir) {
@@ -1454,14 +1454,63 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         return;
       }
       
-      const mode = isInSlides() ? 'Figma Slides' : 'Figma Design';
-      console.log(`Editor: ${figma.editorType}, Mode: ${mode}`);
+      const editorMode = isInSlides() ? 'Figma Slides' : 'Figma Design';
+      console.log(`Editor: ${figma.editorType}, Mode: ${editorMode}`);
       
       // Load fonts upfront with fallback chain
       await loadFontWithFallback();
       
-      // Load existing mapping (for updates)
-      const existingMapping = await figma.clientStorage.getAsync(MAPPING_KEY) || {};
+      // REPLACE MODE: Delete all existing slides first
+      const pushMode = msg.mode || 'append';
+      let replacedCount = 0;
+      
+      if (pushMode === 'replace') {
+        console.log('Replace mode: deleting all existing slides');
+        
+        // Find all slides in the document
+        const slidesToDelete: SceneNode[] = [];
+        
+        if (isInSlides()) {
+          // In Figma Slides, find all SLIDE nodes
+          function findAllSlides(node: SceneNode): void {
+            if ((node as any).type === 'SLIDE') {
+              slidesToDelete.push(node);
+            } else if ('children' in node) {
+              for (const child of (node as any).children) {
+                findAllSlides(child);
+              }
+            }
+          }
+          for (const node of figma.currentPage.children) {
+            findAllSlides(node);
+          }
+        } else {
+          // In Figma Design, find all top-level frames that look like slides (1920x1080)
+          for (const node of figma.currentPage.children) {
+            if (node.type === 'FRAME' && node.width === 1920 && node.height === 1080) {
+              slidesToDelete.push(node);
+            }
+          }
+        }
+        
+        // Delete them all
+        for (const slide of slidesToDelete) {
+          try {
+            slide.remove();
+            replacedCount++;
+          } catch (e) {
+            console.warn(`Failed to delete slide: ${e}`);
+          }
+        }
+        
+        console.log(`Deleted ${replacedCount} existing slides`);
+        
+        // Clear the mapping since we're starting fresh
+        await figma.clientStorage.setAsync(MAPPING_KEY, {});
+      }
+      
+      // Load existing mapping (for updates) - will be empty in replace mode
+      const existingMapping = pushMode === 'replace' ? {} : (await figma.clientStorage.getAsync(MAPPING_KEY) || {});
       const mapping: Record<string, string> = { ...existingMapping };
       
       // Get start index for positioning
@@ -1593,8 +1642,11 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       // Rich summary
       const summary = [];
+      if (replacedCount > 0) {
+        summary.push(`Replaced ${replacedCount} old slides`);
+      }
       if (created > 0) {
-        const createList = createdNames.length <= 2 
+        const createList = createdNames.length <= 2
           ? createdNames.map(n => `"${n}"`).join(', ')
           : `${created} slides`;
         summary.push(`Created: ${createList}`);
@@ -1606,15 +1658,17 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         summary.push(`Updated: ${updateList}`);
       }
       if (skipped > 0) summary.push(`${skipped} skipped (locked)`);
-      
-      const positionText = startIndex !== undefined ? ` at position ${startIndex}` : '';
+
+      const positionText = pushMode === 'append' && startIndex !== undefined ? ` at position ${startIndex}` : '';
       figma.notify(`✓ ${summary.join(' • ')}${positionText}`, { timeout: 3000 });
-      figma.ui.postMessage({ 
-        type: 'applied', 
+      figma.ui.postMessage({
+        type: 'applied',
         count: created + updated,
         created,
         updated,
         skipped,
+        replaced: replacedCount,
+        mode: pushMode,
         createdNames,
         updatedNames,
         startIndex

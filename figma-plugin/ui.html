@@ -453,11 +453,12 @@
             } else if (msg.type === 'push-ir') {
               const count = msg.ir?.slides?.length || 0;
               irInput.value = JSON.stringify(msg.ir, null, 2);
+              const modeText = msg.mode === 'replace' ? ' (replacing deck)' : '';
               const posText = msg.startIndex !== undefined ? ` at position ${msg.startIndex}` : '';
-              addActivity('↓', `Received ${count} slides from Claude${posText}`);
-              
+              addActivity('↓', `Received ${count} slides from Claude${modeText}${posText}`);
+
               if (msg.autoApply) {
-                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), startIndex: msg.startIndex } }, '*');
+                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), mode: msg.mode || 'append', startIndex: msg.startIndex } }, '*');
               } else {
                 showToast(`Received ${count} slides`);
               }

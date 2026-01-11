@@ -48,13 +48,18 @@ Create/replace slides in Figma from IR. Validates before sending.
 ```
 Parameters:
 - ir: string (JSON) — The deck IR
+- mode?: "append" | "replace" — How to handle existing slides:
+  - "append" (default): Add new slides after existing ones
+  - "replace": Delete ALL existing slides first, then create new ones
 - autoApply?: boolean — If true (default), renders immediately
-- start_index?: number — Position to insert (0-based). Omit to append.
+- start_index?: number — Position to insert (0-based). Only applies in append mode.
 
 Returns: Success message or validation errors
 ```
 
 **Use when:** Bootstrapping a new deck or bulk updates. For surgical edits, prefer pull → patch.
+
+**Replace mode:** Use `mode: "replace"` when rewriting an entire deck. This deletes all existing slides first, preventing the "11 old + 8 new = 19 slides" problem.
 
 **Validation:** Blocks on errors (missing required fields, unknown archetypes). Warns on constraint violations (word limits exceeded).
 
@@ -178,7 +183,12 @@ Returns: Success/failure with count
 ### Insert at position
 ```
 1. monorail_pull          — see current order
-2. monorail_push with start_index — insert at specific position
+2. monorail_push with start_index — insert at specific position (append mode)
+```
+
+### Replace entire deck
+```
+1. monorail_push with mode: "replace" — deletes all existing slides, creates new ones
 ```
 
 ### Reorder deck

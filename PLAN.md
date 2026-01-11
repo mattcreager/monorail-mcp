@@ -51,7 +51,6 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Consolidated tool surface** — 6 tools instead of 14
 
 ### The Gap 🔨
-- **Push always appends** — no replace mode; dogfood resulted in 19 slides (11 old + 8 new) — HIGH
 - **Limited archetypes** — no three-column, no video/embed — hit during dogfood
 - **Auto Layout consistency** — title/quote/summary/section use fixed Y positions (see `docs/decisions/auto-layout-consistency.md`)
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
@@ -59,6 +58,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Limited diagrams** — timeline is linear only, no loop arrows or callouts (FUTURE)
 
 ### Recently Fixed ✅
+- ~~Push always appends~~ — Now has `mode: "replace"` option (Session 17)
 - ~~Font handling~~ — Now has fallback chain (Session 17)
 - ~~Archetype detection~~ — Frame-based detection, bullets now work (Session 17)
 - ~~Pending request state~~ — Consolidated into generic manager (Session 17)
@@ -91,7 +91,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 **Claude Desktop dogfood complete.** Core loop validated. See `docs/discovery/dogfood-claude-desktop.md`
 
 ### Priority 1: Dogfood Fixes (HIGH)
-- [ ] **Push modes** — Add `mode: "replace" | "append"` parameter (currently always appends)
+- [x] **Push modes** — Add `mode: "replace" | "append"` parameter (Session 17)
 - [ ] **Three-column archetype** — Common layout, hit during dogfood
 - [ ] **Video/embed archetype** — Even if just a URL field
 
