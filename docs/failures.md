@@ -109,3 +109,34 @@ Tested in actual Figma Slides. Connection works, hello-ack handshake succeeds, U
 - Reconnection works (tested connect/disconnect cycles)
 
 **Path forward:** Build out the bridge — implement `monorail_push_ir` and `monorail_pull_ir` tools for copy/paste-free workflow.
+
+---
+
+### 2026-01-11 - Multiple MCP processes can cause WebSocket conflicts
+
+**What we found:** When debugging push/pull tools, we discovered that multiple monorail-mcp processes can end up running:
+1. A manually-started process (for testing)
+2. Cursor's auto-started MCP process
+
+Only one can bind to port 9876. If the wrong one gets it, the plugin connects to one process while MCP tool calls go to another — causing "No plugin connected" errors even when the UI shows green "Connected".
+
+**Symptoms:**
+- Plugin shows "Connected to MCP server" ✓
+- `monorail_connection_status` says "No plugin connected" ✗
+- `lsof -i :9876` shows a different PID than expected
+
+**Resolution:**
+```bash
+# Find processes
+ps aux | grep monorail-mcp
+
+# Kill the rogue one
+kill <PID>
+
+# Cursor's MCP will restart and bind the port
+```
+
+**Path forward:** 
+- Don't manually start the server when testing MCP tools (Cursor manages it)
+- If issues occur, check for multiple processes
+- Consider adding port conflict detection/logging to server startup

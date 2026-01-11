@@ -113,10 +113,10 @@ See `docs/failures.md` for details.
 - [ ] Add `chart` and `timeline` archetype detection
 
 **High-priority:**
-- [ ] **WebSocket bridge** — SPIKE COMPLETE, ready to build (see `docs/decisions/websocket-bridge.md`)
-  - ✅ Verified: Figma plugin CAN connect to `ws://localhost:9876`
-  - ✅ Server + plugin client built, hello-ack works
-  - **Next:** Implement `push_ir` and `pull_ir` for copy/paste-free workflow
+- [x] **WebSocket bridge** — COMPLETE! ✅ (see `docs/decisions/websocket-bridge.md`)
+  - ✅ `monorail_push_ir` and `monorail_pull_ir` tools working
+  - ✅ Copy/paste-free workflow achieved
+  - ✅ Documented local MCP decision (`docs/decisions/local-mcp.md`)
 
 **Discovery tasks:**
 - [ ] **Visual feedback loop** — Claude is currently blind to rendered output!
@@ -341,6 +341,35 @@ With WebSocket, Claude can: send test IR, get logs, diagnose issues, retry — t
 
 ---
 
+### Session 8 (2026-01-11)
+**Task:** Implement WebSocket push/pull tools
+
+**Completed:**
+- ✅ Implemented `monorail_push_ir` — pushes IR directly to plugin, optional auto-apply
+- ✅ Implemented `monorail_pull_ir` — requests export, waits for response, returns IR
+- ✅ Added WebSocket message handlers for `exported` and `applied` responses
+- ✅ Added monorail to Cursor MCP config (`~/.cursor/mcp.json`)
+- ✅ Created `docs/decisions/local-mcp.md` — documented why local > remote for this use case
+- ✅ **Tested full round-trip: pull → modify → push works!**
+
+**Key findings:**
+- Cursor starts MCP server as child process; WebSocket server runs alongside stdio
+- If multiple MCP processes start, only one can bind port 9876 — can cause connection issues
+- Plugin must reconnect when MCP server restarts
+- Local MCP is the right architecture (privacy, latency, simplicity)
+
+**The copy/paste-free loop works:**
+```
+Claude                              Figma Plugin
+   │                                      │
+   ├──── monorail_push_ir ───────────────►│ (auto-applies)
+   │                                      │
+   │◄──── monorail_pull_ir ───────────────┤ (exports & returns IR)
+   │                                      │
+```
+
+---
+
 ## Completion Criteria (v0)
 
 The loop works end-to-end:
@@ -370,7 +399,8 @@ monorail-mcp/
 │   ├── failures.md      # Learnings log
 │   ├── decisions/       # Architectural decisions
 │   │   ├── freeform-handling.md
-│   │   └── websocket-bridge.md
+│   │   ├── websocket-bridge.md
+│   │   └── local-mcp.md
 │   └── references/
 └── examples/            # Demo content
 ```
@@ -408,41 +438,39 @@ We use this iterative development approach. Please follow it:
 
 ## Current State
 
-**v0 loop is COMPLETE. WebSocket bridge WORKING! ✅**
+**v0 loop is COMPLETE. WebSocket push/pull WORKING! ✅**
 
-The full collaboration loop works:
-1. Apply IR → creates slides with named text nodes
-2. Human edits in Figma (move, restyle, add content)
-3. Export IR → detects archetypes, extracts content, captures `extras`
-4. Claude refines the IR
-5. Apply again → updates text **in-place** (formatting preserved, human additions survive)
+The full collaboration loop works — **no copy/paste required:**
+1. `monorail_pull_ir` → Claude gets current deck from Figma
+2. Claude refines the IR
+3. `monorail_push_ir` → sends updated IR directly to plugin (auto-applies)
+4. Human edits in Figma (move, restyle, add content)
+5. Repeat until deck lands
 
 ---
 
-## WebSocket Bridge: WORKING ✅
+## WebSocket Bridge: FULLY WORKING ✅
 
-**Tested in Figma — it connects!**
-- MCP server starts WebSocket on `ws://localhost:9876`
-- Plugin UI auto-connects, shows green "Connected to MCP server"
-- Hello/hello-ack handshake works
-- `monorail_connection_status` tool checks connection
+**MCP Tools:**
+- `monorail_connection_status` — check if plugin connected
+- `monorail_push_ir` — send IR to plugin (optional `autoApply`)
+- `monorail_pull_ir` — request export, returns IR
 
-**Ready to build:**
-- `monorail_push_ir` — send IR directly to plugin (no copy/paste!)
-- `monorail_pull_ir` — request export from plugin
+**Setup:**
+1. Monorail is configured in `~/.cursor/mcp.json`
+2. Cursor auto-starts MCP server (which starts WebSocket on :9876)
+3. Open Figma Slides → run Monorail plugin → auto-connects
 
-**To run:**
-1. Start MCP server: `node dist/index.js`
-2. Open Figma Slides → run Monorail plugin
-3. Plugin auto-connects (green indicator)
+**If connection issues:** Check for multiple MCP processes (`ps aux | grep monorail`). Only one can bind port 9876.
 
 ---
 
 ## Key Files
 
 - `figma-plugin/code.ts` — the plugin (Apply + Export)
-- `figma-plugin/ui.html` — plugin UI (now has WebSocket client)
-- `src/index.ts` — MCP server (now has WebSocket server)
-- `docs/decisions/websocket-bridge.md` — full design
+- `figma-plugin/ui.html` — plugin UI (WebSocket client)
+- `src/index.ts` — MCP server (WebSocket server + tools)
+- `docs/decisions/websocket-bridge.md` — protocol design
+- `docs/decisions/local-mcp.md` — why local not remote
 - `docs/failures.md` — learnings and gotchas
 ```

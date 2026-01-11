@@ -995,6 +995,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
+      {
+        name: "monorail_push_ir",
+        description:
+          "Push IR directly to the connected Figma plugin. The plugin will receive the IR and can optionally auto-apply it to the deck. Requires plugin to be connected via WebSocket.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            ir: {
+              type: "string",
+              description: "The deck IR as a JSON string to send to the plugin",
+            },
+            autoApply: {
+              type: "boolean",
+              description:
+                "If true, the plugin will automatically apply the IR to the deck. If false, it just populates the input field.",
+            },
+          },
+          required: ["ir"],
+        },
+      },
+      {
+        name: "monorail_pull_ir",
+        description:
+          "Request the current deck IR from the connected Figma plugin. The plugin will export the current slides and return the IR. Requires plugin to be connected via WebSocket.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -1245,6 +1274,141 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    case "monorail_push_ir": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const irString = args?.ir as string;
+      if (!irString) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No IR provided" }],
+          isError: true,
+        };
+      }
+
+      let ir: DeckIR;
+      try {
+        ir = JSON.parse(irString);
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: Failed to parse IR JSON - ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const autoApply = args?.autoApply === true;
+
+      // Send to plugin
+      connectedPlugin!.send(
+        JSON.stringify({
+          type: "push-ir",
+          ir: ir,
+          autoApply: autoApply,
+        })
+      );
+
+      // Also update currentIR in server state
+      currentIR = ir;
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `✓ Pushed ${ir.slides.length} slides to Figma plugin${autoApply ? " (auto-apply enabled)" : ""}\n\nThe IR is now in the plugin.${autoApply ? " It will be applied automatically." : " Click 'Apply to Deck' in the plugin to render."}`,
+          },
+        ],
+      };
+    }
+
+    case "monorail_pull_ir": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Check if there's already a pending pull request
+      if (pendingPullResolve) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another pull request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Create a promise to wait for the exported response
+      const pullPromise = new Promise<DeckIR>((resolve, reject) => {
+        pendingPullResolve = resolve;
+        pendingPullReject = reject;
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (pendingPullResolve) {
+            pendingPullResolve = null;
+            pendingPullReject = null;
+            reject(new Error("Timeout waiting for plugin export"));
+          }
+        }, 30000);
+      });
+
+      // Send export request to plugin
+      connectedPlugin!.send(JSON.stringify({ type: "request-export" }));
+
+      try {
+        const ir = await pullPromise;
+        
+        // Update currentIR in server state
+        currentIR = ir;
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ Pulled deck from Figma\n\n${JSON.stringify(ir, null, 2)}`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error pulling from plugin: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -1446,6 +1610,10 @@ let wsServer: WebSocketServer | null = null;
 let connectedPlugin: WebSocket | null = null;
 let pluginInfo: { name?: string; version?: string; connectedAt?: string } = {};
 
+// Pending pull request (for monorail_pull_ir)
+let pendingPullResolve: ((ir: DeckIR) => void) | null = null;
+let pendingPullReject: ((error: Error) => void) | null = null;
+
 function startWebSocketServer() {
   wsServer = new WebSocketServer({ port: WS_PORT });
 
@@ -1485,14 +1653,21 @@ function startWebSocketServer() {
           console.error(`[WebSocket] Sent hello-ack to ${pluginInfo.name} v${pluginInfo.version}`);
         } else if (parsed.type === "ping") {
           ws.send(JSON.stringify({ type: "pong" }));
+        } else if (parsed.type === "exported") {
+          // Plugin sent exported IR (response to request-export)
+          console.error(`[WebSocket] Received exported IR with ${parsed.ir?.slides?.length || 0} slides`);
+          
+          if (pendingPullResolve && parsed.ir) {
+            pendingPullResolve(parsed.ir as DeckIR);
+            pendingPullResolve = null;
+            pendingPullReject = null;
+          }
+        } else if (parsed.type === "applied") {
+          // Plugin confirmed it applied IR
+          console.error(`[WebSocket] Plugin applied ${parsed.count} slides`);
         } else {
           // Echo unknown messages for now (debugging)
-          ws.send(
-            JSON.stringify({
-              type: "echo",
-              received: parsed,
-            })
-          );
+          console.error(`[WebSocket] Unknown message type: ${parsed.type}`);
         }
       } catch (e) {
         // Not JSON, echo as text
