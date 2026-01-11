@@ -479,19 +479,42 @@ The full collaboration loop works — **no copy/paste required:**
 
 ---
 
+## Next Session Task: Dog-food by making a deck about Monorail
+
+**Goal:** Create a deck that explains Monorail — the product, architecture, Figma constraints, trade-offs, and how to use it.
+
+**How to approach this:**
+
+1. **Read the Monorail skill resource** — use `monorail://skill` to understand the narrative methodology
+2. **Read the archetypes** — use `monorail://archetypes` to know the slide templates  
+3. **Find the argument** — what's the ONE thing this deck should land?
+4. **Structure the arc** — setup → tension → resolution
+5. **Build iteratively** — push draft, get feedback, refine
+
+**Content to cover:**
+- What problem does Monorail solve? (AI decks lack argument)
+- The collaboration model (Claude proposes, human refines, loop until it lands)
+- Architecture: IR → WebSocket → Plugin → Figma Slides
+- Figma constraints we discovered (no REST writes, plugin sandbox, Slides API quirks)
+- Trade-offs made (local MCP, explicit sync, named text nodes)
+- How to use it (setup, workflow, tips)
+
+**This is a real test of the product.** Use the tools, follow the methodology, iterate with the human.
+
+---
+
 ## Open Discovery Tasks
 
-From PLAN.md "What's Next" section:
+For future sessions:
 
 1. **Visual feedback loop** — Claude is currently blind to rendered output
    - Can't see: text overflow, overlapping elements, broken layouts
-   - Options: Plugin exports screenshot, Figma REST API image export, HTML preview
+   - Options: Plugin exports screenshot, Figma REST API image export
    - Research: Can Figma plugin export slide as image? Can Claude process it?
 
 2. **Event-driven updates** — decks that stay in sync with reality
    - Webhook triggers: project status, metrics, sprint completion
    - Agent updates specific slides without human intervention
-   - Architecture: MCP server as webhook receiver? Scheduled refresh?
 
 3. **Polish tasks** — improve archetype detection, handle edge cases
 ```
