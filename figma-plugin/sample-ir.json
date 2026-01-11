@@ -1,0 +1,85 @@
+{
+  "deck": {
+    "title": "Monorail Demo"
+  },
+  "slides": [
+    {
+      "id": "slide-1",
+      "archetype": "title",
+      "status": "draft",
+      "content": {
+        "headline": "Monorail!",
+        "subline": "Where the Monorail is King."
+      }
+    },
+    {
+      "id": "slide-2",
+      "archetype": "bullets",
+      "status": "draft",
+      "content": {
+        "headline": "You've tried AI deck tools",
+        "bullets": [
+          "They generate slides fast",
+          "The output looks professional",
+          "But something's missing..."
+        ]
+      }
+    },
+    {
+      "id": "slide-3",
+      "archetype": "big-idea",
+      "status": "draft",
+      "content": {
+        "headline": "Pretty slides that don't land",
+        "subline": "The deck had information. It didn't have an argument."
+      }
+    },
+    {
+      "id": "slide-4",
+      "archetype": "big-idea",
+      "status": "draft",
+      "content": {
+        "headline": "What if AI could see what you're building?",
+        "subline": "Not generate and disappear. Work alongside you. Build the deck together."
+      }
+    },
+    {
+      "id": "slide-5",
+      "archetype": "two-column",
+      "status": "draft",
+      "content": {
+        "headline": "Claude + Figma as shared canvas",
+        "left": {
+          "title": "Claude writes",
+          "body": "Proposes structure. Generates slides via MCP. Sees your canvas. Adapts."
+        },
+        "right": {
+          "title": "You spike",
+          "body": "Edit directly in Figma. Move things. Try a layout. Lock what's done."
+        }
+      }
+    },
+    {
+      "id": "slide-6",
+      "archetype": "quote",
+      "status": "draft",
+      "content": {
+        "quote": "What about us brain-dead slobs?",
+        "attribution": "You'll be given cushy jobs!"
+      }
+    },
+    {
+      "id": "slide-7",
+      "archetype": "summary",
+      "status": "draft",
+      "content": {
+        "headline": "Monorail!",
+        "items": [
+          "Try it on your next important deck",
+          "The one where the argument matters",
+          "The loop until it lands"
+        ]
+      }
+    }
+  ]
+}

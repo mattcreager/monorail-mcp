@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monorail!</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    :root {
+      --bg: #0f0f1a;
+      --bg-light: #1a1a2e;
+      --fg: #fafafa;
+      --cream: #fef3c7;
+      --red: #dc2626;
+      --blue: #2563eb;
+      --muted: #9ca3af;
+      --slide-width: 960px;
+      --slide-height: 540px;
+    }
+    
+    body {
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.4;
+    }
+    
+    .deck {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2rem;
+      padding: 2rem;
+    }
+    
+    .slide {
+      width: var(--slide-width);
+      height: var(--slide-height);
+      background: var(--bg);
+      border: 1px solid #374151;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 4rem 5rem;
+      position: relative;
+    }
+    
+    .slide-number {
+      position: absolute;
+      bottom: 1.5rem;
+      right: 2rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    
+    /* Title slide */
+    .slide.title {
+      text-align: center;
+      background: linear-gradient(135deg, var(--bg) 0%, var(--bg-light) 100%);
+    }
+    
+    .slide.title h1 {
+      font-size: 5rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      color: var(--cream);
+    }
+    
+    .slide.title .subline {
+      font-size: 1.5rem;
+      color: var(--muted);
+      font-weight: 500;
+      font-style: italic;
+    }
+    
+    /* Big idea slide */
+    .slide.big-idea {
+      text-align: center;
+    }
+    
+    .slide.big-idea h2 {
+      font-size: 2.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 1.5rem;
+      line-height: 1.2;
+    }
+    
+    .slide.big-idea .subline {
+      font-size: 1.375rem;
+      color: var(--muted);
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    
+    /* Standard content slide */
+    .slide h2 {
+      font-size: 2.25rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      margin-bottom: 2rem;
+    }
+    
+    .slide ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    
+    .slide li {
+      font-size: 1.375rem;
+      padding-left: 1.5rem;
+      position: relative;
+      color: #d4d4d8;
+    }
+    
+    .slide li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.6em;
+      width: 6px;
+      height: 6px;
+      background: var(--red);
+      border-radius: 50%;
+    }
+    
+    /* Call and response */
+    .call-response {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    
+    .call-response .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      align-items: center;
+    }
+    
+    .call-response .question {
+      font-size: 1.25rem;
+      font-style: italic;
+      color: var(--muted);
+      text-align: right;
+    }
+    
+    .call-response .answer {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--cream);
+    }
+    
+    /* Two column */
+    .slide.two-col .content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+    }
+    
+    .slide.two-col .col h3 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
+    }
+    
+    .slide.two-col .col.claude h3 { color: var(--red); }
+    .slide.two-col .col.you h3 { color: var(--cream); }
+    
+    .slide.two-col .col p {
+      font-size: 1.25rem;
+      color: #d4d4d8;
+      line-height: 1.5;
+    }
+    
+    /* Loop diagram */
+    .loop-diagram {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+    }
+    
+    .loop-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    
+    .loop-box {
+      background: var(--bg-light);
+      border: 1px solid #374151;
+      border-radius: 6px;
+      padding: 0.625rem 1rem;
+      font-size: 1rem;
+      font-weight: 500;
+    }
+    
+    .loop-box.canvas {
+      border-color: var(--blue);
+      background: rgba(37, 99, 235, 0.15);
+      padding: 0.75rem 2rem;
+      color: var(--cream);
+      font-weight: 700;
+    }
+    
+    .loop-arrow {
+      color: var(--muted);
+    }
+    
+    .loop-return {
+      color: var(--muted);
+      font-size: 0.9375rem;
+      margin-top: 0.25rem;
+    }
+    
+    /* Callout */
+    .callout {
+      background: var(--bg-light);
+      border-left: 3px solid var(--cream);
+      padding: 1.5rem 2rem;
+      margin-top: 2rem;
+      font-size: 1.125rem;
+      font-style: italic;
+      color: #d4d4d8;
+    }
+    
+    /* Quote slide */
+    .slide.quote {
+      text-align: center;
+      background: var(--bg-light);
+    }
+    
+    .slide.quote blockquote {
+      font-size: 2rem;
+      font-weight: 600;
+      font-style: italic;
+      line-height: 1.4;
+      margin-bottom: 1.5rem;
+    }
+    
+    .slide.quote .q { color: var(--muted); }
+    .slide.quote .a { color: var(--cream); }
+    
+    .slide.quote cite {
+      font-size: 1rem;
+      color: var(--muted);
+      font-style: normal;
+    }
+    
+    /* Summary slide */
+    .slide.summary {
+      text-align: center;
+    }
+    
+    .slide.summary h2 {
+      font-size: 3rem;
+      margin-bottom: 2.5rem;
+      color: var(--cream);
+      text-transform: uppercase;
+    }
+    
+    .slide.summary p {
+      font-size: 1.5rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="deck">
+    
+    <!-- Slide 1: Title -->
+    <div class="slide title">
+      <h1>Monorail!</h1>
+      <p class="subline">Where the Monorail is King.</p>
+      <span class="slide-number">1</span>
+    </div>
+    
+    <!-- Slide 2: Stakes -->
+    <div class="slide">
+      <h2>You've tried the AI deck tools</h2>
+      <ul>
+        <li>They generate slides fast</li>
+        <li>The output looks professional</li>
+        <li>But when you present... something's missing</li>
+      </ul>
+      <span class="slide-number">2</span>
+    </div>
+    
+    <!-- Slide 3: The pain -->
+    <div class="slide big-idea">
+      <h2>Pretty slides that don't land</h2>
+      <p class="subline">The audience nods politely. Then asks "so what's the ask?"<br>The deck had information. It didn't have an argument.</p>
+      <span class="slide-number">3</span>
+    </div>
+    
+    <!-- Slide 4: Call and response (Lyle Lanley style) -->
+    <div class="slide">
+      <h2>We've heard it all before</h2>
+      <div class="call-response">
+        <div class="row">
+          <div class="question">"But my slides look generic..."</div>
+          <div class="answer">Not with Figma's design system!</div>
+        </div>
+        <div class="row">
+          <div class="question">"The AI just dumps text..."</div>
+          <div class="answer">Monorail finds the argument first!</div>
+        </div>
+        <div class="row">
+          <div class="question">"I can't edit what it makes..."</div>
+          <div class="answer">You're in Figma—edit all you want!</div>
+        </div>
+      </div>
+      <span class="slide-number">4</span>
+    </div>
+    
+    <!-- Slide 5: Turn -->
+    <div class="slide big-idea">
+      <h2>What if the AI could see what you're building?</h2>
+      <p class="subline">Not generate and disappear. Work alongside you. See your edits. Adapt to your spikes. Build the deck together.</p>
+      <span class="slide-number">5</span>
+    </div>
+    
+    <!-- Slide 6: Introduce the system -->
+    <div class="slide two-col">
+      <h2>Claude + Figma as shared canvas</h2>
+      <div class="content">
+        <div class="col claude">
+          <h3>Claude writes</h3>
+          <p>Proposes structure. Generates slides via MCP. Sees your canvas. Adapts to your changes.</p>
+        </div>
+        <div class="col you">
+          <h3>You spike</h3>
+          <p>Edit directly in Figma. Move things. Try a layout. Lock what's done. Claude catches up.</p>
+        </div>
+      </div>
+      <span class="slide-number">6</span>
+    </div>
+    
+    <!-- Slide 7: The loop -->
+    <div class="slide">
+      <h2>The loop is continuous</h2>
+      <div class="loop-diagram">
+        <div class="loop-row">
+          <div class="loop-box">Brief</div>
+          <span class="loop-arrow">→</span>
+          <div class="loop-box">Spine</div>
+          <span class="loop-arrow">→</span>
+          <div class="loop-box">Beats</div>
+          <span class="loop-arrow">→</span>
+          <div class="loop-box canvas">Figma</div>
+        </div>
+        <div class="loop-row">
+          <span class="loop-return">← see it → react → adjust ←</span>
+        </div>
+      </div>
+      <div class="callout">
+        Some slides get locked. Others stay in flux. You see it the whole time.
+      </div>
+      <span class="slide-number">7</span>
+    </div>
+    
+    <!-- Slide 8: The toolkit -->
+    <div class="slide">
+      <h2>Argument-first, not aesthetics-first</h2>
+      <ul>
+        <li><strong>Spine:</strong> Setup → Turn → Landing. Every deck needs one.</li>
+        <li><strong>Beats:</strong> Each slide has a job. Filler gets cut.</li>
+        <li><strong>Hallway test:</strong> One sentence they'll repeat tomorrow.</li>
+      </ul>
+      <span class="slide-number">8</span>
+    </div>
+    
+    <!-- Slide 9: Quote / objection handling -->
+    <div class="slide quote">
+      <blockquote>
+        <span class="q">"What about us brain-dead slobs?"</span><br>
+        <span class="a">"You'll be given cushy jobs!"</span>
+      </blockquote>
+      <cite>— Lyle Lanley, on objection handling</cite>
+      <span class="slide-number">9</span>
+    </div>
+    
+    <!-- Slide 10: The ask -->
+    <div class="slide summary">
+      <h2>Monorail!</h2>
+      <p>Try it on your next important deck.<br>The one where the argument actually matters.</p>
+      <span class="slide-number">10</span>
+    </div>
+    
+  </div>
+</body>
+</html>

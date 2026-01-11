@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monorail — Where the Monorail is King</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    :root {
+      --bg: #1a1a2e;
+      --bg-dark: #0f0f1a;
+      --fg: #fafafa;
+      --fg-muted: #9ca3af;
+      --red: #dc2626;
+      --blue: #2563eb;
+      --cream: #fef3c7;
+      --yellow: #fbbf24;
+      --border: #374151;
+    }
+    
+    html {
+      scroll-behavior: smooth;
+    }
+    
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-dark);
+      color: var(--fg);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    
+    /* Nav */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(15, 15, 26, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      z-index: 100;
+    }
+    
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: var(--fg);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      letter-spacing: -0.02em;
+    }
+    
+    .logo-icon {
+      width: 32px;
+      height: 20px;
+      background: linear-gradient(180deg, var(--cream) 0%, var(--cream) 40%, var(--red) 40%, var(--red) 60%, var(--blue) 60%, var(--blue) 100%);
+      border-radius: 10px 10px 4px 4px;
+    }
+    
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      align-items: center;
+    }
+    
+    .nav-links a {
+      color: var(--fg-muted);
+      text-decoration: none;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    
+    .nav-links a:hover {
+      color: var(--fg);
+    }
+    
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.5rem;
+      background: var(--red);
+      color: white;
+      font-weight: 700;
+      font-size: 0.9375rem;
+      border-radius: 6px;
+      text-decoration: none;
+      transition: all 0.2s;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
+    }
+    
+    .btn:hover {
+      background: #ef4444;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+    }
+    
+    .btn-ghost {
+      background: transparent;
+      color: var(--fg);
+      border: 2px solid var(--border);
+    }
+    
+    .btn-ghost:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: var(--fg-muted);
+      box-shadow: none;
+    }
+    
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 8rem 2rem 4rem;
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--bg-dark) 100%);
+    }
+    
+    .hero::before {
+      content: "";
+      position: absolute;
+      top: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1000px;
+      height: 600px;
+      background: radial-gradient(ellipse, rgba(37, 99, 235, 0.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.625rem;
+      padding: 0.5rem 1.25rem;
+      background: rgba(37, 99, 235, 0.1);
+      border: 1px solid rgba(37, 99, 235, 0.3);
+      border-radius: 100px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--blue);
+      margin-bottom: 2rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .hero-badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      background: var(--blue);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    h1 {
+      font-size: clamp(3.5rem, 10vw, 6rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      margin-bottom: 1.5rem;
+      text-transform: uppercase;
+    }
+    
+    h1 span {
+      display: block;
+      background: linear-gradient(135deg, var(--cream) 0%, var(--yellow) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .tagline {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: var(--fg-muted);
+      margin-bottom: 1rem;
+      font-style: italic;
+    }
+    
+    .hero p {
+      font-size: 1.125rem;
+      color: var(--fg-muted);
+      max-width: 550px;
+      margin-bottom: 2.5rem;
+    }
+    
+    .hero-cta {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    
+    /* MCP Section */
+    .mcp-section {
+      padding: 6rem 2rem;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .mcp-content {
+      max-width: 1000px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      align-items: center;
+    }
+    
+    .mcp-text h2 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 1.5rem;
+      text-transform: uppercase;
+    }
+    
+    .mcp-text h2 em {
+      color: var(--blue);
+      font-style: normal;
+    }
+    
+    .mcp-text p {
+      font-size: 1.125rem;
+      color: var(--fg-muted);
+      margin-bottom: 1rem;
+    }
+    
+    .mcp-text p strong {
+      color: var(--fg);
+    }
+    
+    .mcp-diagram {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2.5rem;
+    }
+    
+    .diagram-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+    }
+    
+    .diagram-row:last-child {
+      margin-bottom: 0;
+    }
+    
+    .diagram-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      font-weight: 600;
+      font-size: 0.9375rem;
+      text-align: center;
+      min-width: 100px;
+    }
+    
+    .diagram-box.claude {
+      border-color: var(--red);
+      background: rgba(220, 38, 38, 0.1);
+    }
+    
+    .diagram-box.figma {
+      border-color: var(--blue);
+      background: rgba(37, 99, 235, 0.1);
+      padding: 1.5rem;
+      font-size: 1rem;
+    }
+    
+    .diagram-box.you {
+      border-color: var(--yellow);
+      background: rgba(251, 191, 36, 0.1);
+    }
+    
+    .diagram-arrow {
+      color: var(--fg-muted);
+      font-size: 0.8125rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.25rem;
+    }
+    
+    .diagram-arrow span {
+      font-size: 1.25rem;
+    }
+    
+    /* How it works */
+    .section {
+      padding: 6rem 2rem;
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+    
+    .section-label {
+      font-size: 0.875rem;
+      font-weight: 700;
+      color: var(--red);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+    
+    h2 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 1rem;
+    }
+    
+    .section > p {
+      font-size: 1.125rem;
+      color: var(--fg-muted);
+      max-width: 600px;
+    }
+    
+    /* Problems as song */
+    .problems-song {
+      margin-top: 3rem;
+      display: grid;
+      gap: 1.5rem;
+    }
+    
+    .problem-line {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      align-items: start;
+      padding: 1.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .problem-line:last-child {
+      border-bottom: none;
+    }
+    
+    .question {
+      font-size: 1.25rem;
+      font-style: italic;
+      color: var(--fg-muted);
+    }
+    
+    .answer {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--cream);
+    }
+    
+    /* The turn */
+    .turn {
+      background: linear-gradient(135deg, var(--bg) 0%, rgba(37, 99, 235, 0.1) 100%);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      text-align: center;
+      padding: 8rem 2rem;
+    }
+    
+    .turn h2 {
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      max-width: 800px;
+      margin: 0 auto 1.5rem;
+      text-transform: uppercase;
+      letter-spacing: -0.02em;
+    }
+    
+    .turn p {
+      font-size: 1.25rem;
+      color: var(--fg-muted);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    
+    /* Toolkit */
+    .toolkit-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+      margin-top: 3rem;
+    }
+    
+    .toolkit-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    
+    .toolkit-card:hover {
+      border-color: var(--fg-muted);
+      transform: translateY(-2px);
+    }
+    
+    .toolkit-card h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
+      color: var(--cream);
+    }
+    
+    .toolkit-card p {
+      color: var(--fg-muted);
+      font-size: 0.9375rem;
+    }
+    
+    /* Quote */
+    .quote-section {
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 6rem 2rem;
+      text-align: center;
+    }
+    
+    blockquote {
+      font-size: clamp(1.5rem, 4vw, 2.25rem);
+      font-weight: 600;
+      max-width: 800px;
+      margin: 0 auto 1.5rem;
+      font-style: italic;
+      line-height: 1.4;
+    }
+    
+    blockquote .q {
+      color: var(--fg-muted);
+    }
+    
+    blockquote .a {
+      color: var(--cream);
+    }
+    
+    cite {
+      color: var(--fg-muted);
+      font-style: normal;
+      font-size: 1rem;
+    }
+    
+    /* CTA */
+    .cta {
+      padding: 8rem 2rem;
+      text-align: center;
+      background: linear-gradient(180deg, var(--bg-dark) 0%, var(--bg) 100%);
+    }
+    
+    .cta h2 {
+      font-size: clamp(2.5rem, 6vw, 4rem);
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+    }
+    
+    .cta p {
+      font-size: 1.25rem;
+      color: var(--fg-muted);
+      margin-bottom: 2.5rem;
+    }
+    
+    /* Install block */
+    .install-block {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem 2rem;
+      max-width: 500px;
+      margin: 0 auto 2rem;
+      text-align: left;
+    }
+    
+    .install-block code {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.9375rem;
+      color: var(--cream);
+    }
+    
+    .install-block .comment {
+      color: var(--fg-muted);
+    }
+    
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 3rem 2rem;
+      text-align: center;
+    }
+    
+    .footer-art {
+      font-size: 2rem;
+      font-weight: 800;
+      color: var(--fg-muted);
+      opacity: 0.3;
+      margin-bottom: 1.5rem;
+      letter-spacing: 0.2em;
+    }
+    
+    footer p {
+      color: var(--fg-muted);
+      font-size: 0.875rem;
+    }
+    
+    footer a {
+      color: var(--fg-muted);
+      text-decoration: none;
+    }
+    
+    footer a:hover {
+      color: var(--fg);
+    }
+    
+    .towns {
+      margin-top: 1.5rem;
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      opacity: 0.5;
+      font-style: italic;
+    }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+      .nav-links {
+        display: none;
+      }
+      
+      .mcp-content {
+        grid-template-columns: 1fr;
+      }
+      
+      .problem-line {
+        grid-template-columns: 1fr;
+        gap: 0.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="#" class="logo">
+      <div class="logo-icon"></div>
+      Monorail
+    </a>
+    <div class="nav-links">
+      <a href="#mcp">MCP Tool</a>
+      <a href="#how">How it works</a>
+      <a href="#toolkit">Toolkit</a>
+      <a href="https://github.com/monorail-mcp" class="btn btn-ghost">GitHub</a>
+      <a href="#cta" class="btn">Install</a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="hero-badge">MCP Server for Figma Slides</div>
+    <h1><span>Monorail!</span></h1>
+    <p class="tagline">Where the Monorail is King.</p>
+    <p>An MCP tool that gives Claude the power to build decks with you in Figma. Not generate and export. Actually collaborate—see your edits, adapt, iterate together.</p>
+    <div class="hero-cta">
+      <a href="#cta" class="btn">Install Monorail</a>
+      <a href="#how" class="btn btn-ghost">How it works</a>
+    </div>
+  </section>
+
+  <section class="mcp-section" id="mcp">
+    <div class="mcp-content">
+      <div class="mcp-text">
+        <h2>An <em>MCP</em> tool for decks</h2>
+        <p><strong>Claude gets a new capability.</strong> With Monorail installed, Claude can read and write Figma Slides directly.</p>
+        <p>You work in Figma. Claude works with you. The MCP server is the bridge—Claude sees your canvas, proposes changes, watches you spike ideas, and adapts.</p>
+        <p><strong>It's not a plugin you install in Figma.</strong> It's a tool Claude has.</p>
+      </div>
+      <div class="mcp-diagram">
+        <div class="diagram-row">
+          <div class="diagram-box claude">Claude</div>
+          <div class="diagram-arrow">
+            <span>→</span>
+            writes
+          </div>
+          <div class="diagram-box figma">Figma Slides</div>
+          <div class="diagram-arrow">
+            <span>←</span>
+            edits
+          </div>
+          <div class="diagram-box you">You</div>
+        </div>
+        <div class="diagram-row" style="justify-content: center;">
+          <div class="diagram-arrow">
+            <span>↑</span>
+            reads via MCP
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="how">
+    <div class="section-label">The Problem</div>
+    <h2>You've tried the AI deck tools</h2>
+    <p>We know. We've heard it all before.</p>
+    
+    <div class="problems-song">
+      <div class="problem-line">
+        <div class="question">"But my slides look generic..."</div>
+        <div class="answer">Not with Figma's design system!</div>
+      </div>
+      <div class="problem-line">
+        <div class="question">"The AI just dumps text on slides..."</div>
+        <div class="answer">Monorail finds the argument first!</div>
+      </div>
+      <div class="problem-line">
+        <div class="question">"I can't edit what it generates..."</div>
+        <div class="answer">You're in Figma—edit all you want!</div>
+      </div>
+      <div class="problem-line">
+        <div class="question">"It doesn't understand my changes..."</div>
+        <div class="answer">Claude reads your canvas through MCP!</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="turn">
+    <h2>What if the AI could see what you're building?</h2>
+    <p>Not generate and disappear. Work alongside you. See your spikes. Adapt to your edits. Build the deck together.</p>
+  </section>
+
+  <section class="section" id="toolkit">
+    <div class="section-label">The Toolkit</div>
+    <h2>Argument-first, not aesthetics-first</h2>
+    <p>Monorail gives Claude a narrative framework. Every slide earns its place.</p>
+    
+    <div class="toolkit-grid">
+      <div class="toolkit-card">
+        <h3>Spine</h3>
+        <p>Setup → Turn → Landing. The core argument in three moves. No spine, no deck.</p>
+      </div>
+      <div class="toolkit-card">
+        <h3>Beats</h3>
+        <p>Each slide has a job: establish stakes, create tension, prove the point, land the ask.</p>
+      </div>
+      <div class="toolkit-card">
+        <h3>Hallway Test</h3>
+        <p>"What was that about?" One sentence answer. If they can't say it, the deck isn't done.</p>
+      </div>
+      <div class="toolkit-card">
+        <h3>Deletion Test</h3>
+        <p>Cut any slide—does the argument break? No? It was filler. Cut it.</p>
+      </div>
+      <div class="toolkit-card">
+        <h3>Archetypes</h3>
+        <p>10 constrained templates. Word limits force clarity. No walls of text allowed.</p>
+      </div>
+      <div class="toolkit-card">
+        <h3>Partial Locking</h3>
+        <p>Lock slides that are done. Keep iterating on the rest. Claude respects what's settled.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="quote-section">
+    <blockquote>
+      <span class="q">"What about us brain-dead slobs?"</span><br>
+      <span class="a">"You'll be given cushy jobs!"</span>
+    </blockquote>
+    <cite>— Lyle Lanley, objection handling</cite>
+  </section>
+
+  <section class="cta" id="cta">
+    <h2>Monorail!</h2>
+    <p>Try it on your next deck. The one where the argument actually matters.</p>
+    
+    <div class="install-block">
+      <code>
+        <span class="comment"># Add to your Claude MCP config</span><br>
+        npx monorail-mcp init
+      </code>
+    </div>
+    
+    <a href="https://github.com/monorail-mcp" class="btn">View on GitHub →</a>
+  </section>
+
+  <footer>
+    <div class="footer-art">🚝</div>
+    <p>Monorail is open source. <a href="https://github.com/monorail-mcp">GitHub</a> · <a href="#">Docs</a></p>
+    <p class="towns">I've sold monorails to Brockway, Ogdenville, and North Haverbrook—and by gum, it put them on the map!</p>
+  </footer>
+</body>
+</html>

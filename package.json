@@ -1,0 +1,39 @@
+{
+  "name": "monorail-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for building presentation decks with narrative coherence in Figma",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "monorail-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "figma",
+    "presentations",
+    "slides",
+    "claude",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

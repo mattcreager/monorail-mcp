@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #1e1e1e;
+      color: #fff;
+      padding: 16px;
+      font-size: 13px;
+    }
+    
+    h1 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    h1::before {
+      content: "🚝";
+    }
+    
+    .section {
+      margin-bottom: 20px;
+    }
+    
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #999;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    textarea {
+      width: 100%;
+      height: 180px;
+      background: #2d2d2d;
+      border: 1px solid #444;
+      border-radius: 6px;
+      color: #fff;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      padding: 12px;
+      resize: vertical;
+    }
+    
+    textarea:focus {
+      outline: none;
+      border-color: #0d99ff;
+    }
+    
+    textarea::placeholder {
+      color: #666;
+    }
+    
+    .btn {
+      width: 100%;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: 8px;
+    }
+    
+    .btn-primary {
+      background: #0d99ff;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #0b87e0;
+    }
+    
+    .btn-secondary {
+      background: #3d3d3d;
+      color: #fff;
+    }
+    
+    .btn-secondary:hover {
+      background: #4d4d4d;
+    }
+    
+    .status {
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      margin-top: 12px;
+      display: none;
+    }
+    
+    .status.success {
+      display: block;
+      background: rgba(52, 199, 89, 0.15);
+      border: 1px solid rgba(52, 199, 89, 0.3);
+      color: #34c759;
+    }
+    
+    .status.error {
+      display: block;
+      background: rgba(255, 59, 48, 0.15);
+      border: 1px solid rgba(255, 59, 48, 0.3);
+      color: #ff3b30;
+    }
+    
+    .divider {
+      height: 1px;
+      background: #333;
+      margin: 20px 0;
+    }
+    
+    .help {
+      font-size: 11px;
+      color: #666;
+      margin-top: 8px;
+    }
+    
+    /* WebSocket connection status */
+    .ws-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #2d2d2d;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      font-size: 12px;
+    }
+    
+    .ws-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+    
+    .ws-indicator.connected {
+      background: #34c759;
+      box-shadow: 0 0 6px rgba(52, 199, 89, 0.5);
+    }
+    
+    .ws-indicator.connecting {
+      background: #ffcc00;
+      animation: pulse 1s infinite;
+    }
+    
+    .ws-indicator.disconnected {
+      background: #ff3b30;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .ws-status-text {
+      flex: 1;
+      color: #999;
+    }
+    
+    .ws-btn {
+      padding: 4px 10px;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #3d3d3d;
+      color: #fff;
+    }
+    
+    .ws-btn:hover {
+      background: #4d4d4d;
+    }
+  </style>
+</head>
+<body>
+  <h1>Monorail</h1>
+  
+  <!-- WebSocket Connection Status -->
+  <div class="ws-status">
+    <div class="ws-indicator" id="ws-indicator"></div>
+    <span class="ws-status-text" id="ws-status-text">Disconnected</span>
+    <button class="ws-btn" id="ws-connect-btn">Connect</button>
+  </div>
+  
+  <div class="section">
+    <label>Paste IR (JSON)</label>
+    <textarea id="ir-input" placeholder='{
+  "slides": [
+    {
+      "id": "slide-1",
+      "archetype": "title",
+      "status": "draft",
+      "content": {
+        "headline": "Your Title Here",
+        "subline": "Your subtitle"
+      }
+    }
+  ]
+}'></textarea>
+    <button class="btn btn-primary" id="apply-btn">Apply to Deck</button>
+    <p class="help">Paste the IR JSON from Claude, then click Apply.</p>
+  </div>
+  
+  <div class="divider"></div>
+  
+  <div class="section">
+    <label>Export Current Deck</label>
+    <button class="btn btn-secondary" id="export-btn">Export as IR</button>
+    <textarea id="ir-output" placeholder="Exported IR will appear here..." readonly></textarea>
+    <button class="btn btn-secondary" id="copy-btn" style="display: none;">Copy to Clipboard</button>
+  </div>
+  
+  <div class="status" id="status"></div>
+  
+  <script>
+    const irInput = document.getElementById('ir-input');
+    const irOutput = document.getElementById('ir-output');
+    const applyBtn = document.getElementById('apply-btn');
+    const exportBtn = document.getElementById('export-btn');
+    const copyBtn = document.getElementById('copy-btn');
+    const status = document.getElementById('status');
+    
+    // WebSocket elements
+    const wsIndicator = document.getElementById('ws-indicator');
+    const wsStatusText = document.getElementById('ws-status-text');
+    const wsConnectBtn = document.getElementById('ws-connect-btn');
+    
+    // WebSocket state
+    let ws = null;
+    const WS_URL = 'ws://localhost:9876';
+    
+    function updateWsStatus(state, text) {
+      wsIndicator.className = 'ws-indicator ' + state;
+      wsStatusText.textContent = text;
+      wsConnectBtn.textContent = state === 'connected' ? 'Disconnect' : 'Connect';
+    }
+    
+    function connectWebSocket() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+        return;
+      }
+      
+      updateWsStatus('connecting', 'Connecting...');
+      
+      try {
+        ws = new WebSocket(WS_URL);
+        
+        ws.onopen = () => {
+          console.log('[WS] Connected to server');
+          updateWsStatus('connected', 'Connected to MCP server');
+          
+          // Send hello message
+          ws.send(JSON.stringify({
+            type: 'hello',
+            plugin: 'monorail-figma',
+            version: '0.1.0'
+          }));
+        };
+        
+        ws.onmessage = (event) => {
+          console.log('[WS] Received:', event.data);
+          try {
+            const msg = JSON.parse(event.data);
+            
+            if (msg.type === 'hello-ack') {
+              showStatus('WebSocket connected to ' + msg.server);
+            } else if (msg.type === 'push-ir') {
+              // Server is pushing IR to apply
+              irInput.value = JSON.stringify(msg.ir, null, 2);
+              showStatus('Received IR from server');
+              // Auto-apply if requested
+              if (msg.autoApply) {
+                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir) } }, '*');
+              }
+            } else if (msg.type === 'request-export') {
+              // Server requesting current deck state
+              parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
+            }
+          } catch (e) {
+            console.error('[WS] Failed to parse message:', e);
+          }
+        };
+        
+        ws.onclose = () => {
+          console.log('[WS] Disconnected');
+          updateWsStatus('disconnected', 'Disconnected');
+          ws = null;
+        };
+        
+        ws.onerror = (err) => {
+          console.error('[WS] Error:', err);
+          updateWsStatus('disconnected', 'Connection failed');
+        };
+        
+      } catch (e) {
+        console.error('[WS] Failed to connect:', e);
+        updateWsStatus('disconnected', 'Failed: ' + e.message);
+      }
+    }
+    
+    wsConnectBtn.onclick = connectWebSocket;
+    
+    // Auto-connect on load
+    setTimeout(connectWebSocket, 500);
+    
+    function showStatus(message, isError = false) {
+      status.textContent = message;
+      status.className = 'status ' + (isError ? 'error' : 'success');
+      setTimeout(() => {
+        status.className = 'status';
+      }, 3000);
+    }
+    
+    applyBtn.onclick = () => {
+      const ir = irInput.value.trim();
+      if (!ir) {
+        showStatus('Please paste IR first', true);
+        return;
+      }
+      
+      try {
+        JSON.parse(ir); // Validate JSON
+        parent.postMessage({ pluginMessage: { type: 'apply-ir', ir } }, '*');
+      } catch (e) {
+        showStatus('Invalid JSON: ' + e.message, true);
+      }
+    };
+    
+    exportBtn.onclick = () => {
+      parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
+    };
+    
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(irOutput.value);
+        showStatus('Copied to clipboard!');
+      } catch (e) {
+        showStatus('Failed to copy', true);
+      }
+    };
+    
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+      
+      if (msg.type === 'applied') {
+        showStatus(`Applied ${msg.count} slides!`);
+        irInput.value = '';
+        
+        // Notify server if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'applied', count: msg.count }));
+        }
+      }
+      
+      if (msg.type === 'exported') {
+        irOutput.value = msg.ir;
+        copyBtn.style.display = 'block';
+        showStatus('Deck exported!');
+        
+        // Send to server if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'exported', ir: JSON.parse(msg.ir) }));
+        }
+      }
+    };
+  </script>
+</body>
+</html>
