@@ -145,26 +145,38 @@ See `docs/failures.md` for details.
 1. **Sketch Phase** — Claude + human iterate on structure/argument. Visuals are rough.
 2. **Production Phase** — "Make it match our design system." Claude reads system, applies it.
 
-**Implementation priorities (revised):**
+**Rich Read + Targeted Write: IMPLEMENTED ✅** (Session 11)
+- Export captures ALL elements with Figma node IDs
+- `monorail_patch_elements` updates specific elements by ID
+- Preserves layouts, diagrams, styling when editing text
+
+**Implementation priorities (revised after Session 11):**
 
 - [x] **Auto Layout archetypes** — DONE ✅
-  - `bullets` uses Auto Layout, text wraps properly
-  - `title` has gradient background
-- [ ] **Monorail Design System** — HIGH PRIORITY (NEXT)
-  - Build reference design system in Figma
-  - Prove Claude can read it and apply it
-  - This validates the entire Production Phase vision
-  - See: `docs/decisions/design-system-strategy.md`
+- [x] **Rich Read** — DONE ✅ (recursive element capture)
+- [x] **Targeted Write** — DONE ✅ (`monorail_patch_elements`)
+- [ ] **Dynamic Templates** — HIGH PRIORITY (NEXT)
+  - Current archetypes are hardcoded — need templates that live in Figma
+  - Two use cases:
+    1. **Extract template from existing slide** — "Learn slide-10's style"
+    2. **Create new slides using template** — "Make SOLUTION slide like slide-10"
+  - Implementation approach:
+    - [ ] Read slide structure (frames, colors, spacing, hierarchy)
+    - [ ] Identify template "slots" (section_label, headline, accent_block, etc.)
+    - [ ] Store as reusable template spec
+    - [ ] Instantiate template with new content
+  - This unlocks: "Expand existing theme" workflow
+- [ ] **Theme Generation** — AFTER TEMPLATES
+  - Claude generates complete design system from scratch
+  - Creates reference slides in Figma
+  - Human refines, Claude learns
+  - This unlocks: "Create new theme" workflow
 - [ ] **Styled containers** — MEDIUM PRIORITY
   - Add `cornerRadius` to frames
   - Accent borders for callouts
 - [ ] **SVG diagram support** — MEDIUM PRIORITY
   - Add `diagram?: string` field to IR
   - Claude generates diagrams as SVG
-- [ ] **Design system generalization** — AFTER PROOF OF CONCEPT
-  - Export any user's design system
-  - "Bring your own" workflow
-  - Screenshot-based style inference
 
 **Documentation refresh:**
 - [ ] **Update README.md** — currently stale, says "v0 under construction"
@@ -564,6 +576,78 @@ See `docs/decisions/design-system-strategy.md` for full sketch.
 
 ---
 
+### Session 11 (2026-01-11)
+**Task:** Implement Rich Read + Targeted Write (Intent-Based Collaboration)
+
+**Breakthrough: Full element visibility achieved!**
+
+Before this session, exporting slide-10 (complex company slide) returned:
+```json
+{ "archetype": "unknown", "content": { "headline": "Traditional access..." } }
+```
+
+After this session:
+```json
+{
+  "archetype": "unknown",
+  "has_diagram": true,
+  "elements": [
+    { "id": "9:141", "type": "body_text", "text": "challenge+solution" },
+    { "id": "9:139", "type": "body_text", "text": "Traditional access..." },
+    { "id": "9:144", "type": "accent_text", "text": "Give agents broad access..." },
+    { "id": "9:147", "type": "accent_text", "text": "Limit agent capabilities..." },
+    { "id": "9:150", "type": "accent_text", "text": "Build custom access controls..." },
+    // ... 20+ diagram elements with IDs
+  ]
+}
+```
+
+**Implemented:**
+- ✅ `getAllTextNodes()` — recursive finder, captures ALL text regardless of nesting
+- ✅ `classifyElement()` — identifies type: `headline`, `accent_text`, `diagram_text`, `bullet`, etc.
+- ✅ `buildElementInfos()` — converts to rich element array with Figma node IDs
+- ✅ `has_diagram` flag — true when deeply nested content detected
+- ✅ `monorail_patch_elements` MCP tool — update specific elements by ID
+- ✅ `patch-elements` plugin handler — finds node by ID, updates text only
+- ✅ WebSocket protocol for patch requests/responses
+
+**Tested and working:**
+```
+Claude: monorail_patch_elements({ patches: { changes: [
+  { target: "9:144", text: "Give agents broad access → accept massive security risks. 🔓" },
+  { target: "9:147", text: "Limit capabilities → sacrifice business value. 📉" }
+]}})
+
+Result: ✓ Patched 2 elements
+```
+
+Diagram, layout, colors, fonts — all preserved. Only text changed.
+
+**The gap we hit: New slide creation doesn't match existing styles**
+
+Created a new "SOLUTION" slide to follow slide-10's "CHALLENGE" slide:
+- Content was correct (headline + 3 bullets)
+- Styling was Monorail default, NOT slide-10's custom style
+- Missing: section label, accent blocks with colored borders, layout
+
+**This reveals the next architecture need: Dynamic Templates**
+
+| Use Case | Example | What's Needed |
+|----------|---------|---------------|
+| **Expand existing theme** | "Add SOLUTION slide matching slide-10" | Learn template from example |
+| **Create new theme** | "Build me a Monorail design system" | Generate templates from scratch |
+
+Current archetypes are hardcoded in plugin. Need:
+1. **Templates live in Figma** (not in code)
+2. **Claude can read them** (extract structure, colors, spacing)
+3. **Claude can instantiate them** (create new slides using template)
+
+**Key insight:** Two distinct workflows:
+- **Template extraction**: Read existing styled slide → extract reusable template
+- **Template instantiation**: Apply template to new content
+
+---
+
 ## Completion Criteria (v0)
 
 The loop works end-to-end:
@@ -630,136 +714,83 @@ We use this iterative development approach. Please follow it:
 
 ---
 
-## Current State
+## Current State (after Session 11)
 
-**v0 loop is COMPLETE. WebSocket push/pull WORKING! Plugin API audit DONE! ✅**
+**Rich Read + Targeted Write: WORKING! ✅**
 
-The full collaboration loop works — **no copy/paste required:**
-1. `monorail_pull_ir` → Claude gets current deck from Figma
-2. Claude refines the IR
-3. `monorail_push_ir` → sends updated IR directly to plugin (auto-applies)
-4. Human edits in Figma (move, restyle, add content)
-5. Repeat until deck lands
+I can now:
+1. `monorail_pull_ir` → See ALL elements on complex slides (not just headlines)
+2. `monorail_patch_elements` → Update specific elements by Figma node ID
+3. Preserve diagrams, layouts, styling when editing text
 
-**Plugin API audit finding:** The gap is USAGE, not capability. API supports Auto Layout, gradients, SVG import — we're just not using them yet.
+**The gap we hit:** Creating NEW slides doesn't match existing custom styles.
+
+Test: Created "SOLUTION" slide to follow "CHALLENGE" slide (slide-10)
+- Content was correct
+- Styling was Monorail default, NOT slide-10's custom style
+- Missing: section labels, accent blocks, matching layout
 
 ---
 
-## WebSocket Bridge: FULLY WORKING ✅
+## MCP Tools Available
 
-**MCP Tools:**
 - `monorail_connection_status` — check if plugin connected
 - `monorail_push_ir` — send IR to plugin (optional `autoApply`)
-- `monorail_pull_ir` — request export, returns IR
-
-**Setup:**
-1. Monorail is configured in `~/.cursor/mcp.json`
-2. Cursor auto-starts MCP server (which starts WebSocket on :9876)
-3. Open Figma Slides → run Monorail plugin → auto-connects
-
-**If connection issues:** Check for multiple MCP processes (`ps aux | grep monorail`). Only one can bind port 9876.
+- `monorail_pull_ir` — request export, returns IR with full `elements` array
+- `monorail_patch_elements` — update specific elements by Figma node ID
 
 ---
 
 ## Key Files
 
-- `figma-plugin/code.ts` — the plugin (Apply + Export)
-- `figma-plugin/ui.html` — plugin UI (activity feed + WebSocket client)
-- `src/index.ts` — MCP server (WebSocket server + tools)
-- `docs/decisions/websocket-bridge.md` — protocol design
-- `docs/decisions/local-mcp.md` — why local not remote
-- `docs/failures.md` — learnings and gotchas
+- `figma-plugin/code.ts` — plugin with rich export + patch support
+- `src/index.ts` — MCP server with all tools
+- `docs/decisions/design-system-strategy.md` — design system vision
 
 ---
 
-## Next Session Task: Intent-Based Read/Write System
+## Next Session Task: Dynamic Templates
 
-**Goal:** Build the "Claude reads, Claude writes" system that enables true collaboration.
+**Goal:** Enable "make a slide that matches this existing style"
 
-**Context from Session 10:**
-- Auto Layout + gradients working ✅
-- Tested with complex real-world slide — current IR is massively lossy
-- Breakthrough: Intent-based collaboration (Claude = WHAT, System = HOW)
+**The problem:**
+Current archetypes (title, bullets, etc.) are hardcoded in plugin code.
+Can't create new slides that match custom styles (like slide-10's accent blocks).
 
-**The problem we're solving:**
-Screenshot of complex slide shows: section label, headline, 3 accent blocks, diagram
-Current IR captures: just headline, `archetype: unknown`
-Result: Claude is blind, modifications destroy human work
+**Two use cases to enable:**
 
-**Step 1: Rich Read (Claude reviews the slide)**
-Enhance export to capture full structure:
-```json
-{
-  "slide_id": "slide-10",
-  "elements": [
-    { "id": "el-1", "type": "section_label", "text": "CHALLENGE+SOLUTION" },
-    { "id": "el-2", "type": "headline", "text": "Traditional access..." },
-    { "id": "el-3", "type": "accent_block", "text": "Give agents broad access..." },
-    { "id": "el-4", "type": "diagram", "description": "complex, ~15 elements" }
-  ]
-}
-```
-- Capture ALL text elements with IDs
-- Identify element types/roles
-- Flag complex elements (diagrams) as "preserve"
+1. **Expand existing theme** — "Add SOLUTION slide matching slide-10"
+   - Read slide-10's structure (frames, colors, positions)
+   - Extract as reusable template
+   - Instantiate with new content
 
-**Step 2: Targeted Write (Claude modifies)**
-New update format:
-```json
-{
-  "slide_id": "slide-10",
-  "changes": [
-    { "target": "el-2", "text": "New headline text" },
-    { "target": "el-3", "text": "Updated point" }
-  ]
-}
-```
-- Target specific elements by ID
-- Only modify what Claude specifies
-- Everything else preserved
+2. **Create new theme** — "Build me a design system"
+   - Claude generates design spec
+   - Renders reference slides
+   - Human refines
+   - Extract as templates
 
-**Step 3: Intent-Based Create (new slides)**
-For new slides, Claude expresses intent:
-```json
-{
-  "intent": "challenge_solution",
-  "content": {
-    "section_label": "...",
-    "headline": "...",
-    "pain_points": ["...", "...", "..."]
-  }
-}
-```
-- System uses design system to render
-- Claude doesn't specify pixels, just content + intent
+**Proposed approach:**
 
-**Visual feedback (parallel track):**
-- Screenshot or rich description so Claude can SEE
-- Enables Claude to make informed suggestions
-- Critical for the "review" part of review+modify
+Step 1: Template Extraction
+- Read slide structure (not just text — frames, colors, fills, strokes)
+- Identify "slots" (section_label, headline, accent_block, etc.)
+- Store as template spec
 
-**Step 4: Scoped Read (context efficiency)**
-Add `detail` parameter to pull:
-- `copy`: Just element IDs + text (lightweight, for wordsmithing)
-- `structure`: + positions, hierarchy, diagram flags
-- `full`: + fonts, colors, styles
+Step 2: Template Instantiation  
+- Take template + content
+- Create new slide with matching structure
+- Fill slots with new content
 
-**Step 5: MCP Tool for Patches**
-Add `monorail_patch` tool that calls `patch-elements`:
-```typescript
-monorail_patch({
-  changes: [
-    { target: "node-id", text: "New text" }
-  ]
-})
-```
+**Key questions to answer:**
+- How do we identify which frames are "slots" vs decoration?
+- How do we handle variable-count elements (3 accent blocks vs 5)?
+- Where do templates live? (Figma components? JSON specs? Both?)
 
-**Success criteria:**
-- Export captures all text elements from complex slide ✅ (other session implemented)
-- Targeted patch modifies only specified elements ✅ (other session implemented)
-- Claude can request appropriate detail level for task
-- Human's diagram/layout preserved after update
-- Context overhead reduced for copy-only iterations
+**Test case:** 
+- Extract template from slide-10 (CHALLENGE+SOLUTION style)
+- Create slide-11 using that template with SOLUTION content
+- Result should visually match slide-10's style
 
 ---
 
