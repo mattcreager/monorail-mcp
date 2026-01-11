@@ -190,3 +190,34 @@ Our approach is the simplest thing that works, but it means:
 - Future: Research Plugin API support for Auto Layout frames
 - Future: Consider generating slides as Component instances
 - Added `preserveLayout` feature to plan — update content without re-rendering
+
+---
+
+### 2026-01-11 - Archetypes bypass Figma's native template system
+
+**What we found:** Figma Slides has a built-in template system we're completely ignoring:
+
+1. **Templates** define brand colors, fonts, and slide layouts
+2. **Slide layouts** within templates are essentially what we call "archetypes"
+3. **Template styles** (colors, fonts) auto-apply when users pick layouts
+4. **Teams can publish custom templates** for org-wide consistency
+
+Our plugin hardcodes everything:
+- `COLORS` object with our dark theme
+- Font: Inter (hardcoded)
+- Archetypes as code with magic-number positions
+
+We generate raw text nodes instead of using Figma's layout system.
+
+**Impact:** 
+- Users can't use their existing brand/templates
+- No connection to org design systems
+- Monorail decks look like "Monorail decks", not "their decks"
+
+**Path forward:**
+- Explore three approaches:
+  - **Opinionated**: Ship a Monorail template users install
+  - **Adaptive**: Read user's existing template, match their style
+  - **Hybrid**: Default template + brand detection
+- Research: Can Plugin API read template styles? Generate layout instances?
+- Added to plan as design decision to explore

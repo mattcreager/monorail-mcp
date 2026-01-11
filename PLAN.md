@@ -139,6 +139,21 @@ See `docs/failures.md` for details.
   - ✅ Copy/paste-free workflow achieved
   - ✅ Documented local MCP decision (`docs/decisions/local-mcp.md`)
 
+**Design decisions needed:**
+- [ ] **Template integration strategy** — our archetypes bypass Figma's native template system
+  - Current: Hardcoded colors, fonts, layouts in plugin code
+  - Figma-native: Templates define colors, fonts, slide layouts that users pick from
+  - Options to explore:
+    - **A) Opinionated** — ship Monorail template, users install it, plugin uses it
+    - **B) Adaptive** — read user's existing template, generate matching slides
+    - **C) Hybrid** — ship default template, but detect/adapt to user's brand
+  - Experiment with both to see what feels best
+  - Key questions:
+    - Can Plugin API read template styles? (colors, fonts)
+    - Can we generate slides as template layout instances?
+    - What's the onboarding like for each approach?
+  - See: `docs/decisions/` for eventual write-up
+
 **Documentation refresh:**
 - [ ] **Update README.md** — currently stale, says "v0 under construction"
   - Update status to reflect v0 complete
