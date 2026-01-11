@@ -544,6 +544,24 @@ This unifies:
 - New slide creation (Claude expresses intent, system renders with templates)
 - Human work preservation (deltas don't destroy what Claude can't capture)
 
+**Evolution: Scoped Context (efficiency insight)**
+
+Context is expensive. Don't exchange what you don't need.
+
+| Scope | What Claude reads | When to use |
+|-------|-------------------|-------------|
+| `copy` | Element IDs + text only | Wordsmithing, copy iteration |
+| `structure` | + positions, hierarchy, diagram flags | Understanding layout |
+| `full` | + fonts, colors, styles | Design/style changes |
+
+Claude specifies what it needs: `monorail_pull({ detail: 'copy' })`
+Claude specifies what it writes: `monorail_patch({ changes: [...] })`
+
+**Already partially implemented:** `patch-elements` in plugin handles targeted writes.
+**To add:** Scoped `detail` parameter on pull, `monorail_patch` MCP tool.
+
+See `docs/decisions/design-system-strategy.md` for full sketch.
+
 ---
 
 ## Completion Criteria (v0)
@@ -720,11 +738,28 @@ For new slides, Claude expresses intent:
 - Enables Claude to make informed suggestions
 - Critical for the "review" part of review+modify
 
+**Step 4: Scoped Read (context efficiency)**
+Add `detail` parameter to pull:
+- `copy`: Just element IDs + text (lightweight, for wordsmithing)
+- `structure`: + positions, hierarchy, diagram flags
+- `full`: + fonts, colors, styles
+
+**Step 5: MCP Tool for Patches**
+Add `monorail_patch` tool that calls `patch-elements`:
+```typescript
+monorail_patch({
+  changes: [
+    { target: "node-id", text: "New text" }
+  ]
+})
+```
+
 **Success criteria:**
-- Export captures all text elements from complex slide
-- Claude can describe what it sees
-- Targeted update modifies only specified elements
+- Export captures all text elements from complex slide ✅ (other session implemented)
+- Targeted patch modifies only specified elements ✅ (other session implemented)
+- Claude can request appropriate detail level for task
 - Human's diagram/layout preserved after update
+- Context overhead reduced for copy-only iterations
 
 ---
 

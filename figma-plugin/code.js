@@ -470,6 +470,91 @@ function detectExistingArchetype(parent) {
         return 'section';
     return 'unknown';
 }
+// Recursively find ALL text nodes in a node tree
+function getAllTextNodes(node, results = [], depth = 0, parentName = '', offsetX = 0, offsetY = 0) {
+    if (node.type === 'TEXT') {
+        results.push({
+            node: node,
+            depth,
+            parentName,
+            absoluteX: node.x + offsetX,
+            absoluteY: node.y + offsetY,
+        });
+    }
+    else if ('children' in node) {
+        const container = node;
+        const newOffsetX = offsetX + (node.type !== 'SLIDE' ? node.x : 0);
+        const newOffsetY = offsetY + (node.type !== 'SLIDE' ? node.y : 0);
+        for (const child of container.children) {
+            getAllTextNodes(child, results, depth + 1, node.name || parentName, newOffsetX, newOffsetY);
+        }
+    }
+    return results;
+}
+// Classify element type based on position, size, and context
+function classifyElement(text, fontSize, isBold, x, y, depth, parentName) {
+    const upperText = text.toUpperCase();
+    // Section label: small caps, near top, often in a box
+    if (y < 200 && fontSize <= 24 && (upperText === text || parentName.toLowerCase().includes('label'))) {
+        return 'section_label';
+    }
+    // Headline: large, bold, upper portion of slide
+    if (fontSize >= 48 && isBold && y < 500) {
+        return 'headline';
+    }
+    // Quote: has quote marks
+    if (text.startsWith('"') || text.startsWith('"')) {
+        return 'quote';
+    }
+    // Attribution: starts with dash
+    if (text.startsWith('—') || text.startsWith('-')) {
+        return 'attribution';
+    }
+    // Bullet: starts with bullet character
+    if (text.startsWith('•') || text.match(/^[-•]\s/)) {
+        return 'bullet';
+    }
+    // Accent block text: nested, medium size, typically a key point
+    if (depth >= 2 && fontSize >= 20 && fontSize <= 36 && text.length > 20) {
+        return 'accent_text';
+    }
+    // Diagram text: deeply nested, smaller, or in a complex structure
+    if (depth >= 3 || parentName.toLowerCase().includes('diagram') || parentName.toLowerCase().includes('flow')) {
+        return 'diagram_text';
+    }
+    // Small caption/label
+    if (fontSize <= 18) {
+        return 'caption';
+    }
+    // Subline: secondary text, under headline position
+    if (y > 400 && y < 650 && !isBold && fontSize >= 28 && fontSize <= 40) {
+        return 'subline';
+    }
+    // Default: body text
+    return 'body_text';
+}
+// Convert collected text info to ElementInfo array
+function buildElementInfos(textInfos) {
+    return textInfos.map(info => {
+        const { node, depth, parentName, absoluteX, absoluteY } = info;
+        const fontSize = typeof node.fontSize === 'number' ? node.fontSize : 24;
+        const isBold = node.fontName !== figma.mixed && node.fontName.style.includes('Bold');
+        return {
+            id: node.id,
+            type: classifyElement(node.characters, fontSize, isBold, absoluteX, absoluteY, depth, parentName),
+            text: node.characters,
+            x: absoluteX,
+            y: absoluteY,
+            fontSize,
+            isBold,
+            width: node.width,
+            height: node.height,
+            parentName,
+            depth,
+            isInDiagram: depth >= 3 || parentName.toLowerCase().includes('diagram'),
+        };
+    });
+}
 function analyzeSlideContent(textNodes) {
     var _a, _b, _c;
     // Extract text info with reference to original node for tracking
@@ -678,6 +763,44 @@ function analyzeSlideContent(textNodes) {
         extras: extras.length > 0 ? extras : undefined,
     };
 }
+async function applyPatches(patches) {
+    let updated = 0;
+    const failed = [];
+    // Load font upfront (we might need it)
+    await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+    await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+    for (const patch of patches.changes) {
+        try {
+            const node = await figma.getNodeByIdAsync(patch.target);
+            if (!node) {
+                console.warn(`Node not found: ${patch.target}`);
+                failed.push(patch.target);
+                continue;
+            }
+            if (node.type !== 'TEXT') {
+                console.warn(`Node ${patch.target} is not a text node (type: ${node.type})`);
+                failed.push(patch.target);
+                continue;
+            }
+            const textNode = node;
+            // Load the existing font to preserve styling
+            const fontName = textNode.fontName;
+            if (fontName !== figma.mixed) {
+                await figma.loadFontAsync(fontName);
+            }
+            // Update text content only (preserves position, size, color, font)
+            textNode.characters = patch.text;
+            updated++;
+            console.log(`Patched ${patch.target}: "${patch.text.substring(0, 30)}..."`);
+        }
+        catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            console.error(`Failed to patch ${patch.target}:`, errorMsg);
+            failed.push(patch.target);
+        }
+    }
+    return { updated, failed };
+}
 // Main message handler
 figma.ui.onmessage = async (msg) => {
     try {
@@ -815,24 +938,43 @@ figma.ui.onmessage = async (msg) => {
             }
             for (const node of slideNodes) {
                 try {
-                    const children = node.children || [];
-                    const textNodes = children.filter((n) => n.type === 'TEXT');
-                    // Sort text nodes by position (top to bottom, left to right)
-                    textNodes.sort((a, b) => {
+                    // =====================================================
+                    // RICH READ: Get ALL text nodes recursively
+                    // =====================================================
+                    const allTextInfos = getAllTextNodes(node);
+                    const elements = buildElementInfos(allTextInfos);
+                    // Check if this slide has diagram-like complexity
+                    const hasDiagram = elements.some(e => e.isInDiagram) ||
+                        elements.filter(e => e.depth >= 2).length > 5;
+                    // Sort elements by position (top to bottom, left to right)
+                    elements.sort((a, b) => {
                         if (Math.abs(a.y - b.y) > 50)
                             return a.y - b.y;
                         return a.x - b.x;
                     });
-                    // Analyze text nodes to detect archetype
-                    const analysis = analyzeSlideContent(textNodes);
+                    // =====================================================
+                    // LEGACY: Also do pattern-matching for backward compat
+                    // =====================================================
+                    const children = node.children || [];
+                    const directTextNodes = children.filter((n) => n.type === 'TEXT');
+                    directTextNodes.sort((a, b) => {
+                        if (Math.abs(a.y - b.y) > 50)
+                            return a.y - b.y;
+                        return a.x - b.x;
+                    });
+                    const analysis = analyzeSlideContent(directTextNodes);
                     // Get or generate slide ID
                     const slideId = reverseMapping[node.id] || `slide-${slides.length + 1}`;
                     slides.push({
                         id: slideId,
+                        figma_id: node.id,
                         archetype: analysis.archetype,
                         status: 'draft',
                         content: analysis.content,
-                        extras: analysis.extras, // Human-added text not in archetype
+                        extras: analysis.extras,
+                        // Rich read fields
+                        elements,
+                        has_diagram: hasDiagram,
                     });
                 }
                 catch (err) {
@@ -843,8 +985,26 @@ figma.ui.onmessage = async (msg) => {
                 deck: { title: 'Exported Deck' },
                 slides
             };
+            // Count slides with rich content
+            const richSlides = slides.filter(s => { var _a; return (((_a = s.elements) === null || _a === void 0 ? void 0 : _a.length) || 0) > 0; }).length;
+            const diagramSlides = slides.filter(s => s.has_diagram).length;
             figma.ui.postMessage({ type: 'exported', ir: JSON.stringify(ir, null, 2) });
-            figma.notify(`Exported ${slides.length} slides`);
+            figma.notify(`Exported ${slides.length} slides (${richSlides} with elements, ${diagramSlides} with diagrams)`);
+        }
+        if (msg.type === 'patch-elements') {
+            if (!msg.patches || !msg.patches.changes || msg.patches.changes.length === 0) {
+                figma.notify('No patches provided', { error: true });
+                figma.ui.postMessage({ type: 'patched', updated: 0, failed: [] });
+                return;
+            }
+            const result = await applyPatches(msg.patches);
+            if (result.failed.length > 0) {
+                figma.notify(`Patched ${result.updated} elements (${result.failed.length} failed)`, { error: true });
+            }
+            else {
+                figma.notify(`✓ Patched ${result.updated} elements`);
+            }
+            figma.ui.postMessage(Object.assign({ type: 'patched' }, result));
         }
         if (msg.type === 'close') {
             figma.closePlugin();

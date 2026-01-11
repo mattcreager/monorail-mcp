@@ -1024,6 +1024,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
+      {
+        name: "monorail_patch_elements",
+        description:
+          "Patch specific text elements by their Figma node ID. Use this to modify individual elements without re-rendering the entire slide. Get element IDs from monorail_pull_ir (the 'elements' array). Preserves all styling and positioning.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            patches: {
+              type: "object",
+              description: "The patch request with changes array",
+              properties: {
+                slide_id: {
+                  type: "string",
+                  description: "Optional slide ID for logging context",
+                },
+                changes: {
+                  type: "array",
+                  description: "Array of element patches",
+                  items: {
+                    type: "object",
+                    properties: {
+                      target: {
+                        type: "string",
+                        description: "Figma node ID (from elements array)",
+                      },
+                      text: {
+                        type: "string",
+                        description: "New text content for this element",
+                      },
+                    },
+                    required: ["target", "text"],
+                  },
+                },
+              },
+              required: ["changes"],
+            },
+          },
+          required: ["patches"],
+        },
+      },
     ],
   };
 });
@@ -1409,6 +1449,88 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    case "monorail_patch_elements": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const patches = args?.patches as { slide_id?: string; changes: { target: string; text: string }[] };
+      if (!patches || !patches.changes || patches.changes.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No patches provided" }],
+          isError: true,
+        };
+      }
+
+      // Check if there's already a pending patch request
+      if (pendingPatchResolve) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another patch request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Create a promise to wait for the patch response
+      const patchPromise = new Promise<PatchResult>((resolve, reject) => {
+        pendingPatchResolve = resolve;
+        pendingPatchReject = reject;
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (pendingPatchResolve) {
+            pendingPatchResolve = null;
+            pendingPatchReject = null;
+            reject(new Error("Timeout waiting for patch result"));
+          }
+        }, 30000);
+      });
+
+      // Send patch request to plugin
+      connectedPlugin!.send(JSON.stringify({ type: "patch-elements", patches }));
+
+      try {
+        const result = await patchPromise;
+        
+        const failedText = result.failed.length > 0 
+          ? `\n\nFailed to patch: ${result.failed.join(", ")}`
+          : "";
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ Patched ${result.updated} elements${failedText}`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error patching elements: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -1614,6 +1736,14 @@ let pluginInfo: { name?: string; version?: string; connectedAt?: string } = {};
 let pendingPullResolve: ((ir: DeckIR) => void) | null = null;
 let pendingPullReject: ((error: Error) => void) | null = null;
 
+// Pending patch request (for monorail_patch_elements)
+interface PatchResult {
+  updated: number;
+  failed: string[];
+}
+let pendingPatchResolve: ((result: PatchResult) => void) | null = null;
+let pendingPatchReject: ((error: Error) => void) | null = null;
+
 function startWebSocketServer() {
   wsServer = new WebSocketServer({ port: WS_PORT });
 
@@ -1665,6 +1795,18 @@ function startWebSocketServer() {
         } else if (parsed.type === "applied") {
           // Plugin confirmed it applied IR
           console.error(`[WebSocket] Plugin applied ${parsed.count} slides`);
+        } else if (parsed.type === "patched") {
+          // Plugin sent patch result
+          console.error(`[WebSocket] Patched ${parsed.updated} elements, ${parsed.failed?.length || 0} failed`);
+          
+          if (pendingPatchResolve) {
+            pendingPatchResolve({
+              updated: parsed.updated || 0,
+              failed: parsed.failed || [],
+            });
+            pendingPatchResolve = null;
+            pendingPatchReject = null;
+          }
         } else {
           // Echo unknown messages for now (debugging)
           console.error(`[WebSocket] Unknown message type: ${parsed.type}`);

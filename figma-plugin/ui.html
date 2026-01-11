@@ -455,6 +455,10 @@
             } else if (msg.type === 'request-export') {
               addActivity('↑', 'Claude requested deck export');
               parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
+            } else if (msg.type === 'patch-elements') {
+              const count = msg.patches?.changes?.length || 0;
+              addActivity('✎', `Claude patching ${count} elements`);
+              parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches } }, '*');
             }
           } catch (e) {
             console.error('[WS] Failed to parse message:', e);
@@ -539,6 +543,22 @@
         
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'exported', ir: parsed }));
+        }
+      }
+      
+      if (msg.type === 'patched') {
+        const success = msg.updated || 0;
+        const failed = msg.failed?.length || 0;
+        if (failed > 0) {
+          addActivity('⚠', `Patched ${success} elements (${failed} failed)`);
+          showToast(`Patched ${success}, failed ${failed}`, true);
+        } else {
+          addActivity('✓', `Patched ${success} elements`);
+          showToast(`Patched ${success} elements!`);
+        }
+        
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'patched', updated: msg.updated, failed: msg.failed }));
         }
       }
     };

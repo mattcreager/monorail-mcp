@@ -333,6 +333,164 @@ Claude WRITES (new slide):
 
 ---
 
+## Evolution 3: Scoped Context (Context Efficiency)
+
+**The insight:** Context is expensive. Don't exchange what you don't need.
+
+When Claude is just tuning copy, it doesn't need all the structural/style metadata. When Claude needs to modify layout, it needs more. Let Claude specify what it needs and what it will write.
+
+### Read Scopes
+
+```typescript
+monorail_pull({ detail: 'copy' })      // Just iterating on text
+monorail_pull({ detail: 'structure' }) // Need to understand layout
+monorail_pull({ detail: 'full' })      // Need everything
+```
+
+**`copy` scope (lightweight):**
+```json
+{
+  "slides": [{
+    "id": "slide-10",
+    "figma_id": "123:456",
+    "elements": [
+      { "id": "789:1", "type": "headline", "text": "Traditional access..." },
+      { "id": "789:2", "type": "accent_text", "text": "Give agents broad access..." },
+      { "id": "789:3", "type": "accent_text", "text": "Limit agent capabilities..." }
+    ]
+  }]
+}
+```
+- Just element IDs, types, and text
+- Enough to identify and update text content
+- Minimal context overhead
+
+**`structure` scope (medium):**
+```json
+{
+  "slides": [{
+    "id": "slide-10",
+    "figma_id": "123:456",
+    "has_diagram": true,
+    "elements": [
+      { "id": "789:1", "type": "headline", "text": "...", "x": 60, "y": 200, "width": 600 },
+      { "id": "789:2", "type": "accent_text", "text": "...", "x": 60, "y": 450, "depth": 2 },
+      { "id": "diagram-group", "type": "diagram", "element_count": 15, "bounds": {...} }
+    ]
+  }]
+}
+```
+- Includes position, hierarchy, groupings
+- Flags complex elements (diagrams) without full detail
+- Good for understanding layout without style details
+
+**`full` scope (heavyweight):**
+```json
+{
+  "slides": [{
+    "id": "slide-10",
+    "figma_id": "123:456",
+    "has_diagram": true,
+    "elements": [
+      { 
+        "id": "789:1", 
+        "type": "headline", 
+        "text": "...", 
+        "x": 60, "y": 200, 
+        "fontSize": 56, 
+        "fontFamily": "Inter",
+        "fontWeight": "Bold",
+        "color": "#FFFFFF",
+        "letterSpacing": -2
+      }
+      // ... all elements with full style info
+    ],
+    "design_context": {
+      "background": "#0a0a0a",
+      "accent_color": "#c4ff00",
+      "text_styles_used": ["headline", "body", "caption"]
+    }
+  }]
+}
+```
+- Full style information per element
+- Design system context
+- Everything needed for style modifications
+
+### Write Scopes
+
+**Targeted patches (copy-level changes):**
+```typescript
+monorail_patch({
+  changes: [
+    { target: "789:1", text: "New headline text" },
+    { target: "789:2", text: "Updated point" }
+  ]
+})
+```
+- Updates specific text nodes by ID
+- Preserves all styling, position, structure
+- Already implemented in plugin!
+
+**Intent-based create (new content):**
+```typescript
+monorail_create({
+  intent: "challenge_solution",
+  content: {
+    headline: "...",
+    pain_points: ["...", "...", "..."]
+  }
+})
+```
+- Claude expresses what, system handles how
+- Design system determines rendering
+
+**Full re-render (rare, destructive):**
+```typescript
+monorail_push_ir({
+  slides: [{ full slide spec }]
+})
+```
+- Complete replacement
+- Use sparingly — destroys human work
+- Maybe require explicit confirmation
+
+### Usage Patterns
+
+**"I'm wordsmithing the copy"**
+```
+Claude: monorail_pull({ detail: 'copy' })
+Claude: monorail_patch({ changes: [...text updates...] })
+```
+
+**"I need to understand the structure before suggesting changes"**
+```
+Claude: monorail_pull({ detail: 'structure' })
+Claude: [analyzes layout, identifies what to change]
+Claude: monorail_patch({ changes: [...] })
+```
+
+**"I need to help with visual consistency"**
+```
+Claude: monorail_pull({ detail: 'full' })
+Claude: [analyzes styles, suggests design changes]
+Claude: [may need different tool for style changes]
+```
+
+### Implementation Notes
+
+This is reasonably simple because:
+1. **Rich read exists** — Just filter what's returned based on `detail` param
+2. **Targeted write exists** — `patch-elements` handler in plugin
+3. **It's filtering/scoping** — Not new architecture, just parameter handling
+
+The MCP tools would be:
+- `monorail_pull_ir` — Add `detail` parameter: `'copy' | 'structure' | 'full'`
+- `monorail_patch` — New tool for targeted text updates (uses existing plugin handler)
+- `monorail_push_ir` — Existing tool for full creates/re-renders
+
+---
+
 ## Decision
 
 **Proceed with Monorail Design System as proof of concept.**
