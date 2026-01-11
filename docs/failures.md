@@ -140,3 +140,53 @@ kill <PID>
 - Don't manually start the server when testing MCP tools (Cursor manages it)
 - If issues occur, check for multiple processes
 - Consider adding port conflict detection/logging to server startup
+
+---
+
+### 2026-01-11 - IR schema mismatch: flat vs nested content
+
+**What we found:** During dog-fooding, Claude generated IR with content fields directly on the slide object:
+```json
+{"id":"slide-1","archetype":"title","headline":"Monorail"}  // WRONG
+```
+Instead of nested inside `content`:
+```json
+{"id":"slide-1","archetype":"title","content":{"headline":"Monorail"}}  // RIGHT
+```
+
+The plugin crashed with `cannot read property 'headline' of undefined` because `slide.content` was undefined.
+
+**Impact:** Malformed IR creates orphan/blank slides that require manual cleanup. Claude doesn't get useful error feedback.
+
+**Path forward:**
+- Add JSON schema validation in `monorail_push_ir` before sending to plugin
+- Add `monorail://ir-schema` resource so Claude can reference the spec
+- Consider having plugin validate and return clear errors instead of crashing
+
+---
+
+### 2026-01-11 - Plugin uses raw absolute positioning, not Figma Slides best practices
+
+**What we found:** Our plugin creates text nodes with hardcoded x/y coordinates:
+```typescript
+await addText(parent, c.headline, 200, 380, 72, true, COLORS.white, 1520, 'headline');
+```
+
+Figma Slides actually supports more sophisticated layout:
+- **Auto Layout** — text reflows when content changes, maintains spacing
+- **Grid systems** — rows/columns for structured layouts
+- **Components** — reusable slide templates, update once → everywhere
+- **Templates** — built-in branding consistency
+
+Our approach is the simplest thing that works, but it means:
+1. Text can overflow if content is too long (no auto-reflow)
+2. Changing archetypes destroys human positioning (full re-render)
+3. No connection to user's existing design system
+
+**Impact:** Formatting is functional but not polished. Production decks require manual cleanup.
+
+**Path forward:**
+- v0/v1: Accept limitation, absolute positioning is fine for iteration
+- Future: Research Plugin API support for Auto Layout frames
+- Future: Consider generating slides as Component instances
+- Added `preserveLayout` feature to plan — update content without re-rendering

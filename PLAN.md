@@ -115,6 +115,19 @@ See `docs/failures.md` for details.
   - Add JSON schema validation in `monorail_push_ir` before sending
   - Add `monorail://ir-schema` resource so Claude can reference the spec
   - Prevents bugs like flat vs nested content structure
+- [ ] **Preserve Layout mode** — protect human formatting during iteration
+  - Problem: Changing archetype triggers full re-render, destroying human polish
+  - Solution: Add `preserveLayout: true` flag that ONLY updates text content
+  - If archetype changed + preserveLayout: warn/fail instead of re-rendering
+  - Use case: Human has perfected positioning, Claude just needs to tighten copy
+  - Related: Consider separate "content-only" update vs "full re-render" tools
+- [ ] **Figma Slides best practices** — current plugin uses raw absolute positioning
+  - Current approach: `addText(parent, text, x, y, fontSize)` — simple but rigid
+  - Figma Slides supports: Auto Layout, Grid systems, Components, Templates
+  - Auto Layout: Text reflows when content length changes (avoids overflow)
+  - Components: Reusable slide templates, update once → updates everywhere
+  - Future: Could generate slides as component instances, not raw nodes
+  - Research: What's possible via Plugin API? Can we create Auto Layout frames?
 - [ ] Improve archetype detection heuristics (edge cases)
 - [ ] Handle mixed fonts / complex layouts gracefully
 - [ ] Add deck title extraction from first slide
