@@ -157,14 +157,16 @@ See `docs/failures.md` for details.
 - [x] **Targeted Write** — DONE ✅ (`monorail_patch_elements`)
 - [ ] **Dynamic Templates** — HIGH PRIORITY (NEXT)
   - Current archetypes are hardcoded — need templates that live in Figma
+  - **Design doc:** `docs/decisions/dynamic-templates.md`
   - Two use cases:
     1. **Extract template from existing slide** — "Learn slide-10's style"
     2. **Create new slides using template** — "Make SOLUTION slide like slide-10"
-  - Implementation approach:
-    - [ ] Read slide structure (frames, colors, spacing, hierarchy)
-    - [ ] Identify template "slots" (section_label, headline, accent_block, etc.)
-    - [ ] Store as reusable template spec
-    - [ ] Instantiate template with new content
+  - **Next session is DESIGN, not coding:**
+    - [ ] Walk through Use Case 1 end-to-end
+    - [ ] Decide: How do we identify "slots" vs decoration?
+    - [ ] Decide: Template storage (Figma components? JSON? Hybrid?)
+    - [ ] Decide: How to handle variable-count elements?
+    - [ ] Spike: Can we read full frame structure from plugin?
   - This unlocks: "Expand existing theme" workflow
 - [ ] **Theme Generation** — AFTER TEMPLATES
   - Claude generates complete design system from scratch
@@ -749,48 +751,46 @@ Test: Created "SOLUTION" slide to follow "CHALLENGE" slide (slide-10)
 
 ---
 
-## Next Session Task: Dynamic Templates
+## Next Session Task: Dynamic Templates DESIGN SESSION
 
-**Goal:** Enable "make a slide that matches this existing style"
+**This is a DESIGN session, not a coding session.**
 
-**The problem:**
-Current archetypes (title, bullets, etc.) are hardcoded in plugin code.
-Can't create new slides that match custom styles (like slide-10's accent blocks).
+**Goal:** Figure out HOW templates should work before building.
 
-**Two use cases to enable:**
+**Read first:** `docs/decisions/dynamic-templates.md`
 
-1. **Expand existing theme** — "Add SOLUTION slide matching slide-10"
-   - Read slide-10's structure (frames, colors, positions)
-   - Extract as reusable template
-   - Instantiate with new content
+**The core insight:**
+- Templates should live in Figma (not hardcoded in plugin)
+- Claude reads them (extracts structure, colors, spacing)
+- Claude instantiates them (creates new slides using template)
 
-2. **Create new theme** — "Build me a design system"
-   - Claude generates design spec
-   - Renders reference slides
-   - Human refines
-   - Extract as templates
+**Questions to answer:**
 
-**Proposed approach:**
+1. **Slot identification:** How do we know which frames are "content slots" vs decoration?
+   - Naming convention? (`slot:headline`)
+   - Position heuristics?
+   - User annotation?
 
-Step 1: Template Extraction
-- Read slide structure (not just text — frames, colors, fills, strokes)
-- Identify "slots" (section_label, headline, accent_block, etc.)
-- Store as template spec
+2. **Template storage:** Where do templates live?
+   - Figma Components? (native, designers understand)
+   - JSON specs? (versionable, portable)
+   - Hybrid?
 
-Step 2: Template Instantiation  
-- Take template + content
-- Create new slide with matching structure
-- Fill slots with new content
+3. **Variable content:** Template has 3 accent blocks, content has 5 points. What happens?
 
-**Key questions to answer:**
-- How do we identify which frames are "slots" vs decoration?
-- How do we handle variable-count elements (3 accent blocks vs 5)?
-- Where do templates live? (Figma components? JSON specs? Both?)
+4. **Style fidelity:** How much styling do we capture?
+   - Just text → colors → full effects?
 
-**Test case:** 
-- Extract template from slide-10 (CHALLENGE+SOLUTION style)
-- Create slide-11 using that template with SOLUTION content
-- Result should visually match slide-10's style
+**Deliverable:**
+- Updated `docs/decisions/dynamic-templates.md` with decisions
+- Clear implementation plan for next coding session
+
+**Test case to think through:**
+User says: "Make a SOLUTION slide that matches slide-10"
+- What do we read from slide-10?
+- How do we store/represent the template?
+- How do we render slide-11?
+- What if content doesn't fit the template structure?
 
 ---
 
