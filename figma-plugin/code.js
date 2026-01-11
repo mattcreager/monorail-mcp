@@ -127,8 +127,6 @@ function addRect(parent, x, y, w, h, fill, stroke, dashed) {
 function createAutoLayoutFrame(parent, name, x, y, direction = 'VERTICAL', spacing = 24, padding = 0) {
     const frame = figma.createFrame();
     frame.name = name;
-    frame.x = x;
-    frame.y = y;
     // Enable Auto Layout
     frame.layoutMode = direction;
     frame.primaryAxisSizingMode = 'AUTO'; // Height adjusts to content
@@ -143,7 +141,10 @@ function createAutoLayoutFrame(parent, name, x, y, direction = 'VERTICAL', spaci
     frame.fills = [];
     // Clip content that overflows
     frame.clipsContent = false;
+    // Append first, THEN set position (fixes Figma Slides coordinate issue after deletes)
     parent.appendChild(frame);
+    frame.x = x;
+    frame.y = y;
     return frame;
 }
 // Helper to add text inside Auto Layout (no x/y - layout handles position)

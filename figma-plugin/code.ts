@@ -218,28 +218,30 @@ function createAutoLayoutFrame(
 ): FrameNode {
   const frame = figma.createFrame();
   frame.name = name;
-  frame.x = x;
-  frame.y = y;
-  
+
   // Enable Auto Layout
   frame.layoutMode = direction;
   frame.primaryAxisSizingMode = 'AUTO';  // Height adjusts to content
   frame.counterAxisSizingMode = 'AUTO';  // Width adjusts to content
   frame.itemSpacing = spacing;
-  
+
   // Padding (uniform for simplicity)
   frame.paddingTop = padding;
   frame.paddingBottom = padding;
   frame.paddingLeft = padding;
   frame.paddingRight = padding;
-  
+
   // Transparent background (inherits slide bg)
   frame.fills = [];
   
   // Clip content that overflows
   frame.clipsContent = false;
   
+  // Append first, THEN set position (fixes Figma Slides coordinate issue after deletes)
   parent.appendChild(frame);
+  frame.x = x;
+  frame.y = y;
+  
   return frame;
 }
 

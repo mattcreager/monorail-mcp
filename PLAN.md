@@ -52,6 +52,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### The Gap 🔨
 - **Limited archetypes** — no three-column, no video/embed — hit during dogfood
+- **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
 - **Auto Layout consistency** — title/quote/summary/section use fixed Y positions (see `docs/decisions/auto-layout-consistency.md`)
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
 - **No inline styling** — can't do mixed colors in text (e.g., "ACP is north." in cyan) — use capture/clone instead
@@ -59,6 +60,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### Recently Fixed ✅
 - ~~Push always appends~~ — Now has `mode: "replace"` option (Session 17)
+- ~~Replace mode positioning~~ — Auto Layout frames now position correctly after delete (Session 17)
 - ~~Font handling~~ — Now has fallback chain (Session 17)
 - ~~Archetype detection~~ — Frame-based detection, bullets now work (Session 17)
 - ~~Pending request state~~ — Consolidated into generic manager (Session 17)
