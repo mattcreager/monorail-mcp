@@ -97,6 +97,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ### Priority 1: Dogfood Fixes (HIGH)
 - [x] **Push modes** — Add `mode: "replace" | "append"` parameter (Session 17)
 - [x] **Three-column archetype** — `position-cards` archetype handles this (Session 18)
+- [ ] **Capture → Clone workflow** — Design slide in Figma → capture → clone with new content (validates alternative to archetypes)
 - [ ] **Video/embed archetype** — Even if just a URL field
 - [ ] **Simpler three-column** — Basic 3-col without badges (lower complexity than position-cards)
 
@@ -439,10 +440,11 @@ title, section, big-idea, bullets, two-column, quote, chart, timeline, compariso
 **This session:** [describe focus]
 
 Current priorities:
-1. Video/embed archetype — even if just a URL field
-2. Simpler three-column — basic 3-col without badges
-3. Auto Layout consistency — title/quote/summary use fixed Y positions
-4. Developer experience — shared types, auto-generated MCP resources
+1. **Capture → Clone workflow** — design slide in Figma, capture it, clone with new content
+2. Video/embed archetype — even if just a URL field
+3. Simpler three-column — basic 3-col without badges
+4. Auto Layout consistency — title/quote/summary use fixed Y positions
+5. Developer experience — shared types, auto-generated MCP resources
 
 **Key insight:** The pull → patch loop IS the product. Push is just bootstrapping.
 Complex layouts → new archetype OR capture/clone. Collab works regardless of complexity.
