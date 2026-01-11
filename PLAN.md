@@ -524,6 +524,26 @@ Like Git commits vs full snapshots. Claude sends changes, not complete states. H
 
 This might be the key to making Claude and human truly collaborate instead of conflict.
 
+**Breakthrough: Intent-Based Collaboration**
+
+Tested with a real complex slide (company deck). Screenshot showed: section label, headline, 3 accent blocks, complex diagram. IR captured: just headline, `archetype: unknown`. Massive fidelity loss.
+
+**The reframe:** It's not "export/import" — it's Claude READING and WRITING.
+
+**Core principle:** Claude works in INTENT/CONTENT, system handles RENDERING.
+
+| Mode | Claude provides | System does |
+|------|-----------------|-------------|
+| Modify | "Change headline to X" | Patch in place |
+| Create | "Slide about X with 3 points" | Use design system to render |
+
+**Design system = the "how" layer.** Claude says WHAT, system determines HOW.
+
+This unifies:
+- Existing slide modification (Claude reads, suggests changes, system patches)
+- New slide creation (Claude expresses intent, system renders with templates)
+- Human work preservation (deltas don't destroy what Claude can't capture)
+
 ---
 
 ## Completion Criteria (v0)
@@ -634,48 +654,77 @@ The full collaboration loop works — **no copy/paste required:**
 
 ---
 
-## Next Session Task: Build Monorail Design System (Proof of Concept)
+## Next Session Task: Intent-Based Read/Write System
 
-**Goal:** Create a Figma design system that Claude can read and apply. This validates the entire "Production Phase" vision.
+**Goal:** Build the "Claude reads, Claude writes" system that enables true collaboration.
 
 **Context from Session 10:**
 - Auto Layout + gradients working ✅
-- Design system strategy documented
-- Need to prove: Claude can read a system → apply it intelligently
+- Tested with complex real-world slide — current IR is massively lossy
+- Breakthrough: Intent-based collaboration (Claude = WHAT, System = HOW)
 
-**Step 1: Create Monorail Design System in Figma**
-Create a new Figma file with:
-- **Color styles** (named semantically):
-  - `monorail/background` → #0f0f1a
-  - `monorail/headline` → #fef3c7
-  - `monorail/body` → #d4d4d8
-  - `monorail/accent` → #dc2626
-  - `monorail/muted` → #9ca3af
-- **Text styles**:
-  - `monorail/headline` → Inter Bold 56px
-  - `monorail/subline` → Inter Regular 32px
-  - `monorail/body` → Inter Regular 28px
-- **Slide components** (one per archetype):
-  - Title Slide, Bullets Slide, Quote Slide, etc.
-  - Using the color/text styles above
+**The problem we're solving:**
+Screenshot of complex slide shows: section label, headline, 3 accent blocks, diagram
+Current IR captures: just headline, `archetype: unknown`
+Result: Claude is blind, modifications destroy human work
 
-**Step 2: Export Design System**
-- Add `monorail_pull_design_system` tool (or extend pull_ir)
-- Use `getLocalPaintStylesAsync()`, `getLocalTextStylesAsync()`
-- Return structured data Claude can understand
-- Test: Can Claude describe what it sees?
+**Step 1: Rich Read (Claude reviews the slide)**
+Enhance export to capture full structure:
+```json
+{
+  "slide_id": "slide-10",
+  "elements": [
+    { "id": "el-1", "type": "section_label", "text": "CHALLENGE+SOLUTION" },
+    { "id": "el-2", "type": "headline", "text": "Traditional access..." },
+    { "id": "el-3", "type": "accent_block", "text": "Give agents broad access..." },
+    { "id": "el-4", "type": "diagram", "description": "complex, ~15 elements" }
+  ]
+}
+```
+- Capture ALL text elements with IDs
+- Identify element types/roles
+- Flag complex elements (diagrams) as "preserve"
 
-**Step 3: Apply Using Design System**
-- Modify Apply to use component instances or style references
-- Instead of `fills = [{ color: COLORS.headline }]`
-- Use `fillStyleId = headlineStyleId`
-- Test: Does output match the design system?
+**Step 2: Targeted Write (Claude modifies)**
+New update format:
+```json
+{
+  "slide_id": "slide-10",
+  "changes": [
+    { "target": "el-2", "text": "New headline text" },
+    { "target": "el-3", "text": "Updated point" }
+  ]
+}
+```
+- Target specific elements by ID
+- Only modify what Claude specifies
+- Everything else preserved
+
+**Step 3: Intent-Based Create (new slides)**
+For new slides, Claude expresses intent:
+```json
+{
+  "intent": "challenge_solution",
+  "content": {
+    "section_label": "...",
+    "headline": "...",
+    "pain_points": ["...", "...", "..."]
+  }
+}
+```
+- System uses design system to render
+- Claude doesn't specify pixels, just content + intent
+
+**Visual feedback (parallel track):**
+- Screenshot or rich description so Claude can SEE
+- Enables Claude to make informed suggestions
+- Critical for the "review" part of review+modify
 
 **Success criteria:**
-- Figma file with Monorail design system exists
-- Export tool returns system info Claude can read
-- Apply uses the system (not hardcoded colors)
-- Claude can describe the system and apply it to new content
+- Export captures all text elements from complex slide
+- Claude can describe what it sees
+- Targeted update modifies only specified elements
+- Human's diagram/layout preserved after update
 
 ---
 

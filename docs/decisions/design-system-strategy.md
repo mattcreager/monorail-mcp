@@ -241,6 +241,98 @@ Human edits persist
 
 ---
 
+## Evolution 2: Intent-Based Collaboration (Session 10 breakthrough)
+
+**The framing shift:** It's not "export/import" — it's Claude READING and WRITING.
+
+### The Core Principle
+
+**Claude works in INTENT/CONTENT. System handles RENDERING.**
+
+| | What Claude provides | What system does |
+|---|---|---|
+| **Modify** | "Change headline to X, update point 2 to Y" | Patch in place |
+| **Create** | "Slide about X with 3 points and a diagram" | Pick template, layout, render |
+
+**The design system is the "how" layer.** Claude says WHAT, design system determines HOW it looks.
+
+### Two Modes
+
+**MODE 1: Review + Modify (existing slide)**
+```
+Claude READS structure → understands what's there → sends CHANGES → System patches
+```
+- Read format tells Claude what exists
+- Write format is targeted modifications
+- Existing structure (especially human work) preserved
+
+**MODE 2: Create (new slide from prompt)**
+```
+Human: "I need a slide about X" → Claude expresses INTENT → System renders
+```
+- No existing structure to preserve
+- Claude expresses content + intent, not pixels
+- System uses design system to render
+
+### Real Example: Complex Slide
+
+Screenshot showed: section label, headline, 3 accent text blocks, complex diagram
+IR captured: just the headline, `archetype: unknown`
+
+**With intent-based model:**
+
+Claude READS:
+```json
+{
+  "slide_id": "slide-10",
+  "structure": {
+    "section_label": "CHALLENGE+SOLUTION",
+    "headline": "Traditional access is static...",
+    "accent_blocks": [
+      { "id": "block-1", "text": "Give agents broad access..." },
+      { "id": "block-2", "text": "Limit agent capabilities..." },
+      { "id": "block-3", "text": "Build custom access controls..." }
+    ],
+    "diagram": { "type": "complex", "description": "Agent architecture flow" }
+  }
+}
+```
+
+Claude WRITES (modifications):
+```json
+{
+  "slide_id": "slide-10",
+  "changes": [
+    { "target": "headline", "value": "Traditional access creates an impossible choice" },
+    { "target": "block-2.text", "value": "Restrict agent capabilities and lose business value." }
+  ],
+  "preserve": ["diagram"]  // Don't touch this
+}
+```
+
+Claude WRITES (new slide):
+```json
+{
+  "intent": "challenge_solution",
+  "content": {
+    "section_label": "CHALLENGE+SOLUTION",
+    "headline": "...",
+    "pain_points": ["...", "...", "..."],
+    "diagram_description": "Show agent accessing services through MCP"
+  }
+}
+```
+
+### Why This Works
+
+1. **Claude stays in its strength** — Language, structure, argument
+2. **System handles rendering** — Design system, templates, Figma specifics
+3. **Human work is preserved** — Deltas don't destroy what Claude can't see
+4. **Same mental model for read and write** — What you read is what you can modify
+5. **Visual feedback enables understanding** — Screenshot + rich read = Claude knows what's there
+
+---
+
 ## Decision
 
 **Proceed with Monorail Design System as proof of concept.**
