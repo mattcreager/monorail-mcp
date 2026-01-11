@@ -198,6 +198,28 @@ Lean toward simple JSON messages.
 
 ---
 
+## Sync Model: Explicit, Not Automatic
+
+**Decision:** Hybrid model with explicit triggers (Option D)
+
+| Actor | Action | Mechanism |
+|-------|--------|-----------|
+| Claude | Push IR to plugin | `monorail_push_ir` MCP tool |
+| Claude | Pull IR from plugin | `monorail_pull_ir` MCP tool |
+| Human | Push to Claude | Plugin button (via WebSocket) |
+| Human | Pull from Claude | Plugin button (via WebSocket) |
+
+**Why not automatic/streaming?**
+- Adds complexity (debouncing, race conditions)
+- "Which version is canonical?" becomes ambiguous
+- Explicit sync keeps human and Claude in control of their own timing
+
+**The win:** One-click replaces copy/paste. That's enough friction reduction for v1.
+
+**Future possibility:** Could add opt-in auto-sync later if the explicit model feels clunky in practice.
+
+---
+
 ## Relationship to Other Work
 
 - **Freeform handling**: Done, WebSocket will use the same IR format with `extras`
@@ -206,9 +228,9 @@ Lean toward simple JSON messages.
 
 ---
 
-## Open Questions
+## Open Questions (Updated)
 
-1. Should WebSocket server start automatically with MCP, or be opt-in?
-2. What port? Fixed (9876) or configurable?
+1. ~~Should WebSocket server start automatically with MCP, or be opt-in?~~ **Decided: Auto-start**
+2. ~~What port? Fixed (9876) or configurable?~~ **Decided: Fixed 9876 for now**
 3. How to handle multiple Figma documents open at once?
 4. Should we support multiple plugins connected (e.g., different Figma windows)?
