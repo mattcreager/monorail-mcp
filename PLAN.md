@@ -107,6 +107,14 @@ See `docs/failures.md` for details.
   - [x] Update Apply to modify text in-place instead of re-rendering
   - [x] Update Export to capture `extras` (unrecognized text)
   - [x] Add `extras` field to IR schema
+- [ ] **Delete slide capability** — plugin can only create/update, not delete
+  - Add `monorail_delete_slides` MCP tool (takes array of slide IDs)
+  - Plugin needs `delete-slides` message handler
+  - Critical for cleaning up orphan slides after failed pushes
+- [ ] **IR validation** — malformed IR crashes the plugin silently
+  - Add JSON schema validation in `monorail_push_ir` before sending
+  - Add `monorail://ir-schema` resource so Claude can reference the spec
+  - Prevents bugs like flat vs nested content structure
 - [ ] Improve archetype detection heuristics (edge cases)
 - [ ] Handle mixed fonts / complex layouts gracefully
 - [ ] Add deck title extraction from first slide
@@ -117,6 +125,17 @@ See `docs/failures.md` for details.
   - ✅ `monorail_push_ir` and `monorail_pull_ir` tools working
   - ✅ Copy/paste-free workflow achieved
   - ✅ Documented local MCP decision (`docs/decisions/local-mcp.md`)
+
+**Documentation refresh:**
+- [ ] **Update README.md** — currently stale, says "v0 under construction"
+  - Update status to reflect v0 complete
+  - Add WebSocket bridge section
+  - Update project structure (no src/tools/)
+  - Add "Quick Start" with actual working commands
+- [ ] **Update landing page** — examples/index.html may need refreshing
+  - Verify install commands are correct
+  - Add any new features (WebSocket, etc.)
+  - Consider adding demo GIF or video
 
 **Discovery tasks:**
 - [ ] **Visual feedback loop** — Claude is currently blind to rendered output!
