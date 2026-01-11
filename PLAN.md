@@ -51,14 +51,17 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Consolidated tool surface** — 6 tools instead of 14
 
 ### The Gap 🔨
+- **Push always appends** — no replace mode; dogfood resulted in 19 slides (11 old + 8 new) — HIGH
+- **Limited archetypes** — no three-column, no video/embed — hit during dogfood
+- **Auto Layout consistency** — title/quote/summary/section use fixed Y positions (see `docs/decisions/auto-layout-consistency.md`)
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
-- **Role mapping** — content uses node IDs, should use roles (headline, etc.)
-- **Limited diagrams** — timeline is linear only, no loop arrows or callouts
-- **Diagrams** — text editable, but images/structure not yet (future work)
+- **No inline styling** — can't do mixed colors in text (e.g., "ACP is north." in cyan) — use capture/clone instead
+- **Limited diagrams** — timeline is linear only, no loop arrows or callouts (FUTURE)
 
 ### Recently Fixed ✅
 - ~~Font handling~~ — Now has fallback chain (Session 17)
 - ~~Archetype detection~~ — Frame-based detection, bullets now work (Session 17)
+- ~~Pending request state~~ — Consolidated into generic manager (Session 17)
 
 ### Key Files
 | File | Purpose |
@@ -84,21 +87,34 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ## What's Next
 
-**Slide operations complete.** 8 tools total, full deck manipulation.
+**Slide operations complete.** 8 tools total, full deck manipulation.  
+**Claude Desktop dogfood complete.** Core loop validated. See `docs/discovery/dogfood-claude-desktop.md`
 
-### Priority 1: Fix Core Loop Gaps
-- [ ] Auto Layout for remaining archetypes (title, quote, summary)
-- [x] ~~Dumber plugin~~ → Smarter detection: frame-based archetype detection (Session 17)
+### Priority 1: Dogfood Fixes (HIGH)
+- [ ] **Push modes** — Add `mode: "replace" | "append"` parameter (currently always appends)
+- [ ] **Three-column archetype** — Common layout, hit during dogfood
+- [ ] **Video/embed archetype** — Even if just a URL field
 
-### Priority 2: Reliability
-- [x] Font fallback chain (Inter → SF Pro → Helvetica → Arial) — Session 17
-- [ ] Better error messages when fonts unavailable
+### Priority 2: Figma Best Practices
+- [ ] Auto Layout for remaining archetypes (title, quote, summary, section) — see `docs/decisions/auto-layout-consistency.md`
+- [x] ~~Archetype detection~~ — Frame-based detection (Session 17)
+- [x] ~~Font fallback chain~~ — Inter → SF Pro → Helvetica → Arial (Session 17)
+
+### Priority 3: Trust & Transparency
+- [ ] Multi-deck awareness — show which file is active, or warn if ambiguous
+- [ ] Better push error messages — which slide, which field failed
+
+### Priority 4: Polish (LOW)
+- [ ] Eyebrow text — small "OUR POSITION" labels above headlines
+- [ ] Clone workflow docs — document "design once, clone many" pattern
+- [ ] Role mapping — use semantic roles instead of node IDs
 
 ### Future Work (defer)
+- Inline styling (mixed colors/weights in text) — use capture/clone instead
+- Nested components (cards with sub-elements) — use capture/clone instead
 - Diagram/visualization editing (arrows, connectors)
 - Full Figma visual language (effects, blending, masks)
 - Design system auto-application
-- Dynamic template learning
 
 ---
 
@@ -148,6 +164,22 @@ Comprehensive code review of the entire codebase, followed by implementation of 
 - `docs/ARCHITECTURE.md` — tool names, IR format, open questions
 
 **Technical debt reduced:** Cleaner async handling, better type safety, improved reliability.
+
+**Plan Review (later same session):**
+- Tested all MCP tools via Cursor — full round-trip working
+- Reviewed priorities, reorganized based on Figma best practices
+- Added `docs/decisions/auto-layout-consistency.md` — rationale for consistent Auto Layout
+- Updated Next Session Prompt to reflect current state
+
+**Claude Desktop Dogfood (later same session):**
+- Full 45-minute session: narrative analysis → IR generation → Figma rendering → human edits → AI adaptation
+- Transformed messy 11-slide deck into tight 8-beat structure
+- **Core loop validated** — pull/push/patch all work correctly
+- **Human spikes preserved** — custom slides detected as `archetype: "unknown"` (correct!)
+- **Key finding:** Push appends instead of replacing — needed manual delete of old slides
+- **Stress test:** Keycard slide revealed archetype ceiling (three-column, nested cards, inline styling)
+- **Recommendation:** Complex layouts → capture/clone pattern; simple layouts → IR archetypes
+- Full report: `docs/discovery/dogfood-claude-desktop.md`
 
 ### Session 16 (2026-01-11)
 **Slide Operations: delete, position, reorder + Rich Feedback**
@@ -361,16 +393,13 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 | monorail_delete | Delete slides by ID |
 | monorail_reorder | Reorder slides |
 
-**This session:** Core Loop Gaps
+**This session:** [describe focus]
 
-Current gaps:
-- Archetype detection (bullets → "unknown" on export)
-- Auto Layout for title/quote/summary
-- Font fallback chain
-
-Possible approaches:
-- Dumber plugin: just report elements, Claude interprets archetype
-- Font fallback: custom → similar → Inter
+Current priorities (from Claude Desktop dogfood):
+1. Push modes — add "replace" option (currently always appends)
+2. Three-column archetype — common layout, hit during dogfood
+3. Auto Layout consistency — title/quote/summary use fixed Y positions
 
 **Key insight:** The pull → patch loop IS the product. Push is just bootstrapping.
+Complex layouts → capture/clone pattern. Simple layouts → IR archetypes.
 ```
