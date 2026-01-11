@@ -48,7 +48,9 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - Template capture with design system extraction + slot identification
 - **Full deck rendering** — 10 slides from IR in one push
 - **Auto Layout for big-idea** — headline/subline no longer overlap
-- **Consolidated tool surface** — 6 tools instead of 14
+- **Consolidated tool surface** — 8 tools total
+- **Complex archetypes** — `position-cards` renders 3-column cards with badges
+- **Collaborative editing** — pull → patch works on complex slides (24 elements)
 
 ### The Gap 🔨
 - **Limited archetypes** — no three-column, no video/embed — hit during dogfood
@@ -94,8 +96,9 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### Priority 1: Dogfood Fixes (HIGH)
 - [x] **Push modes** — Add `mode: "replace" | "append"` parameter (Session 17)
-- [ ] **Three-column archetype** — Common layout, hit during dogfood
+- [x] **Three-column archetype** — `position-cards` archetype handles this (Session 18)
 - [ ] **Video/embed archetype** — Even if just a URL field
+- [ ] **Simpler three-column** — Basic 3-col without badges (lower complexity than position-cards)
 
 ### Priority 2: Figma Best Practices
 - [ ] Auto Layout for remaining archetypes (title, quote, summary, section) — see `docs/decisions/auto-layout-consistency.md`
@@ -107,9 +110,11 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [ ] Better push error messages — which slide, which field failed
 
 ### Priority 4: Polish (LOW)
-- [ ] Eyebrow text — small "OUR POSITION" labels above headlines
+- [x] Eyebrow text — implemented in `position-cards` archetype (Session 18)
 - [ ] Clone workflow docs — document "design once, clone many" pattern
 - [ ] Role mapping — use semantic roles instead of node IDs
+- [ ] Shared types — extract `SlideContent` to avoid duplication between plugin/server
+- [ ] Auto-generate MCP resources — derive from ARCHETYPES object
 
 ### Future Work (defer)
 - Inline styling (mixed colors/weights in text) — use capture/clone instead
@@ -121,6 +126,38 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 18 (2026-01-11)
+**Complex Template Strategy: position-cards Archetype**
+
+Explored how to handle slides as complex as the Keycard example (3-column cards, badges, features row).
+
+**Analysis:**
+- Capture/clone limited by `MAX_SLOT_DEPTH = 2` — deeply nested content becomes "complex regions"
+- Mixed-color headlines (character-level styling) not programmatically changeable
+- Decision: Hybrid approach — archetypes for repeatable patterns, capture/clone for one-offs
+
+**Implementation:**
+- ✅ New `position-cards` archetype with:
+  - Cyan eyebrow label
+  - Multi-line headline + subline
+  - 3 cards (label, title, body, colored badge)
+  - Feature row with orange dots
+- ✅ Successfully rendered Keycard-style slide from IR
+- ✅ Tested collaborative editing — user added line breaks, Claude patched feature text, no conflicts
+
+**Docs created:**
+- `docs/decisions/complex-templates.md` — strategy decision
+- `docs/discovery/complex-template-experiment.md` — experiment notes
+- `docs/ADDING-ARCHETYPES.md` — step-by-step guide for adding new archetypes
+
+**Key insight:** Template complexity doesn't affect collaboration — every text element has a stable node ID, patches are surgical.
+
+**Friction identified:**
+- Type duplication between plugin and server
+- MCP resources hardcoded (easy to forget updates)
+- Server restart clunky (kill process, wait for Cursor restart)
+- Plugin reconnection required after server restart
 
 ### Session 17 (2026-01-11)
 **Technical Due Diligence: Code Review & Improvements**
@@ -380,15 +417,19 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 **Read first:** PLAN.md (current state, priorities)
 
 **Key files:**
-- src/index.ts (MCP server — 8 tools)
-- figma-plugin/code.ts (plugin — export, apply, patch, capture, instantiate, delete, reorder)
+- src/index.ts (MCP server — 8 tools, 11 archetypes)
+- figma-plugin/code.ts (plugin — all rendering + operations)
+- docs/ADDING-ARCHETYPES.md (guide for adding new archetypes)
+
+**Archetypes (11):**
+title, section, big-idea, bullets, two-column, quote, chart, timeline, comparison, summary, **position-cards**
 
 **MCP Tools (8):**
 | Tool | Purpose |
 |------|---------|
 | monorail_status | Is plugin connected? |
 | monorail_pull | Get deck state (slides, elements, IDs) |
-| monorail_push | Create/replace slides from IR (+ start_index) |
+| monorail_push | Create/replace slides from IR |
 | monorail_patch | Update specific elements by ID |
 | monorail_capture | Full node tree + design system + slots |
 | monorail_clone | Clone slide + update content |
@@ -397,11 +438,12 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
 **This session:** [describe focus]
 
-Current priorities (from Claude Desktop dogfood):
-1. Push modes — add "replace" option (currently always appends)
-2. Three-column archetype — common layout, hit during dogfood
+Current priorities:
+1. Video/embed archetype — even if just a URL field
+2. Simpler three-column — basic 3-col without badges
 3. Auto Layout consistency — title/quote/summary use fixed Y positions
+4. Developer experience — shared types, auto-generated MCP resources
 
 **Key insight:** The pull → patch loop IS the product. Push is just bootstrapping.
-Complex layouts → capture/clone pattern. Simple layouts → IR archetypes.
+Complex layouts → new archetype OR capture/clone. Collab works regardless of complexity.
 ```
