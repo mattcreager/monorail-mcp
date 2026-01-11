@@ -175,6 +175,51 @@ Detailed specifications for each archetype. Use these constraints strictly—the
 
 ---
 
+## Position Cards (Keycard-style)
+
+**Use for**: Strategic positioning, product pillars, multi-pillar frameworks
+
+**Layout**:
+- Eyebrow label (cyan, small caps)
+- Headline + subline (large, white)
+- 3 cards in a row, each with: label, title, body, badge
+- Optional feature row with icons
+
+**Constraints**:
+- Eyebrow: ≤4 words
+- Headline: ≤15 words
+- Subline: ≤10 words
+- Cards: exactly 3
+- Each card badge_color: green | cyan | orange
+
+**Common failure**: Trying to fit too much into card bodies. Keep descriptions to 2 lines max.
+
+**Example**:
+```json
+{
+  "archetype": "position-cards",
+  "content": {
+    "eyebrow": "OUR POSITION",
+    "headline": "Identity is the pillar. ACP is north.",
+    "subline": "The wedge shows us what's next.",
+    "cards": [
+      {
+        "label": "THE FOUNDATION",
+        "title": "Identity", 
+        "body": "Who, on whose behalf, delegation chains.",
+        "badge": "✓ Built",
+        "badge_color": "green"
+      }
+    ],
+    "features": [
+      { "label": "Hooks", "description": "block/allow at runtime" }
+    ]
+  }
+}
+```
+
+---
+
 ## Choosing the Right Archetype
 
 If you're unsure which archetype fits:

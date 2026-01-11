@@ -30,6 +30,16 @@ interface SlideContent {
   rows?: string[][];
   items?: string[];
   chart?: { type: string; placeholder?: boolean };
+  // Position Cards archetype (Keycard-style)
+  eyebrow?: string;
+  cards?: Array<{
+    label: string;
+    title: string;
+    body: string;
+    badge?: string;
+    badge_color?: 'green' | 'cyan' | 'orange';
+  }>;
+  features?: Array<{ label: string; description: string }>;
 }
 
 interface Slide {
@@ -612,6 +622,15 @@ const ARCHETYPES: Record<
     constraints: {
       headline: { maxWords: 8 },
       items: { maxItems: 3 },
+    },
+  },
+  "position-cards": {
+    requiredFields: ["headline", "cards"],
+    constraints: {
+      eyebrow: { maxWords: 4 },
+      headline: { maxWords: 15 },
+      subline: { maxWords: 10 },
+      cards: { maxItems: 3 },
     },
   },
 };

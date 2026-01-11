@@ -13,6 +13,13 @@ const COLORS = {
     white: { r: 0.98, g: 0.98, b: 0.98 }, // Near white
     blue: { r: 0.05, g: 0.6, b: 1 }, // Accent blue
     dimmed: { r: 0.3, g: 0.3, b: 0.35 }, // Dimmed elements
+    // Position cards colors
+    cyan: { r: 0.0, g: 0.74, b: 0.84 }, // Cyan for accents
+    green: { r: 0.22, g: 0.78, b: 0.55 }, // Green for "Built" badge
+    orange: { r: 0.95, g: 0.55, b: 0.15 }, // Orange for features
+    cardBg: { r: 0.1, g: 0.1, b: 0.12 }, // Card background
+    cardBgHighlight: { r: 0.12, g: 0.14, b: 0.16 }, // Highlighted card (middle)
+    featureBg: { r: 0.08, g: 0.08, b: 0.1 }, // Feature row background
 };
 // Slide dimensions
 const SLIDE_WIDTH = 1920;
@@ -351,6 +358,113 @@ async function addContentToParent(parent, slide) {
                 }
                 for (let col = 0; col < rows[r].length; col++) {
                     await addText(parent, rows[r][col], 210 + col * colW, y, 24, false, COLORS.body, colW - 20, `cell-${r}-${col}`);
+                }
+            }
+            break;
+        case 'position-cards':
+            {
+                // Eyebrow label (cyan, small caps style)
+                if (c.eyebrow) {
+                    await addText(parent, c.eyebrow, 60, 80, 14, true, COLORS.cyan, undefined, 'eyebrow');
+                }
+                // Main headline (large, white)
+                if (c.headline) {
+                    await addText(parent, c.headline, 60, 120, 52, true, COLORS.white, 1800, 'headline');
+                }
+                // Subline
+                if (c.subline) {
+                    await addText(parent, c.subline, 60, 200, 52, true, COLORS.white, 1800, 'subline');
+                }
+                // Cards container
+                const cards = c.cards || [];
+                const cardCount = Math.min(cards.length, 3);
+                const cardWidth = 460;
+                const cardGap = 40;
+                const cardsStartX = 60;
+                const cardsStartY = 310;
+                const cardHeight = 280;
+                for (let i = 0; i < cardCount; i++) {
+                    const card = cards[i];
+                    const cardX = cardsStartX + i * (cardWidth + cardGap);
+                    const isMiddleCard = i === 1 && cardCount === 3;
+                    // Card background with rounded corners
+                    const cardBg = figma.createRectangle();
+                    cardBg.name = `card-${i}-bg`;
+                    cardBg.x = cardX;
+                    cardBg.y = cardsStartY;
+                    cardBg.resize(cardWidth, cardHeight);
+                    cardBg.cornerRadius = 16;
+                    cardBg.fills = [{ type: 'SOLID', color: isMiddleCard ? COLORS.cardBgHighlight : COLORS.cardBg }];
+                    if (isMiddleCard) {
+                        // Add cyan border for middle card
+                        cardBg.strokes = [{ type: 'SOLID', color: COLORS.cyan }];
+                        cardBg.strokeWeight = 2;
+                    }
+                    parent.appendChild(cardBg);
+                    // Card label (muted, small caps)
+                    await addText(parent, card.label, cardX + 24, cardsStartY + 24, 12, true, COLORS.muted, cardWidth - 48, `card-${i}-label`);
+                    // Card title (white, bold)
+                    await addText(parent, card.title, cardX + 24, cardsStartY + 56, 28, true, COLORS.white, cardWidth - 48, `card-${i}-title`);
+                    // Card body (muted)
+                    await addText(parent, card.body, cardX + 24, cardsStartY + 100, 18, false, COLORS.muted, cardWidth - 48, `card-${i}-body`);
+                    // Badge (if present)
+                    if (card.badge) {
+                        const badgeColor = card.badge_color === 'green' ? COLORS.green
+                            : card.badge_color === 'orange' ? COLORS.orange
+                                : COLORS.cyan;
+                        const badgeY = cardsStartY + cardHeight - 50;
+                        // Badge background (pill shape)
+                        const badgeBg = figma.createRectangle();
+                        badgeBg.name = `card-${i}-badge-bg`;
+                        badgeBg.x = cardX + 24;
+                        badgeBg.y = badgeY;
+                        badgeBg.resize(100, 32);
+                        badgeBg.cornerRadius = 16;
+                        badgeBg.fills = [{ type: 'SOLID', color: badgeColor, opacity: 0.15 }];
+                        parent.appendChild(badgeBg);
+                        // Badge text
+                        await addText(parent, card.badge, cardX + 36, badgeY + 7, 14, true, badgeColor, undefined, `card-${i}-badge`);
+                    }
+                }
+                // Features row
+                const features = c.features || [];
+                if (features.length > 0) {
+                    const featuresY = 640;
+                    // Features background
+                    const featuresBg = figma.createRectangle();
+                    featuresBg.name = 'features-bg';
+                    featuresBg.x = 60;
+                    featuresBg.y = featuresY;
+                    featuresBg.resize(1800, 160);
+                    featuresBg.cornerRadius = 16;
+                    featuresBg.fills = [{ type: 'SOLID', color: COLORS.featureBg }];
+                    parent.appendChild(featuresBg);
+                    // Features header
+                    await addText(parent, 'WHAT THE WEDGE DEMANDS — WHAT WE\'RE BUILDING', 85, featuresY + 24, 12, true, COLORS.muted, 1760, 'features-header');
+                    // Feature items (2 rows, 2 cols each or adapt)
+                    const featureStartY = featuresY + 60;
+                    const featureColWidth = 420;
+                    const featureRowHeight = 40;
+                    for (let i = 0; i < features.length; i++) {
+                        const feature = features[i];
+                        const row = Math.floor(i / 4);
+                        const col = i % 4;
+                        const fx = 85 + col * featureColWidth;
+                        const fy = featureStartY + row * featureRowHeight;
+                        // Orange dot
+                        const dot = figma.createEllipse();
+                        dot.name = `feature-${i}-dot`;
+                        dot.x = fx;
+                        dot.y = fy + 4;
+                        dot.resize(12, 12);
+                        dot.fills = [{ type: 'SOLID', color: COLORS.orange }];
+                        parent.appendChild(dot);
+                        // Feature label (bold)
+                        await addText(parent, feature.label, fx + 20, fy, 16, true, COLORS.white, undefined, `feature-${i}-label`);
+                        // Feature description (muted, inline after label)
+                        const labelWidth = feature.label.length * 9; // Approximate
+                        await addText(parent, feature.description, fx + 20 + labelWidth + 8, fy, 16, false, COLORS.muted, featureColWidth - labelWidth - 40, `feature-${i}-desc`);
+                    }
                 }
             }
             break;
