@@ -1,7 +1,7 @@
 # Decision: WebSocket Bridge
 
 **Date:** 2026-01-11  
-**Status:** Research / Design  
+**Status:** Implemented ✅  
 **Context:** Session 4 discussion on user consumption model and development workflow
 
 ---
@@ -134,67 +134,72 @@ Run a test cycle to confirm everything works.
 
 ---
 
-## Research Questions
+## Research Questions (Answered ✅)
 
 ### 1. Can Figma plugins open WebSocket connections?
 
-Need to verify:
-- Does Figma's sandbox allow `WebSocket` API?
-- Any CORS/security restrictions for localhost?
-- Persistent connection or reconnect-on-demand?
+**Answer: YES ✅**
+- Figma plugin UI runs in iframe with full browser APIs
+- WebSocket to `ws://localhost:9876` works perfectly
+- No CORS issues for localhost
+- Persistent connection with auto-reconnect
 
 ### 2. Message Protocol
 
-Options:
-- **JSON-RPC**: Standard, good tooling
-- **Simple JSON**: `{ type: "apply", payload: {...} }`
-- **Protobuf**: Overkill for this use case
-
-Lean toward simple JSON messages.
+**Decision: Simple JSON**
+```json
+{ "type": "push-ir", "payload": { "ir": {...}, "autoApply": true } }
+{ "type": "applied", "payload": { "success": true, "slideCount": 8 } }
+```
 
 ### 3. Connection Lifecycle
 
-- Plugin connects when opened
-- Reconnect automatically if server restarts
-- Graceful handling when plugin closed
+**Implemented:**
+- Plugin connects on open (auto-connect)
+- Shows green/yellow/red status indicator
+- Reconnects automatically if server restarts
+- Server tracks connected plugin info
 
 ### 4. Security
 
-- Localhost only (no remote connections)
-- Optional: shared secret in plugin settings?
-- Risk: other local processes could connect — acceptable?
+**Decision: Localhost-only, no auth**
+- Risk of other local processes connecting is acceptable
+- Adding shared secrets would complicate setup with minimal benefit
 
 ### 5. MCP Server Changes
 
-- Add WebSocket server alongside stdio transport
-- Manage connection state
-- Route tool calls appropriately
+**Implemented in `src/index.ts`:**
+- WebSocket server starts alongside stdio transport
+- Listens on port 9876
+- Tracks connected plugins
+- Routes tool calls to plugin via WebSocket
 
 ---
 
-## Implementation Plan
+## Implementation Plan (Complete ✅)
 
-### Phase 1: Research & Spike
-- [ ] Verify Figma plugin can open WebSocket
-- [ ] Simple spike: plugin sends "hello", server responds
-- [ ] Document any gotchas
+### Phase 1: Research & Spike ✅
+- [x] Verify Figma plugin can open WebSocket
+- [x] Simple spike: plugin sends "hello", server responds
+- [x] Document gotchas (see `docs/failures.md`)
 
-### Phase 2: Basic Bridge
-- [ ] MCP server hosts WebSocket on startup
-- [ ] Plugin connects on open
-- [ ] `monorail_connection_status` tool works
-- [ ] `monorail_push_ir` sends IR, plugin applies
-- [ ] `monorail_pull_ir` requests export
+### Phase 2: Basic Bridge ✅
+- [x] MCP server hosts WebSocket on startup
+- [x] Plugin connects on open
+- [x] `monorail_connection_status` tool works
+- [x] `monorail_push_ir` sends IR, plugin applies
+- [x] `monorail_pull_ir` requests export
 
-### Phase 3: Developer Tools
+### Phase 3: Developer Tools (Deferred)
 - [ ] Plugin sends console logs to server
 - [ ] `monorail_get_plugin_logs` tool
 - [ ] `monorail_test_workflow` for validation
 
-### Phase 4: Polish
-- [ ] Reconnection handling
-- [ ] Error messages and troubleshooting
-- [ ] Documentation for users
+### Phase 4: Polish ✅
+- [x] Reconnection handling
+- [x] Error messages in plugin UI
+- [x] Activity feed shows recent messages
+- [x] Manual controls collapsed (WebSocket is primary)
 
 ---
 
@@ -228,9 +233,15 @@ Lean toward simple JSON messages.
 
 ---
 
-## Open Questions (Updated)
+## Decisions Made
 
-1. ~~Should WebSocket server start automatically with MCP, or be opt-in?~~ **Decided: Auto-start**
-2. ~~What port? Fixed (9876) or configurable?~~ **Decided: Fixed 9876 for now**
-3. How to handle multiple Figma documents open at once?
-4. Should we support multiple plugins connected (e.g., different Figma windows)?
+| Question | Decision |
+|----------|----------|
+| Auto-start or opt-in? | Auto-start with MCP |
+| What port? | Fixed 9876 |
+| Multiple documents? | One plugin connection at a time (last wins) |
+| Multiple MCP processes? | Can cause conflicts — only one binds port (see `failures.md`) |
+
+## Known Issues
+
+- **Multiple MCP processes:** If multiple monorail-mcp processes run (e.g., manual + Cursor), only one binds port 9876. Plugin may connect to wrong one. Fix: `ps aux | grep monorail` and kill the rogue process.

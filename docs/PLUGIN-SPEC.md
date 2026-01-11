@@ -195,23 +195,19 @@ Figma Plugin (runs inside Figma's iframe sandbox).
 
 ### Input Methods
 
-**Option A: Clipboard**
-- User copies IR from Claude/terminal
-- Opens plugin, clicks "Paste IR"
-- Plugin parses and applies
-
-**Option B: File input**
-- Plugin opens file picker
-- User selects `deck.yaml` or `deck.json`
-- Plugin parses and applies
-
-**Option C: WebSocket (future)**
-- Plugin connects to local server
-- Claude writes IR to server
-- Server pushes to plugin
+**Primary: WebSocket (Working ✅)**
+- Plugin connects to MCP server on `ws://localhost:9876`
+- Claude uses `monorail_push_ir` tool
+- Server pushes to plugin via WebSocket
 - Plugin applies automatically
+- **No copy/paste required**
 
-For v0: **Clipboard + File input**. Simplest, no external dependencies.
+**Fallback: Manual paste**
+- User copies IR from Claude
+- Opens plugin, clicks "Paste IR" (collapsed in UI)
+- Plugin parses and applies
+
+The WebSocket bridge is the primary workflow. Manual paste exists as fallback when connection issues occur.
 
 ### Component Library
 
@@ -340,27 +336,27 @@ Validation warnings appear in plugin UI, not as blocking errors. Let the human s
 
 ---
 
-## MCP Integration
+## MCP Integration (Working ✅)
 
-The Figma MCP server (read-only) should be able to:
+**Custom MCP server** (`src/index.ts`) communicates with plugin via WebSocket:
 
-1. **List slides** — Return slide IDs and order
-2. **Read slide content** — Return content fields per slide
-3. **Detect changes** — Compare current state to last-known IR
+| Tool | Purpose |
+|------|---------|
+| `monorail_connection_status` | Check if plugin connected |
+| `monorail_push_ir` | Send IR to plugin (optional `autoApply`) |
+| `monorail_pull_ir` | Request export, wait for response, return IR |
 
-This lets Claude see:
-- What slides exist
-- What content they have
-- What the human changed since last write
+**Note:** The official Figma MCP doesn't support Slides, and REST API is read-only. That's why we built WebSocket bridge.
 
-### Ideal MCP Response
+### Example: Pull current deck
 
-```json
+```typescript
+// Claude calls:
+monorail_pull_ir()
+
+// Returns:
 {
-  "deck": {
-    "title": "Decks That Land",
-    "slideCount": 10
-  },
+  "deck": { "title": "Decks That Land" },
   "slides": [
     {
       "id": "slide-1",
@@ -368,64 +364,66 @@ This lets Claude see:
       "content": {
         "headline": "Decks That Land",
         "subline": "What if AI helped you find the argument?"
-      },
-      "modifiedSinceLastSync": false
+      }
     },
     {
       "id": "slide-5",
-      "archetype": "big-idea",
+      "archetype": "bullets",
       "content": {
-        "headline": "Now we collaborate in real-time",
-        "subline": "Human edited this directly"
+        "headline": "Key Points",
+        "bullets": ["First", "Second", "Third"]
       },
-      "modifiedSinceLastSync": true   // <-- Claude sees this
+      "extras": ["Footnote human added"]  // <-- Claude sees freeform additions
     }
   ]
 }
 ```
 
-Need to verify: Can current Figma MCP server read Figma Slides content at this granularity?
+---
+
+## Answered Questions
+
+| Question | Answer |
+|----------|--------|
+| Figma Slides vs. Design? | Works! Use `figma.createSlide()`, `slide.fills` for backgrounds |
+| Component library? | Plugin renders directly (hardcoded positions) — no separate library needed |
+| Chart rendering? | Placeholder text for v0 |
+| Speaker notes? | Stored in IR only (not rendered to Figma) |
+| WebSocket from plugin? | ✅ Works — iframe has full browser APIs |
+
+## Open Questions (v1+)
+
+1. **Concurrent editing** — Multiple people editing. How does mapping handle conflicts?
+2. **Version control** — Should we store IR history? Undo support?
+3. **Delete capability** — Plugin can't delete slides yet (orphans require manual cleanup)
+4. **Visual feedback** — Claude can't see rendered output (overflow, layout issues)
 
 ---
 
-## Open Questions
+## v0 Scope (Complete ✅)
 
-1. **Figma Slides vs. Figma Design** — Does Plugin API work the same in Figma Slides? Any limitations?
+### Implemented
+- ✅ WebSocket bridge (push/pull without copy/paste)
+- ✅ Create slides from IR (all 10 archetypes)
+- ✅ Update existing slides (in-place, non-locked)
+- ✅ ID mapping (IR id ↔ Figma frame id)
+- ✅ Export current deck as IR
+- ✅ Archetype detection from slide content
+- ✅ Freeform handling (`extras` field for human additions)
+- ✅ Manual paste fallback
 
-2. **Component library distribution** — Ship as .fig file users duplicate? Or plugin creates components on first run?
-
-3. **Chart rendering** — Can we render actual charts, or just placeholders? (Probably placeholders for v0)
-
-4. **Speaker notes** — Does Figma Slides have native speaker notes? If not, store in plugin data?
-
-5. **Collaboration** — Multiple people editing. How does mapping handle concurrent edits?
-
-6. **Version control** — Should we store IR history? Undo support?
-
----
-
-## v0 Scope
-
-### In scope
-- Clipboard/file input for IR
-- Create slides from IR (all 10 archetypes)
-- Update existing slides (non-locked)
-- Basic ID mapping
-- Constraint validation with warnings
-- Export current deck as IR
-
-### Out of scope (future)
-- WebSocket auto-sync
+### Out of scope (v1)
+- Delete slides
 - Chart data rendering (placeholder only)
 - Concurrent edit handling
 - Version history
 - Custom archetype creation
+- Auto Layout / Component templates
 
 ---
 
-## Next Steps
+## See Also
 
-1. **Verify MCP capability** — What can we read from Figma Slides today?
-2. **Build component library** — 10 archetypes as Figma components
-3. **Scaffold plugin** — Basic UI, IR parsing, component instantiation
-4. **Test loop** — Apply IR → edit in Figma → export IR → compare
+- `docs/decisions/websocket-bridge.md` — WebSocket protocol design
+- `docs/decisions/freeform-handling.md` — Update-in-place + extras
+- `docs/failures.md` — Learnings and gotchas

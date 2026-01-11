@@ -9,25 +9,26 @@ A deck is an argument with a shape. Most AI deck tools optimize for slide genera
 The key unlock: **Figma as shared canvas, not just output target.**
 
 ```
-     Claude                          Human
-        │                              │
-        │    writes via plugin         │
-        ├─────────────────────────────►│
-        │                              │
-        │         FIGMA SLIDES         │
-        │                              │
-        │    reads via MCP             │
-        │◄─────────────────────────────┤
-        │                              │
-        │                         spikes, edits,
-        │                         moves things
-        │                              │
-        │    sees your changes,        │
-        │    adapts                    │
-        └──────────────────────────────┘
+     Claude (Cursor)                    Figma
+        │                                 │
+        │    monorail_push_ir            │
+        ├────────────────────────────────►│  Plugin auto-applies
+        │         (via WebSocket)         │
+        │                                 │
+        │                            Human edits:
+        │                            move, restyle,
+        │                            add content
+        │                                 │
+        │    monorail_pull_ir            │
+        │◄────────────────────────────────┤  Plugin exports IR
+        │         (via WebSocket)         │
+        │                                 │
+        │    Claude sees changes,         │
+        │    adapts                       │
+        └─────────────────────────────────┘
 ```
 
-Both parties work in the same space. Claude proposes, human spikes, Claude sees and adapts.
+Both parties work in the same space. Claude proposes, human spikes, Claude sees and adapts. **No copy/paste required.**
 
 ---
 
@@ -93,26 +94,39 @@ Key fields:
 - `status`: locked | draft | stub (Claude knows what's settled vs. in flux)
 - Content fields per archetype
 
-### 3. Figma Plugin
+### 3. Figma Plugin (`figma-plugin/`)
 
 **Writes** IR → Figma Slides:
-- Creates slides from IR
-- Updates existing slides (doesn't regenerate locked ones)
-- Uses Figma component library for archetypes
+- Creates slides from IR (all 10 archetypes)
+- Updates existing slides (in-place text updates preserve formatting)
+- Names text nodes (`headline`, `bullet-0`, etc.) for targeted updates
 - Maintains mapping: IR slide id ↔ Figma frame id
 
+**Reads** Figma → IR (Export):
+- Analyzes slide content, detects archetypes
+- Extracts structured content (headlines, bullets, etc.)
+- Captures `extras` (text outside archetype patterns)
+
 **Critical behavior**: 
-- Partial updates. Only touch slides whose IR changed.
 - Respect `status: locked`. Don't overwrite.
+- Same archetype → update text in place (preserves human formatting)
+- Different archetype → full re-render
 
-### 4. MCP Integration
+### 4. MCP Server + WebSocket Bridge
 
-**Reads** Figma → Claude context:
-- Current deck state (all slides, content, order)
-- Detects human edits since last write
-- Surfaces component library (available archetypes)
+**Custom MCP server** (`src/index.ts`) with WebSocket for Figma communication:
 
-This is how Claude sees your spikes. You move slide 7, change a headline, add a sketch—Claude sees it on next read.
+| Tool | Purpose |
+|------|---------|
+| `monorail_connection_status` | Check if plugin is connected |
+| `monorail_push_ir` | Send IR to plugin (auto-apply) |
+| `monorail_pull_ir` | Request export from plugin |
+| `monorail_create_deck` | Create deck (in-memory) |
+| `monorail_preview` | Generate HTML preview |
+
+**Why custom MCP?** The official Figma MCP doesn't support Slides, and REST API is read-only for design content. WebSocket bridge connects directly to the Figma plugin.
+
+This is how Claude sees your spikes. You move slide 7, change a headline, add a sketch—Claude pulls IR and sees it.
 
 ### 5. Critic Heuristics
 
@@ -181,18 +195,19 @@ Until narrative QA passes and human says done.
 
 ---
 
-## What Exists vs. What Needs Building
+## What Exists (v0 Complete ✅)
 
-| Component | Status |
-|-----------|--------|
-| Narrative skill (SKILL.md) | v0 draft exists, needs update |
-| IR format spec | Sketched above, needs formalization |
-| Figma Plugin | **Needs building** |
-| MCP integration | Figma MCP exists (read-only), need to verify capability |
-| Archetype components | **Needs building** (Figma component library) |
-| Critic heuristics | v0 draft exists in references/ |
+| Component | Status | Location |
+|-----------|--------|----------|
+| Narrative skill (SKILL.md) | ✅ Done | `docs/SKILL.md` |
+| IR format spec | ✅ Done | `docs/PLUGIN-SPEC.md` |
+| Figma Plugin | ✅ Working | `figma-plugin/` |
+| MCP server | ✅ Working | `src/index.ts` |
+| WebSocket bridge | ✅ Working | Port 9876 |
+| Archetype rendering | ✅ Working | 10 archetypes in plugin |
+| Critic heuristics | ✅ Done | `docs/references/critics.md` |
 
-**Critical path**: Plugin + Archetype components. Without write capability, loop doesn't close.
+**The loop is closed.** Full round-trip works: Claude ↔ Figma via WebSocket.
 
 ---
 
@@ -212,23 +227,30 @@ This forces us through the whole loop and surfaces gaps.
 
 ---
 
-## Open Questions
+## Answered Questions
 
-1. **Plugin architecture**: Figma plugin (runs in Figma) vs. external script that uses Figma API?
-2. **MCP read granularity**: Can we detect *which* slides changed since last write?
-3. **Component library location**: Ship archetypes as a Figma file users duplicate? Or plugin creates them?
-4. **Locking mechanism**: Store `status` in IR only, or also tag in Figma somehow?
-5. **Image/chart handling**: How does IR specify charts? Generate in Figma? Placeholder?
+| Question | Answer |
+|----------|--------|
+| Plugin architecture? | Figma plugin with WebSocket client → connects to MCP server |
+| MCP read granularity? | Export returns full IR; change detection via `extras` field |
+| Component library? | Plugin renders archetypes directly (hardcoded layouts) |
+| Locking mechanism? | `status` in IR only; plugin respects `locked` slides |
+| Chart handling? | Placeholder text for v0 |
 
 ---
 
-## Next Steps
+## Open Questions (v1+)
 
-1. **Verify MCP read capability** — What can we actually see from Figma via MCP?
-2. **Spec the plugin** — Input/output, update semantics, component usage
-3. **Build archetype components** — Figma file with the 10 templates
-4. **Update SKILL.md** — Align with this architecture (toolkit, not workflow)
-5. **Build Monorail deck** — Test the loop end-to-end
+1. **Visual feedback** — Claude can't see rendered output (text overflow, broken layouts)
+2. **Template integration** — Our archetypes bypass Figma's native template system
+3. **Design co-creation** — HTML output is rich, Figma output is functional text
+4. **Delete capability** — Plugin can only create/update, not delete slides
+
+---
+
+## What's Next
+
+See `PLAN.md` for current session tasks and detailed roadmap.
 
 ---
 

@@ -176,6 +176,71 @@ If it works for Monorail's system, it works for any system.
 
 ---
 
+## Evolution: IR as Delta/Intent (Session 10 insight)
+
+**The fidelity problem:**
+- Current IR captures content, loses visual state
+- Export is lossy → Claude can't see what human did
+- Apply re-renders → destroys human's visual work
+- Result: Claude and human CONFLICT instead of collaborate
+
+**Key insight:** Maybe IR shouldn't be a complete state description. Maybe it should be **delta/intent**.
+
+### Current Model (State-based)
+```
+IR = complete slide specification
+Plugin renders from scratch each time
+Human edits get destroyed on next Apply
+```
+
+### Proposed Model (Delta-based)
+```
+IR = changes/intent to apply
+Plugin patches existing slides
+Human edits persist
+```
+
+**Like Git:** Commits (deltas) vs. full file snapshots.
+
+### What this enables:
+- Human moves headline → stays moved
+- Claude updates headline TEXT → position preserved  
+- Human adds callout → stays there
+- Claude adds bullet → inserted without destroying callout
+
+### Visual feedback is critical:
+- Claude needs to SEE the current state (screenshot or rich export)
+- Claude understands what human did
+- Claude sends targeted changes that work WITH not against
+
+### IR evolution example:
+```json
+// OLD: "Here's the complete slide"
+{
+  "archetype": "bullets",
+  "content": { "headline": "...", "bullets": [...] }
+}
+
+// NEW: "Here's what to change"
+{
+  "slide_id": "slide-1",
+  "intent": "update_content",
+  "changes": [
+    { "target": "headline", "value": "New Title" },
+    { "target": "bullet-0", "value": "Updated bullet" },
+    { "action": "add_bullet", "value": "New bullet at end" }
+  ]
+}
+```
+
+### Open questions for delta model:
+- How does Claude specify new slides? (Still need state-based for creation)
+- How granular are the deltas? (Text only? Position? Style?)
+- How does Claude know what's there to change? (Visual feedback)
+- Hybrid model? (State for new slides, delta for updates)
+
+---
+
 ## Decision
 
 **Proceed with Monorail Design System as proof of concept.**

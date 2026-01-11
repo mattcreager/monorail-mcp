@@ -506,6 +506,24 @@ Big insight from discussion: The real collaboration problem isn't "can the plugi
 
 **Documented in:** `docs/decisions/design-system-strategy.md`
 
+**Late Session 10 insight: IR as Delta, not State**
+
+The fidelity problem: IR captures content but loses visual state. Human edits in Figma, export is lossy, apply re-renders and destroys human work. Claude and human CONFLICT.
+
+**Proposed evolution:**
+- Current: IR = complete slide spec → Plugin renders from scratch
+- New: IR = delta/intent → Plugin patches existing slides
+
+Like Git commits vs full snapshots. Claude sends changes, not complete states. Human edits persist.
+
+**This requires visual feedback** — Claude needs to SEE the slide to know what's there before suggesting changes.
+
+**Hybrid model likely:**
+- State-based IR for NEW slides (need full spec)
+- Delta-based IR for UPDATES (preserve human work)
+
+This might be the key to making Claude and human truly collaborate instead of conflict.
+
 ---
 
 ## Completion Criteria (v0)
