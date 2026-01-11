@@ -439,6 +439,40 @@ Claude                              Figma Plugin
 
 ---
 
+### Session 9 (2026-01-11)
+**Task:** Dog-food by making a deck about Monorail
+
+**Completed:**
+- ✅ Created 8-slide Monorail deck with Lyle Lanley energy
+- ✅ Call-and-response slide (objections → "Monorail!" answers)
+- ✅ "Brain-dead slobs / cushy jobs" quote slide
+- ✅ Found and fixed IR schema bug (flat vs nested `content`)
+- ✅ Cleaned up orphan slides from failed push
+
+**Bugs found & added to plan:**
+- `monorail_delete_slides` tool needed — can't clean up orphans programmatically
+- IR validation needed — malformed IR crashes plugin silently
+- `preserveLayout` mode needed — archetype changes destroy human formatting
+
+**Architecture insights discovered:**
+1. **Figma Slides best practices** — we use raw absolute positioning, Figma supports Auto Layout, Components, Templates
+2. **Template system bypass** — our archetypes are hardcoded, not connected to Figma's native template system
+3. **Design co-creation gap** — HTML deck is beautiful (diagrams, callouts, styled Q&A), Figma output is functional text dumps
+4. **The asymmetry** — Claude is fluent in HTML/CSS, weak in Figma Plugin API. We're routing through its weakest channel.
+
+**Key insight:** Before deciding architecture, we need to understand what's actually possible with the Figma Plugin API.
+
+**Commits:**
+- `301c8f5` Add tasks from dog-fooding session
+- `7bf4deb` Add Figma Slides learnings: preserveLayout feature
+- `7c99ab6` Add template integration design decision
+- `7984198` Add design co-creation investigation
+
+**Next session task:**
+> Figma Plugin API capabilities audit — what visual primitives can we actually create?
+
+---
+
 ## Completion Criteria (v0)
 
 The loop works end-to-end:
@@ -545,27 +579,37 @@ The full collaboration loop works — **no copy/paste required:**
 
 ---
 
-## Next Session Task: Dog-food by making a deck about Monorail
+## Next Session Task: Figma Plugin API Capabilities Audit
 
-**Goal:** Create a deck that explains Monorail — the product, architecture, Figma constraints, trade-offs, and how to use it.
+**Goal:** Understand what's actually possible with the Figma Plugin API before deciding architecture for design co-creation.
+
+**Context from Session 9:**
+- The HTML deck (`examples/monorail-deck-v0.html`) is beautiful — diagrams, callouts, styled Q&A, visual loops
+- Our Figma output is functional text dumps
+- **The asymmetry:** Claude is fluent in HTML/CSS, weak in Figma Plugin API
+- We're routing through Claude's weakest channel
+
+**Research questions:**
+1. Can Plugin API create **Auto Layout frames**? (responsive spacing)
+2. Can it create **styled rectangles** with borders, rounded corners, gradients?
+3. Can it create **lines/arrows** for diagrams?
+4. Can it read/apply **template styles**? (colors, fonts from user's template)
+5. Can it create **component instances**? (use template layouts)
+6. What **visual primitives** exist beyond text nodes and basic shapes?
+7. Is there an **HTML → Figma** conversion approach?
 
 **How to approach this:**
+1. Read Figma Plugin API docs (search web for current 2026 docs)
+2. Experiment in `figma-plugin/code.ts` — try creating styled elements
+3. Document findings in `docs/failures.md`
+4. Update plan with architecture recommendation
 
-1. **Read the Monorail skill resource** — use `monorail://skill` to understand the narrative methodology
-2. **Read the archetypes** — use `monorail://archetypes` to know the slide templates  
-3. **Find the argument** — what's the ONE thing this deck should land?
-4. **Structure the arc** — setup → tension → resolution
-5. **Build iteratively** — push draft, get feedback, refine
-
-**Content to cover:**
-- What problem does Monorail solve? (AI decks lack argument)
-- The collaboration model (Claude proposes, human refines, loop until it lands)
-- Architecture: IR → WebSocket → Plugin → Figma Slides
-- Figma constraints we discovered (no REST writes, plugin sandbox, Slides API quirks)
-- Trade-offs made (local MCP, explicit sync, named text nodes)
-- How to use it (setup, workflow, tips)
-
-**This is a real test of the product.** Use the tools, follow the methodology, iterate with the human.
+**After this, decide between:**
+- Enrich IR + Plugin (express design in IR)
+- HTML-first workflow (iterate in HTML, Figma for final)
+- Separation of concerns (human designs, Claude fills content)
+- Teach Claude Figma (add Plugin API patterns as resource)
+- HTML → Figma bridge (if tooling exists)
 
 ---
 
