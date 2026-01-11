@@ -196,16 +196,162 @@ Template has headline + 3 bullets, content has headline + subline + 2 bullets:
 
 ---
 
+## Spike Results (Session 12)
+
+### What We Can Capture ✅
+
+| Category | Available |
+|----------|-----------|
+| Frame tree | Full hierarchy, recursive |
+| Fills | Solid, Gradient (with stops), Image (with hash) |
+| Strokes | Color, weight, opacity |
+| Corner radius | Per-frame |
+| Auto Layout | layoutMode, itemSpacing, all 4 paddings |
+| Text | fontFamily, fontStyle, fontSize, alignment, color |
+| Effects | Shadows (radius, offset, color, spread) |
+
+### Key Learning: Size Varies Wildly ⚠️
+
+| Slide Type | Nodes | JSON Size |
+|------------|-------|-----------|
+| Simple bullets | 6 | ~2KB |
+| Complex custom (slide-10) | 120 | 143KB |
+
+**Implication:** Raw capture is too big. Need filtering/summarization.
+
+### Design Decisions Made
+
+1. **Diagrams → Placeholder for MVP**
+   - Complex right-side diagrams (100+ nodes) omitted
+   - Template captures left-side structure only
+   - Can revisit diagram handling later
+
+2. **Slot Identification Heuristics**
+   - TEXT nodes at depth 1-2 → content slots
+   - Named frames ("Card", "Number") → structural slots
+   - Depth ≥ 3 → likely diagram, skip or mark complex
+
+3. **Template Spec Format**
+   - Compact (~5KB) not raw (~143KB)
+   - Slots array with node IDs + roles
+   - Style snapshots for key elements
+   - `has_complex_region` flag + bounds
+
+## Implementation Status
+
+| Tool | Status | Notes |
+|------|--------|-------|
+| `monorail_capture_template` | ✅ Done | Full node tree with all styling |
+| `monorail_extract_template` | ✅ Done | 143KB → 6KB, slot identification |
+| `monorail_instantiate_template` | ✅ Done | Clone + update text |
+| `monorail_extract_design_system` | ✅ Done | Colors, fonts, spacing tokens |
+| `monorail_create_styled_slide` | ✅ Done | Generate quote/bullets/big-idea/section |
+
 ## Next Steps
 
-1. **Design session:** Walk through Use Case 1 end-to-end
-   - What exactly happens when user says "make SOLUTION slide like slide-10"?
-   - What data do we need to capture from slide-10?
-   - How do we render slide-11?
+### Polish (Priority 1)
+- Font fallback chain for unavailable fonts
+- Role-based content mapping (not node IDs)
+- Smarter accent color selection
 
-2. **Spike:** Can we read full frame structure (not just text) from Figma plugin?
-   - Frames, positions, sizes
-   - Fill colors, stroke colors
-   - Font styles, weights, sizes
+### Future Work (Not Yet)
+- Diagram editing (text works, images/structure don't)
+- Full Figma visual language
+- Component instances
 
-3. **Decision:** Template storage approach (Figma-native vs JSON vs hybrid)
+---
+
+## Spike Results (Session 13): Extraction Testing
+
+### Test: slide-10 (CHALLENGE+SOLUTION)
+
+| Metric | Value |
+|--------|-------|
+| Raw capture | 57,332 bytes (120 nodes) |
+| Extracted template | 6,121 bytes (9 slots) |
+| Size reduction | 89.3% |
+
+### Slots Correctly Identified ✅
+
+| Role | Content | Why it worked |
+|------|---------|---------------|
+| `headline` | "Traditional access is static..." | fontSize ≥ 48, y < 500 |
+| `card_title` × 3 | Pain point text in cards | Parent name = "Card" |
+| `repeatable_card` × 3 | Card frames | Name contains "Card" |
+| `layout_container` | Section label border | Has Auto Layout |
+
+### Refinements Needed 🔧
+
+1. **Section label misclassified as `body_text`**
+   - Problem: "challenge+solution" is at depth 2 inside "Number" frame
+   - Current heuristic uses local y position (12px) not absolute (157px)
+   - Fix: Calculate absolute Y by summing parent offsets, OR check parent name patterns
+
+2. **Absolute position tracking**
+   - Current: Only tracks local x/y within parent
+   - Need: Track absolute slide position for position-based heuristics
+   - Implementation: Pass cumulative offset through tree walk
+
+3. **Font/style-based classification**
+   - "Supply" font family often indicates labels/section headers
+   - Could add font family as a classification signal
+   - Bright accent colors (like the lime green) also indicate labels
+
+4. **Named slot patterns**
+   - "Number" frame contains section label → could infer role from parent name
+   - Add pattern: parent name "Number" or "Label" → `section_label`
+
+### Complex Regions Correctly Filtered ✅
+
+The right-side diagram (41 nodes in "Frame 425") was correctly filtered to just bounds.
+This is exactly the behavior we want — preserve position for layout, skip content details.
+
+---
+
+## Spike Results (Session 13): Design System + New Layouts
+
+### Design System Extraction
+
+From slide-10/13, extracted:
+
+**Colors:**
+| Hex | Name | Usage |
+|-----|------|-------|
+| `#111111` | dark | Background, cards |
+| `#ffffff` | light | Headlines, body text |
+| `#cdff3e` | accent-green | Section labels, borders |
+| `#8a38f5` | accent-blue | Diagram elements |
+| `#e03e1a` | accent-red | Diagram warnings |
+
+**Fonts:**
+| Family | Style | Sizes | Usage |
+|--------|-------|-------|-------|
+| PP Supply Mono | Regular | 48px | Headlines |
+| Supply | Regular | 24px | Section labels |
+| Geist | Regular | 22px | Card content |
+| Inter | Regular | ~15px | Small text |
+
+**Spacing:**
+- Card padding: ~15px
+- Item spacing: ~9px
+- Slide margin: 60px
+- Card radius: 8px
+
+### New Layout Generation
+
+Successfully created "quote" slide using extracted tokens:
+- ✅ Dark background applied
+- ✅ White text for quote
+- ⚠️ Attribution used red accent (should prefer lime)
+- ✅ Centered layout
+
+### Diagram Editing Gap
+
+| Task | Status | Path Forward |
+|------|--------|--------------|
+| Edit diagram text | ✅ Works | Use `monorail_patch_elements` with element IDs |
+| Swap images/logos | ❌ Not yet | Would need image upload + `setImageFill()` |
+| Add/remove elements | ❌ Not yet | Would need full structure access |
+| Reposition elements | ❌ Not yet | Currently filtered out |
+
+**Decision:** Focus on text + layout base case first. Diagrams are future work.

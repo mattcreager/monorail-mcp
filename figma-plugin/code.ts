@@ -288,8 +288,19 @@ async function addContentToParent(parent: SceneNode & ChildrenMixin, slide: Slid
       break;
       
     case 'big-idea':
-      if (c.headline) await addText(parent, c.headline, 200, 380, 72, true, COLORS.white, 1520, 'headline');
-      if (c.subline) await addText(parent, c.subline, 200, 520, 32, false, COLORS.muted, 1520, 'subline');
+      {
+        // Use Auto Layout so subline flows below headline regardless of wrapping
+        const bigIdeaContainer = createAutoLayoutFrame(
+          parent,
+          'big-idea-container',
+          200,
+          380,
+          'VERTICAL',
+          40  // spacing between headline and subline
+        );
+        if (c.headline) await addAutoLayoutText(bigIdeaContainer, c.headline, 72, true, COLORS.white, 1520, 'headline');
+        if (c.subline) await addAutoLayoutText(bigIdeaContainer, c.subline, 32, false, COLORS.muted, 1520, 'subline');
+      }
       break;
       
     case 'bullets':
@@ -592,6 +603,114 @@ function detectExistingArchetype(parent: SceneNode & ChildrenMixin): string {
   if (names.has('headline') && names.size === 1) return 'section';
   
   return 'unknown';
+}
+
+// =============================================================================
+// SPIKE: Full node tree capture for Dynamic Templates
+// =============================================================================
+
+interface CapturedNode {
+  id: string;
+  type: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  // Visual properties
+  fills?: any[];          // Solid, gradient, image fills
+  strokes?: any[];
+  strokeWeight?: number;
+  cornerRadius?: number;
+  effects?: any[];        // Shadows, blur
+  // Auto Layout (frames only)
+  layoutMode?: 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'GRID';
+  itemSpacing?: number;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  // Text properties (text nodes only)
+  characters?: string;
+  fontSize?: number;
+  fontFamily?: string;
+  fontStyle?: string;
+  textAlignHorizontal?: string;
+  textAlignVertical?: string;
+  lineHeight?: any;
+  letterSpacing?: any;
+  // Children (recursive)
+  children?: CapturedNode[];
+}
+
+// Capture full node tree for template extraction
+function captureNodeTree(node: SceneNode): CapturedNode {
+  const captured: CapturedNode = {
+    id: node.id,
+    type: node.type,
+    name: node.name,
+    x: node.x,
+    y: node.y,
+    width: node.width,
+    height: node.height,
+  };
+  
+  // Visual properties (most node types have these)
+  if ('fills' in node && node.fills !== figma.mixed) {
+    captured.fills = JSON.parse(JSON.stringify(node.fills));
+  }
+  if ('strokes' in node) {
+    captured.strokes = JSON.parse(JSON.stringify(node.strokes));
+  }
+  if ('strokeWeight' in node && node.strokeWeight !== figma.mixed) {
+    captured.strokeWeight = node.strokeWeight as number;
+  }
+  if ('cornerRadius' in node && node.cornerRadius !== figma.mixed) {
+    captured.cornerRadius = node.cornerRadius as number;
+  }
+  if ('effects' in node) {
+    captured.effects = JSON.parse(JSON.stringify(node.effects));
+  }
+  
+  // Auto Layout (frames)
+  if ('layoutMode' in node) {
+    captured.layoutMode = node.layoutMode as CapturedNode['layoutMode'];
+    if (node.layoutMode !== 'NONE') {
+      captured.itemSpacing = node.itemSpacing;
+      captured.paddingTop = node.paddingTop;
+      captured.paddingRight = node.paddingRight;
+      captured.paddingBottom = node.paddingBottom;
+      captured.paddingLeft = node.paddingLeft;
+    }
+  }
+  
+  // Text properties
+  if (node.type === 'TEXT') {
+    const textNode = node as TextNode;
+    captured.characters = textNode.characters;
+    if (textNode.fontSize !== figma.mixed) {
+      captured.fontSize = textNode.fontSize;
+    }
+    if (textNode.fontName !== figma.mixed) {
+      captured.fontFamily = textNode.fontName.family;
+      captured.fontStyle = textNode.fontName.style;
+    }
+    captured.textAlignHorizontal = textNode.textAlignHorizontal;
+    captured.textAlignVertical = textNode.textAlignVertical;
+    if (textNode.lineHeight !== figma.mixed) {
+      captured.lineHeight = textNode.lineHeight;
+    }
+    if (textNode.letterSpacing !== figma.mixed) {
+      captured.letterSpacing = textNode.letterSpacing;
+    }
+  }
+  
+  // Recursively capture children
+  if ('children' in node) {
+    captured.children = (node as any).children.map((child: SceneNode) => captureNodeTree(child));
+  }
+  
+  return captured;
 }
 
 // =============================================================================
@@ -1034,7 +1153,7 @@ async function applyPatches(patches: PatchRequest): Promise<{ updated: number; f
 }
 
 // Main message handler
-figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchRequest }) => {
+figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchRequest; startIndex?: number }) => {
   try {
     if (msg.type === 'apply-ir') {
       if (!msg.ir) {
@@ -1059,9 +1178,34 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       const existingMapping = await figma.clientStorage.getAsync(MAPPING_KEY) || {};
       const mapping: Record<string, string> = { ...existingMapping };
       
+      // Get start index for positioning
+      const startIndex = msg.startIndex;
+      
+      // If we need to position slides, find the slide container first
+      let slideContainer: (SceneNode & ChildrenMixin) | null = null;
+      if (startIndex !== undefined && isInSlides()) {
+        // Find the SLIDE_ROW that contains slides
+        function findSlideContainer(node: SceneNode): (SceneNode & ChildrenMixin) | null {
+          if ((node as any).type === 'SLIDE_ROW') return node as SceneNode & ChildrenMixin;
+          if ('children' in node) {
+            for (const child of (node as any).children) {
+              const found = findSlideContainer(child);
+              if (found) return found;
+            }
+          }
+          return null;
+        }
+        for (const node of figma.currentPage.children) {
+          slideContainer = findSlideContainer(node);
+          if (slideContainer) break;
+        }
+      }
+      
       let created = 0;
       let updated = 0;
       let skipped = 0;
+      const createdNames: string[] = [];
+      const updatedNames: string[] = [];
       
       for (let i = 0; i < ir.slides.length; i++) {
         const slide = ir.slides[i];
@@ -1091,13 +1235,15 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               console.log(`Updating slide ${i + 1} in place: ${slide.archetype}`);
               
               // Update name
-              existingNode.name = `${slide.content.headline || slide.archetype}`;
+              const slideName = slide.content.headline || slide.archetype;
+              existingNode.name = slideName;
               
               // Update content in place (preserves position, font, color)
               await updateContentInPlace(existingNode as SceneNode & ChildrenMixin, slide);
               
               updated++;
-              figma.notify(`Updated ${updated}: ${slide.archetype} (in-place)`);
+              updatedNames.push(slideName);
+              figma.notify(`Updated: "${slideName}"`);
             } 
             // If archetype changed, clear and re-render
             else {
@@ -1110,7 +1256,8 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               }
               
               // Update name
-              existingNode.name = `${slide.content.headline || slide.archetype}`;
+              const slideName = slide.content.headline || slide.archetype;
+              existingNode.name = slideName;
               
               // Re-apply background (for slides)
               if (isInSlides()) {
@@ -1121,16 +1268,33 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               await addContentToParent(existingNode as SceneNode & ChildrenMixin, slide);
               
               updated++;
-              figma.notify(`Updated ${updated}: ${slide.archetype} (re-rendered)`);
+              updatedNames.push(slideName);
+              figma.notify(`Re-rendered: "${slideName}"`);
             }
           }
           // CREATE: New slide
           else {
             console.log(`Creating slide ${i + 1}: ${slide.archetype}`);
             const node = await createSlideWithContent(slide, i);
+            const slideName = slide.content.headline || slide.archetype;
+            
+            // If positioning is requested, move the slide to the correct position
+            if (startIndex !== undefined && slideContainer && isInSlides()) {
+              // Calculate the target position: startIndex + number of slides already created
+              const targetPosition = startIndex + created;
+              const currentIndex = slideContainer.children.indexOf(node);
+              
+              if (currentIndex !== -1 && currentIndex !== targetPosition) {
+                // Move to target position
+                const clampedTarget = Math.min(targetPosition, slideContainer.children.length - 1);
+                (slideContainer as any).insertChild(clampedTarget, node);
+              }
+            }
+            
             mapping[slide.id] = node.id;
             created++;
-            figma.notify(`Created ${created}: ${slide.archetype}`);
+            createdNames.push(slideName);
+            figma.notify(`Created: "${slideName}"`);
           }
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -1141,13 +1305,34 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       await saveMapping(mapping);
       
+      // Rich summary
       const summary = [];
-      if (created > 0) summary.push(`${created} created`);
-      if (updated > 0) summary.push(`${updated} updated`);
-      if (skipped > 0) summary.push(`${skipped} skipped`);
+      if (created > 0) {
+        const createList = createdNames.length <= 2 
+          ? createdNames.map(n => `"${n}"`).join(', ')
+          : `${created} slides`;
+        summary.push(`Created: ${createList}`);
+      }
+      if (updated > 0) {
+        const updateList = updatedNames.length <= 2
+          ? updatedNames.map(n => `"${n}"`).join(', ')
+          : `${updated} slides`;
+        summary.push(`Updated: ${updateList}`);
+      }
+      if (skipped > 0) summary.push(`${skipped} skipped (locked)`);
       
-      figma.notify(`✓ ${summary.join(', ')}!`, { timeout: 3000 });
-      figma.ui.postMessage({ type: 'applied', count: created + updated });
+      const positionText = startIndex !== undefined ? ` at position ${startIndex}` : '';
+      figma.notify(`✓ ${summary.join(' • ')}${positionText}`, { timeout: 3000 });
+      figma.ui.postMessage({ 
+        type: 'applied', 
+        count: created + updated,
+        created,
+        updated,
+        skipped,
+        createdNames,
+        updatedNames,
+        startIndex
+      });
     }
     
     if (msg.type === 'export-ir') {
@@ -1239,7 +1424,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
       
       const ir: DeckIR = {
-        deck: { title: 'Exported Deck' },
+        deck: { title: 'Pulled Deck' },
         slides
       };
       
@@ -1248,7 +1433,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       const diagramSlides = slides.filter(s => s.has_diagram).length;
       
       figma.ui.postMessage({ type: 'exported', ir: JSON.stringify(ir, null, 2) });
-      figma.notify(`Exported ${slides.length} slides (${richSlides} with elements, ${diagramSlides} with diagrams)`);
+      figma.notify(`Pulled ${slides.length} slides (${richSlides} with elements, ${diagramSlides} with diagrams)`);
     }
     
     if (msg.type === 'patch-elements') {
@@ -1267,6 +1452,594 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
       
       figma.ui.postMessage({ type: 'patched', ...result });
+    }
+    
+    // SPIKE: Export full template structure
+    if (msg.type === 'capture-template') {
+      // Get the first selected node, or first slide
+      let targetNode: SceneNode | null = null;
+      
+      if (figma.currentPage.selection.length > 0) {
+        targetNode = figma.currentPage.selection[0];
+      } else {
+        // Find first slide
+        if (isInSlides()) {
+          function findFirstSlide(node: SceneNode): SceneNode | null {
+            if ((node as any).type === 'SLIDE') return node;
+            if ('children' in node) {
+              for (const child of (node as any).children) {
+                const found = findFirstSlide(child);
+                if (found) return found;
+              }
+            }
+            return null;
+          }
+          for (const node of figma.currentPage.children) {
+            targetNode = findFirstSlide(node);
+            if (targetNode) break;
+          }
+        }
+      }
+      
+      if (!targetNode) {
+        figma.notify('No slide selected or found', { error: true });
+        return;
+      }
+      
+      const captured = captureNodeTree(targetNode);
+      
+      // Count nodes for feedback
+      function countNodes(node: CapturedNode): number {
+        let count = 1;
+        if (node.children) {
+          for (const child of node.children) {
+            count += countNodes(child);
+          }
+        }
+        return count;
+      }
+      const nodeCount = countNodes(captured);
+      
+      figma.ui.postMessage({ 
+        type: 'template-captured', 
+        template: JSON.stringify(captured, null, 2),
+        nodeCount 
+      });
+      figma.notify(`Captured template: ${nodeCount} nodes from "${targetNode.name}"`);
+    }
+    
+    // SPIKE: Create new slide with design system tokens
+    if (msg.type === 'create-styled-slide') {
+      const layout = (msg as any).layout as string;
+      const content = (msg as any).content as Record<string, any>;
+      const ds = (msg as any).designSystem as any;
+      
+      try {
+        // Find design system colors
+        const getBgColor = (): RGB => {
+          if (ds?.background?.color) return ds.background.color;
+          return COLORS.bg;
+        };
+        
+        const getAccentColor = (): RGB => {
+          const accent = ds?.colors?.find((c: any) => c.name?.includes('accent') || c.name?.includes('green'));
+          if (accent?.rgb) return accent.rgb;
+          return { r: 0.8, g: 1, b: 0.24 }; // lime green default
+        };
+        
+        const getTextColor = (): RGB => {
+          const light = ds?.colors?.find((c: any) => c.name === 'light' || c.hex === '#ffffff');
+          if (light?.rgb) return light.rgb;
+          return COLORS.white;
+        };
+        
+        const getHeadlineFont = (): { family: string; style: string; size: number } => {
+          // Look for a monospace or display font for headlines
+          const headlineFont = ds?.fonts?.find((f: any) => 
+            f.usage?.some((u: string) => u.includes('headline') || u.includes('10'))
+          );
+          if (headlineFont) {
+            return { 
+              family: headlineFont.family, 
+              style: headlineFont.style,
+              size: Math.max(...(headlineFont.sizes || [48]))
+            };
+          }
+          return { family: 'Inter', style: 'Bold', size: 48 };
+        };
+        
+        const getBodyFont = (): { family: string; style: string; size: number } => {
+          const bodyFont = ds?.fonts?.find((f: any) => 
+            f.family === 'Geist' || f.usage?.some((u: string) => u.includes('Card'))
+          );
+          if (bodyFont) {
+            return { 
+              family: bodyFont.family, 
+              style: bodyFont.style,
+              size: bodyFont.sizes?.[0] || 22
+            };
+          }
+          return { family: 'Inter', style: 'Regular', size: 22 };
+        };
+        
+        // Create the slide
+        let slide: SceneNode & ChildrenMixin;
+        
+        if (isInSlides()) {
+          slide = (figma as any).createSlide() as SceneNode & ChildrenMixin;
+        } else {
+          const frame = figma.createFrame();
+          frame.resize(SLIDE_WIDTH, SLIDE_HEIGHT);
+          slide = frame;
+        }
+        
+        // Set background
+        const bgColor = getBgColor();
+        if ('fills' in slide) {
+          (slide as any).fills = [{ type: 'SOLID', color: bgColor }];
+        }
+        
+        // Get fonts to load
+        const headlineFont = getHeadlineFont();
+        const bodyFont = getBodyFont();
+        
+        // Try to load fonts, fall back to Inter if unavailable
+        let headlineFontName: FontName = { family: 'Inter', style: 'Bold' };
+        let bodyFontName: FontName = { family: 'Inter', style: 'Regular' };
+        
+        try {
+          await figma.loadFontAsync({ family: headlineFont.family, style: headlineFont.style });
+          headlineFontName = { family: headlineFont.family, style: headlineFont.style };
+        } catch {
+          await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+        }
+        
+        try {
+          await figma.loadFontAsync({ family: bodyFont.family, style: bodyFont.style });
+          bodyFontName = { family: bodyFont.family, style: bodyFont.style };
+        } catch {
+          await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+        }
+        
+        const accentColor = getAccentColor();
+        const textColor = getTextColor();
+        const cornerRadius = ds?.corners?.cardRadius || 8;
+        
+        // Build layout based on type
+        switch (layout) {
+          case 'quote': {
+            slide.name = content.attribution ? `Quote: ${content.attribution}` : 'Quote';
+            
+            // Quote text (large, centered)
+            const quoteText = figma.createText();
+            quoteText.fontName = headlineFontName;
+            quoteText.fontSize = 36;
+            quoteText.fills = [{ type: 'SOLID', color: textColor }];
+            quoteText.characters = `"${content.quote || 'Quote goes here'}"`;
+            quoteText.x = 200;
+            quoteText.y = 400;
+            quoteText.resize(1520, quoteText.height);
+            quoteText.textAutoResize = 'HEIGHT';
+            quoteText.textAlignHorizontal = 'CENTER';
+            slide.appendChild(quoteText);
+            
+            // Attribution
+            if (content.attribution) {
+              const attrText = figma.createText();
+              attrText.fontName = bodyFontName;
+              attrText.fontSize = 20;
+              attrText.fills = [{ type: 'SOLID', color: accentColor }];
+              attrText.characters = `— ${content.attribution}`;
+              attrText.x = 200;
+              attrText.y = 550;
+              attrText.resize(1520, attrText.height);
+              attrText.textAlignHorizontal = 'CENTER';
+              slide.appendChild(attrText);
+            }
+            break;
+          }
+          
+          case 'bullets': {
+            slide.name = content.headline || 'Bullets';
+            
+            // Headline
+            const headline = figma.createText();
+            headline.fontName = headlineFontName;
+            headline.fontSize = headlineFont.size;
+            headline.fills = [{ type: 'SOLID', color: textColor }];
+            headline.characters = content.headline || 'Headline';
+            headline.x = 60;
+            headline.y = 150;
+            headline.resize(800, headline.height);
+            headline.textAutoResize = 'HEIGHT';
+            slide.appendChild(headline);
+            
+            // Bullets container with Auto Layout
+            const bulletsFrame = figma.createFrame();
+            bulletsFrame.name = 'Bullets';
+            bulletsFrame.layoutMode = 'VERTICAL';
+            bulletsFrame.itemSpacing = ds?.spacing?.itemSpacing || 24;
+            bulletsFrame.primaryAxisSizingMode = 'AUTO';
+            bulletsFrame.counterAxisSizingMode = 'AUTO';
+            bulletsFrame.fills = [];
+            bulletsFrame.x = 60;
+            bulletsFrame.y = 300;
+            
+            const bullets = content.bullets || ['First point', 'Second point', 'Third point'];
+            for (const bullet of bullets) {
+              const bulletText = figma.createText();
+              bulletText.fontName = bodyFontName;
+              bulletText.fontSize = bodyFont.size;
+              bulletText.fills = [{ type: 'SOLID', color: textColor }];
+              bulletText.characters = `• ${bullet}`;
+              bulletText.resize(800, bulletText.height);
+              bulletText.textAutoResize = 'HEIGHT';
+              bulletsFrame.appendChild(bulletText);
+            }
+            
+            slide.appendChild(bulletsFrame);
+            break;
+          }
+          
+          case 'big-idea': {
+            slide.name = content.headline || 'Big Idea';
+            
+            // Large headline
+            const headline = figma.createText();
+            headline.fontName = headlineFontName;
+            headline.fontSize = 56;
+            headline.fills = [{ type: 'SOLID', color: textColor }];
+            headline.characters = content.headline || 'The big idea';
+            headline.x = 200;
+            headline.y = 380;
+            headline.resize(1520, headline.height);
+            headline.textAutoResize = 'HEIGHT';
+            slide.appendChild(headline);
+            
+            // Subline
+            if (content.subline) {
+              const subline = figma.createText();
+              subline.fontName = bodyFontName;
+              subline.fontSize = 24;
+              subline.fills = [{ type: 'SOLID', color: { r: textColor.r * 0.7, g: textColor.g * 0.7, b: textColor.b * 0.7 } }];
+              subline.characters = content.subline;
+              subline.x = 200;
+              subline.y = 500;
+              subline.resize(1520, subline.height);
+              subline.textAutoResize = 'HEIGHT';
+              slide.appendChild(subline);
+            }
+            break;
+          }
+          
+          case 'section': {
+            slide.name = content.headline || 'Section';
+            
+            // Section label with accent border
+            const labelFrame = figma.createFrame();
+            labelFrame.name = 'Section Label';
+            labelFrame.layoutMode = 'HORIZONTAL';
+            labelFrame.paddingTop = 12;
+            labelFrame.paddingBottom = 12;
+            labelFrame.paddingLeft = 16;
+            labelFrame.paddingRight = 16;
+            labelFrame.primaryAxisSizingMode = 'AUTO';
+            labelFrame.counterAxisSizingMode = 'AUTO';
+            labelFrame.fills = [];
+            labelFrame.strokes = [{ type: 'SOLID', color: accentColor }];
+            labelFrame.strokeWeight = 2;
+            labelFrame.cornerRadius = cornerRadius;
+            labelFrame.x = 60;
+            labelFrame.y = 480;
+            
+            const labelText = figma.createText();
+            labelText.fontName = headlineFontName;
+            labelText.fontSize = 24;
+            labelText.fills = [{ type: 'SOLID', color: accentColor }];
+            labelText.characters = (content.headline || 'SECTION').toUpperCase();
+            labelFrame.appendChild(labelText);
+            
+            slide.appendChild(labelFrame);
+            break;
+          }
+        }
+        
+        // Select the new slide
+        figma.currentPage.selection = [slide];
+        figma.viewport.scrollAndZoomIntoView([slide]);
+        
+        figma.notify(`✓ Created "${layout}" slide`);
+        figma.ui.postMessage({ 
+          type: 'styled-slide-created', 
+          success: true, 
+          slideId: slide.id
+        });
+        
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Create styled slide error:', errorMsg);
+        figma.notify(`Error: ${errorMsg}`, { error: true });
+        figma.ui.postMessage({ type: 'styled-slide-created', success: false, error: errorMsg });
+      }
+    }
+    
+    // SPIKE: Instantiate template (clone slide + update content)
+    if (msg.type === 'instantiate-template') {
+      const sourceId = (msg as any).sourceId as string;
+      const contentMap = (msg as any).contentMap as Record<string, string>; // slot_id -> new text
+      
+      if (!sourceId) {
+        figma.notify('No source slide ID provided', { error: true });
+        figma.ui.postMessage({ type: 'instantiated', success: false, error: 'No source ID' });
+        return;
+      }
+      
+      try {
+        // Find source node
+        const sourceNode = await (figma as any).getNodeByIdAsync(sourceId);
+        if (!sourceNode) {
+          figma.notify(`Source slide not found: ${sourceId}`, { error: true });
+          figma.ui.postMessage({ type: 'instantiated', success: false, error: 'Source not found' });
+          return;
+        }
+        
+        // Clone the slide
+        const clonedSlide = sourceNode.clone();
+        clonedSlide.name = `${sourceNode.name} (copy)`;
+        
+        // If it's a slide, insert it after the source
+        if ((sourceNode as any).type === 'SLIDE') {
+          // For Figma Slides, we need to insert the clone properly
+          const parent = sourceNode.parent;
+          if (parent && 'insertChild' in parent) {
+            const sourceIndex = parent.children.indexOf(sourceNode);
+            (parent as any).insertChild(sourceIndex + 1, clonedSlide);
+          }
+        }
+        
+        // Load fonts we might need
+        await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+        await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+        
+        // Update text nodes based on content map
+        let updated = 0;
+        const failed: string[] = [];
+        
+        // Build a map of old ID -> new node in clone
+        // Since clone creates new IDs, we need to match by structure
+        // For now, use a simpler approach: find text nodes by walking both trees in parallel
+        
+        async function updateTextNodes(
+          original: SceneNode,
+          cloned: SceneNode,
+          contentMap: Record<string, string>
+        ): Promise<void> {
+          // If this node's original ID is in the content map, update the cloned version
+          if (original.id in contentMap && cloned.type === 'TEXT') {
+            const textNode = cloned as TextNode;
+            const newText = contentMap[original.id];
+            
+            try {
+              // Load ALL fonts used in this text node (handles mixed fonts too)
+              const fontName = textNode.fontName;
+              if (fontName === figma.mixed) {
+                // Mixed fonts - need to load each segment's font
+                const len = textNode.characters.length;
+                for (let i = 0; i < len; i++) {
+                  const segmentFont = textNode.getRangeFontName(i, i + 1);
+                  if (segmentFont !== figma.mixed) {
+                    await figma.loadFontAsync(segmentFont as FontName);
+                  }
+                }
+              } else {
+                // Single font
+                await figma.loadFontAsync(fontName as FontName);
+              }
+              
+              textNode.characters = newText;
+              updated++;
+            } catch (fontError) {
+              // Font unavailable - log and skip this node
+              const fontInfo = textNode.fontName !== figma.mixed 
+                ? `${(textNode.fontName as FontName).family} ${(textNode.fontName as FontName).style}`
+                : 'mixed fonts';
+              console.warn(`Skipping text node ${original.id}: font "${fontInfo}" unavailable`);
+              failed.push(`${original.id} (font: ${fontInfo})`);
+            }
+          }
+          
+          // Recurse into children
+          if ('children' in original && 'children' in cloned) {
+            const origChildren = (original as any).children;
+            const clonedChildren = (cloned as any).children;
+            
+            // Walk children in parallel (clone preserves order)
+            for (let i = 0; i < Math.min(origChildren.length, clonedChildren.length); i++) {
+              await updateTextNodes(origChildren[i], clonedChildren[i], contentMap);
+            }
+          }
+        }
+        
+        await updateTextNodes(sourceNode, clonedSlide, contentMap || {});
+        
+        // Select the new slide
+        figma.currentPage.selection = [clonedSlide];
+        figma.viewport.scrollAndZoomIntoView([clonedSlide]);
+        
+        figma.notify(`✓ Created new slide with ${updated} text updates`);
+        figma.ui.postMessage({ 
+          type: 'instantiated', 
+          success: true, 
+          newSlideId: clonedSlide.id,
+          updated,
+          failed 
+        });
+        
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Instantiate error:', errorMsg);
+        figma.notify(`Error: ${errorMsg}`, { error: true });
+        figma.ui.postMessage({ type: 'instantiated', success: false, error: errorMsg });
+      }
+    }
+    
+    // Delete slides by ID
+    if (msg.type === 'delete-slides') {
+      const slideIds = (msg as any).slideIds as string[];
+      
+      if (!slideIds || slideIds.length === 0) {
+        figma.notify('No slide IDs provided', { error: true });
+        figma.ui.postMessage({ type: 'slides-deleted', deleted: 0, failed: [], deletedNames: [] });
+        return;
+      }
+      
+      let deleted = 0;
+      const failed: string[] = [];
+      const deletedNames: string[] = [];
+      
+      for (const slideId of slideIds) {
+        try {
+          const node = await (figma as any).getNodeByIdAsync(slideId);
+          
+          if (!node) {
+            console.warn(`Slide not found: ${slideId}`);
+            failed.push(slideId);
+            continue;
+          }
+          
+          // Check if it's a slide
+          if ((node as any).type !== 'SLIDE' && node.type !== 'FRAME') {
+            console.warn(`Node ${slideId} is not a slide (type: ${node.type})`);
+            failed.push(slideId);
+            continue;
+          }
+          
+          // Capture name before deleting
+          const slideName = node.name || slideId;
+          
+          // Remove from stored mapping
+          const mapping = await figma.clientStorage.getAsync(MAPPING_KEY) || {};
+          for (const [irId, figmaId] of Object.entries(mapping)) {
+            if (figmaId === slideId) {
+              delete mapping[irId];
+            }
+          }
+          await figma.clientStorage.setAsync(MAPPING_KEY, mapping);
+          
+          // Delete the node
+          node.remove();
+          deleted++;
+          deletedNames.push(slideName);
+          
+          console.log(`Deleted slide: ${slideName} (${slideId})`);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error(`Failed to delete ${slideId}:`, errorMsg);
+          failed.push(slideId);
+        }
+      }
+      
+      // Rich notification with names
+      if (deleted > 0) {
+        const nameList = deletedNames.length <= 3 
+          ? deletedNames.map(n => `"${n}"`).join(', ')
+          : `"${deletedNames[0]}" + ${deletedNames.length - 1} more`;
+        figma.notify(`✓ Deleted: ${nameList}`);
+      }
+      if (failed.length > 0) {
+        figma.notify(`${failed.length} slides not found`, { error: true });
+      }
+      
+      figma.ui.postMessage({ type: 'slides-deleted', deleted, failed, deletedNames });
+    }
+    
+    // Reorder slides
+    if (msg.type === 'reorder-slides') {
+      const slideIds = (msg as any).slideIds as string[];
+      
+      if (!slideIds || slideIds.length === 0) {
+        figma.notify('No slide IDs provided', { error: true });
+        figma.ui.postMessage({ type: 'slides-reordered', success: false, error: 'No slide IDs provided' });
+        return;
+      }
+      
+      try {
+        // Get all slide nodes in requested order, capture before state
+        const slides: SceneNode[] = [];
+        const beforeOrder: string[] = [];
+        const afterOrder: string[] = [];
+        
+        for (const slideId of slideIds) {
+          const node = await (figma as any).getNodeByIdAsync(slideId);
+          if (node && ((node as any).type === 'SLIDE' || node.type === 'FRAME')) {
+            slides.push(node);
+            afterOrder.push(node.name || slideId);
+          } else {
+            console.warn(`Slide not found or wrong type: ${slideId}`);
+          }
+        }
+        
+        if (slides.length === 0) {
+          figma.ui.postMessage({ type: 'slides-reordered', success: false, error: 'No valid slides found' });
+          return;
+        }
+        
+        // Get the parent container (SLIDE_ROW for Figma Slides)
+        const parent = slides[0].parent;
+        if (!parent || !('insertChild' in parent)) {
+          figma.ui.postMessage({ type: 'slides-reordered', success: false, error: 'Cannot access slide container' });
+          return;
+        }
+        
+        // Capture current order before reordering
+        const currentChildren = (parent as any).children || [];
+        for (const child of currentChildren) {
+          if ((child as any).type === 'SLIDE' || child.type === 'FRAME') {
+            beforeOrder.push(child.name || child.id);
+          }
+        }
+        
+        // Reorder by inserting each slide at its new position
+        // We go in reverse order and insert at position 0, which effectively reverses the order
+        // Then we reverse our input to get the correct final order
+        for (let i = slides.length - 1; i >= 0; i--) {
+          const slide = slides[i];
+          // Remove and re-insert at the beginning
+          // This pushes earlier-inserted slides forward
+          (parent as any).insertChild(0, slide);
+        }
+        
+        // Show what moved
+        const movedSlides: string[] = [];
+        for (let i = 0; i < Math.min(beforeOrder.length, afterOrder.length); i++) {
+          if (beforeOrder[i] !== afterOrder[i]) {
+            movedSlides.push(afterOrder[i]);
+          }
+        }
+        
+        if (movedSlides.length > 0) {
+          const moveList = movedSlides.length <= 2
+            ? movedSlides.map(n => `"${n}"`).join(', ')
+            : `${movedSlides.length} slides`;
+          figma.notify(`✓ Reordered: ${moveList} moved`);
+        } else {
+          figma.notify(`✓ Order unchanged (${slides.length} slides)`);
+        }
+        
+        figma.ui.postMessage({ 
+          type: 'slides-reordered', 
+          success: true, 
+          count: slides.length,
+          beforeOrder,
+          afterOrder 
+        });
+        
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Reorder error:', errorMsg);
+        figma.notify(`Error: ${errorMsg}`, { error: true });
+        figma.ui.postMessage({ type: 'slides-reordered', success: false, error: errorMsg });
+      }
     }
     
     if (msg.type === 'close') {

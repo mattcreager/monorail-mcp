@@ -334,10 +334,18 @@
       
       <div class="divider"></div>
       
-      <label>Export Current Deck</label>
-      <button class="btn btn-secondary" id="export-btn">Export as IR</button>
-      <textarea id="ir-output" placeholder="Exported IR..." readonly></textarea>
+      <label>Pull Current Deck</label>
+      <button class="btn btn-secondary" id="export-btn">Pull as IR</button>
+      <textarea id="ir-output" placeholder="Pulled IR will appear here..." readonly></textarea>
       <button class="btn btn-secondary" id="copy-btn" style="display: none;">Copy to Clipboard</button>
+      
+      <div class="divider"></div>
+      
+      <label>🧪 Spike: Template Capture</label>
+      <button class="btn btn-secondary" id="capture-btn">Capture Selected Slide</button>
+      <textarea id="template-output" placeholder="Captured template structure..." readonly style="height: 200px;"></textarea>
+      <button class="btn btn-secondary" id="copy-template-btn" style="display: none;">Copy Template</button>
+      <p class="help">Select a slide/frame in Figma, then click to capture full structure</p>
     </div>
   </div>
   
@@ -445,20 +453,38 @@
             } else if (msg.type === 'push-ir') {
               const count = msg.ir?.slides?.length || 0;
               irInput.value = JSON.stringify(msg.ir, null, 2);
-              addActivity('↓', `Received ${count} slides from Claude`);
+              const posText = msg.startIndex !== undefined ? ` at position ${msg.startIndex}` : '';
+              addActivity('↓', `Received ${count} slides from Claude${posText}`);
               
               if (msg.autoApply) {
-                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir) } }, '*');
+                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), startIndex: msg.startIndex } }, '*');
               } else {
                 showToast(`Received ${count} slides`);
               }
             } else if (msg.type === 'request-export') {
-              addActivity('↑', 'Claude requested deck export');
+              addActivity('↑', 'Claude pulling deck');
               parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
             } else if (msg.type === 'patch-elements') {
               const count = msg.patches?.changes?.length || 0;
               addActivity('✎', `Claude patching ${count} elements`);
               parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches } }, '*');
+            } else if (msg.type === 'capture-template') {
+              addActivity('🧪', 'Claude requesting template capture');
+              parent.postMessage({ pluginMessage: { type: 'capture-template' } }, '*');
+            } else if (msg.type === 'instantiate-template') {
+              addActivity('🆕', 'Claude creating slide from template');
+              parent.postMessage({ pluginMessage: { type: 'instantiate-template', sourceId: msg.sourceId, contentMap: msg.contentMap } }, '*');
+            } else if (msg.type === 'create-styled-slide') {
+              addActivity('🎨', `Claude creating "${msg.layout}" slide`);
+              parent.postMessage({ pluginMessage: { type: 'create-styled-slide', layout: msg.layout, content: msg.content, designSystem: msg.designSystem } }, '*');
+            } else if (msg.type === 'delete-slides') {
+              const count = msg.slideIds?.length || 0;
+              addActivity('🗑️', `Claude deleting ${count} slides`);
+              parent.postMessage({ pluginMessage: { type: 'delete-slides', slideIds: msg.slideIds } }, '*');
+            } else if (msg.type === 'reorder-slides') {
+              const count = msg.slideIds?.length || 0;
+              addActivity('↕️', `Claude reordering ${count} slides`);
+              parent.postMessage({ pluginMessage: { type: 'reorder-slides', slideIds: msg.slideIds } }, '*');
             }
           } catch (e) {
             console.error('[WS] Failed to parse message:', e);
@@ -507,7 +533,26 @@
     
     exportBtn.onclick = () => {
       parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
-      addActivity('◀', 'Manual export requested');
+      addActivity('◀', 'Manual pull requested');
+    };
+    
+    // Spike: Template capture
+    const captureBtn = document.getElementById('capture-btn');
+    const templateOutput = document.getElementById('template-output');
+    const copyTemplateBtn = document.getElementById('copy-template-btn');
+    
+    captureBtn.onclick = () => {
+      parent.postMessage({ pluginMessage: { type: 'capture-template' } }, '*');
+      addActivity('🧪', 'Capturing template structure...');
+    };
+    
+    copyTemplateBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(templateOutput.value);
+        showToast('Template copied!');
+      } catch (e) {
+        showToast('Failed to copy', true);
+      }
     };
     
     copyBtn.onclick = async () => {
@@ -525,19 +570,51 @@
       if (!msg) return;
       
       if (msg.type === 'applied') {
-        addActivity('✓', `Applied ${msg.count} slides`);
-        showToast(`Applied ${msg.count} slides!`);
+        // Build rich activity message
+        const parts = [];
+        if (msg.created > 0) {
+          const names = msg.createdNames || [];
+          const nameText = names.length <= 2 
+            ? names.map(n => `"${n}"`).join(', ')
+            : `${msg.created} slides`;
+          parts.push(`Created ${nameText}`);
+        }
+        if (msg.updated > 0) {
+          const names = msg.updatedNames || [];
+          const nameText = names.length <= 2
+            ? names.map(n => `"${n}"`).join(', ')
+            : `${msg.updated} slides`;
+          parts.push(`Updated ${nameText}`);
+        }
+        if (msg.skipped > 0) {
+          parts.push(`${msg.skipped} skipped`);
+        }
+        
+        const posText = msg.startIndex !== undefined ? ` at pos ${msg.startIndex}` : '';
+        const activityText = parts.join(' • ') + posText || `Applied ${msg.count} slides`;
+        
+        addActivity('✓', activityText);
+        showToast(activityText);
         irInput.value = '';
         
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'applied', count: msg.count }));
+          ws.send(JSON.stringify({ 
+            type: 'applied', 
+            count: msg.count,
+            created: msg.created,
+            updated: msg.updated,
+            skipped: msg.skipped,
+            createdNames: msg.createdNames,
+            updatedNames: msg.updatedNames,
+            startIndex: msg.startIndex
+          }));
         }
       }
       
       if (msg.type === 'exported') {
         const parsed = JSON.parse(msg.ir);
         const count = parsed.slides?.length || 0;
-        addActivity('✓', `Exported ${count} slides`);
+        addActivity('✓', `Pulled ${count} slides`);
         irOutput.value = msg.ir;
         copyBtn.style.display = 'block';
         
@@ -559,6 +636,143 @@
         
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'patched', updated: msg.updated, failed: msg.failed }));
+        }
+      }
+      
+      // Spike: Template capture result
+      if (msg.type === 'template-captured') {
+        templateOutput.value = msg.template;
+        copyTemplateBtn.style.display = 'block';
+        addActivity('✓', `Captured ${msg.nodeCount} nodes`);
+        showToast(`Captured ${msg.nodeCount} nodes!`);
+        
+        // Send through WebSocket if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'template-captured', 
+            template: JSON.parse(msg.template),
+            nodeCount: msg.nodeCount 
+          }));
+        }
+      }
+      
+      // Spike: Instantiate template result
+      if (msg.type === 'instantiated') {
+        if (msg.success) {
+          addActivity('✓', `Created new slide (${msg.updated} updates)`);
+          showToast(`Created new slide!`);
+        } else {
+          addActivity('✗', `Failed: ${msg.error}`);
+          showToast(`Failed: ${msg.error}`, true);
+        }
+        
+        // Send through WebSocket if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'instantiated', 
+            success: msg.success,
+            newSlideId: msg.newSlideId,
+            updated: msg.updated,
+            failed: msg.failed,
+            error: msg.error
+          }));
+        }
+      }
+      
+      // Spike: Create styled slide result
+      if (msg.type === 'styled-slide-created') {
+        if (msg.success) {
+          addActivity('✓', `Created styled slide`);
+          showToast(`Created styled slide!`);
+        } else {
+          addActivity('✗', `Failed: ${msg.error}`);
+          showToast(`Failed: ${msg.error}`, true);
+        }
+        
+        // Send through WebSocket if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'styled-slide-created', 
+            success: msg.success,
+            slideId: msg.slideId,
+            error: msg.error
+          }));
+        }
+      }
+      
+      // Delete slides result
+      if (msg.type === 'slides-deleted') {
+        const deleted = msg.deleted || 0;
+        const failed = msg.failed?.length || 0;
+        const names = msg.deletedNames || [];
+        
+        // Build rich activity message
+        let activityText = '';
+        if (deleted > 0) {
+          const nameList = names.length <= 2
+            ? names.map(n => `"${n}"`).join(', ')
+            : `${names[0]} + ${names.length - 1} more`;
+          activityText = `Deleted: ${nameList}`;
+        }
+        if (failed > 0) {
+          activityText += activityText ? ` (${failed} not found)` : `${failed} slides not found`;
+        }
+        
+        addActivity(failed > 0 ? '⚠' : '🗑️', activityText || `Deleted ${deleted} slides`);
+        showToast(activityText || `Deleted ${deleted} slides!`, failed > 0);
+        
+        // Send through WebSocket if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'slides-deleted', 
+            deleted: msg.deleted,
+            failed: msg.failed,
+            deletedNames: msg.deletedNames
+          }));
+        }
+      }
+      
+      // Reorder slides result
+      if (msg.type === 'slides-reordered') {
+        if (msg.success) {
+          // Show what changed
+          const before = msg.beforeOrder || [];
+          const after = msg.afterOrder || [];
+          let activityText = '';
+          
+          // Find slides that moved
+          const moved = [];
+          for (let i = 0; i < Math.min(before.length, after.length); i++) {
+            if (before[i] !== after[i]) {
+              moved.push(after[i]);
+            }
+          }
+          
+          if (moved.length > 0 && moved.length <= 3) {
+            activityText = `Moved: ${moved.map(n => `"${n}"`).join(', ')}`;
+          } else if (moved.length > 3) {
+            activityText = `Reordered ${moved.length} slides`;
+          } else {
+            activityText = `Order unchanged (${msg.count} slides)`;
+          }
+          
+          addActivity('↕️', activityText);
+          showToast(activityText);
+        } else {
+          addActivity('✗', `Reorder failed: ${msg.error}`);
+          showToast(`Reorder failed: ${msg.error}`, true);
+        }
+        
+        // Send through WebSocket if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'slides-reordered', 
+            success: msg.success,
+            count: msg.count,
+            beforeOrder: msg.beforeOrder,
+            afterOrder: msg.afterOrder,
+            error: msg.error
+          }));
         }
       }
     };

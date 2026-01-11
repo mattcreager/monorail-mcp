@@ -53,6 +53,489 @@ interface ValidationWarning {
 }
 
 // =============================================================================
+// TEMPLATE EXTRACTION TYPES
+// =============================================================================
+
+interface CapturedNode {
+  id: string;
+  type: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fills?: any[];
+  strokes?: any[];
+  strokeWeight?: number;
+  cornerRadius?: number;
+  effects?: any[];
+  layoutMode?: string;
+  itemSpacing?: number;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  characters?: string;
+  fontSize?: number;
+  fontFamily?: string;
+  fontStyle?: string;
+  textAlignHorizontal?: string;
+  textAlignVertical?: string;
+  lineHeight?: any;
+  letterSpacing?: any;
+  children?: CapturedNode[];
+}
+
+interface TemplateSlot {
+  id: string;                    // Figma node ID
+  role: string;                  // Inferred role: section_label, headline, accent_text, etc.
+  depth: number;                 // Nesting depth in tree
+  bounds: { x: number; y: number; width: number; height: number };
+  // Text styling (for TEXT nodes)
+  text?: {
+    sample: string;              // First 50 chars of text content
+    fontSize: number;
+    fontFamily: string;
+    fontStyle: string;
+    color?: { r: number; g: number; b: number };
+  };
+  // Frame styling (for container slots)
+  frame?: {
+    fills: any[];
+    strokes: any[];
+    cornerRadius?: number;
+    layoutMode?: string;
+    itemSpacing?: number;
+  };
+  parentName: string;            // Name of parent frame (for context)
+}
+
+interface ComplexRegion {
+  id: string;
+  name: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  nodeCount: number;             // How many nodes inside
+  reason: string;                // Why it's marked complex
+}
+
+interface ExtractedTemplate {
+  source_slide_id: string;
+  source_slide_name: string;
+  slots: TemplateSlot[];
+  complex_regions: ComplexRegion[];
+  background?: any;              // Slide background fill
+  dimensions: { width: number; height: number };
+  stats: {
+    total_nodes_captured: number;
+    slots_identified: number;
+    nodes_filtered: number;
+  };
+}
+
+// =============================================================================
+// DESIGN SYSTEM TYPES
+// =============================================================================
+
+interface ColorToken {
+  name: string;
+  rgb: { r: number; g: number; b: number };
+  hex: string;
+  usage: string[];  // Where this color was found
+}
+
+interface FontToken {
+  family: string;
+  style: string;
+  sizes: number[];  // All sizes seen
+  usage: string[];  // What roles use this font
+}
+
+interface DesignSystem {
+  colors: ColorToken[];
+  fonts: FontToken[];
+  spacing: {
+    cardPadding?: number;
+    itemSpacing?: number;
+    slideMargin?: number;
+  };
+  corners: {
+    cardRadius?: number;
+    containerRadius?: number;
+  };
+  background: any;
+}
+
+// =============================================================================
+// TEMPLATE EXTRACTION LOGIC
+// =============================================================================
+
+const MAX_SLOT_DEPTH = 2;  // Don't look deeper than 2 levels for slots
+
+/**
+ * Convert RGB to hex string
+ */
+function rgbToHex(r: number, g: number, b: number): string {
+  const toHex = (n: number) => Math.round(n * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/**
+ * Extract design system tokens from a captured template
+ */
+function extractDesignSystem(captured: CapturedNode): DesignSystem {
+  const colorMap = new Map<string, ColorToken>();
+  const fontMap = new Map<string, FontToken>();
+  let cardPadding: number | undefined;
+  let itemSpacing: number | undefined;
+  let cardRadius: number | undefined;
+  let containerRadius: number | undefined;
+  
+  function addColor(rgb: { r: number; g: number; b: number }, usage: string): void {
+    const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
+    if (colorMap.has(hex)) {
+      const existing = colorMap.get(hex)!;
+      if (!existing.usage.includes(usage)) {
+        existing.usage.push(usage);
+      }
+    } else {
+      // Auto-name based on characteristics
+      let name = 'color';
+      if (rgb.r < 0.15 && rgb.g < 0.15 && rgb.b < 0.15) name = 'dark';
+      else if (rgb.r > 0.9 && rgb.g > 0.9 && rgb.b > 0.9) name = 'light';
+      else if (rgb.g > rgb.r && rgb.g > rgb.b) name = 'accent-green';
+      else if (rgb.r > rgb.g && rgb.r > rgb.b) name = 'accent-red';
+      else if (rgb.b > rgb.r && rgb.b > rgb.g) name = 'accent-blue';
+      
+      colorMap.set(hex, { name, rgb, hex, usage: [usage] });
+    }
+  }
+  
+  function addFont(family: string, style: string, size: number, usage: string): void {
+    const key = `${family}|${style}`;
+    if (fontMap.has(key)) {
+      const existing = fontMap.get(key)!;
+      if (!existing.sizes.includes(size)) {
+        existing.sizes.push(size);
+      }
+      if (!existing.usage.includes(usage)) {
+        existing.usage.push(usage);
+      }
+    } else {
+      fontMap.set(key, { family, style, sizes: [size], usage: [usage] });
+    }
+  }
+  
+  function walk(node: CapturedNode, depth: number, context: string): void {
+    // Extract colors from fills
+    if (node.fills) {
+      for (const fill of node.fills) {
+        if (fill.type === 'SOLID' && fill.color && fill.visible !== false) {
+          addColor(fill.color, `${context}:fill`);
+        }
+      }
+    }
+    
+    // Extract colors from strokes
+    if (node.strokes) {
+      for (const stroke of node.strokes) {
+        if (stroke.type === 'SOLID' && stroke.color && stroke.visible !== false) {
+          addColor(stroke.color, `${context}:stroke`);
+        }
+      }
+    }
+    
+    // Extract font info from text nodes
+    if (node.type === 'TEXT' && node.fontFamily && node.fontSize) {
+      addFont(node.fontFamily, node.fontStyle || 'Regular', node.fontSize, context);
+      
+      // Also get text color
+      if (node.fills) {
+        for (const fill of node.fills) {
+          if (fill.type === 'SOLID' && fill.color) {
+            addColor(fill.color, `${context}:text`);
+          }
+        }
+      }
+    }
+    
+    // Extract spacing from Auto Layout frames
+    if (node.type === 'FRAME' && node.layoutMode && node.layoutMode !== 'NONE') {
+      if (node.itemSpacing !== undefined) {
+        itemSpacing = node.itemSpacing;
+      }
+      if (node.paddingTop !== undefined && node.paddingTop > 0) {
+        cardPadding = node.paddingTop;
+      }
+    }
+    
+    // Extract corner radius
+    if (node.cornerRadius !== undefined && node.cornerRadius > 0) {
+      const nameLower = node.name.toLowerCase();
+      if (nameLower.includes('card') || nameLower.includes('block')) {
+        cardRadius = node.cornerRadius;
+      } else {
+        containerRadius = node.cornerRadius;
+      }
+    }
+    
+    // Recurse (but not too deep)
+    if (node.children && depth < 3) {
+      for (const child of node.children) {
+        walk(child, depth + 1, child.name || context);
+      }
+    }
+  }
+  
+  walk(captured, 0, captured.name);
+  
+  return {
+    colors: Array.from(colorMap.values()),
+    fonts: Array.from(fontMap.values()),
+    spacing: { cardPadding, itemSpacing, slideMargin: 60 },
+    corners: { cardRadius, containerRadius },
+    background: captured.fills?.[0] || null,
+  };
+}
+
+/**
+ * Infer the role of a text node based on heuristics:
+ * - Position (y < 200 = likely header area)
+ * - Font size (large = headline, small = label/caption)
+ * - Text content (ALL CAPS = section label)
+ * - Parent name (contextual clues)
+ */
+function inferTextRole(
+  node: CapturedNode,
+  depth: number,
+  parentName: string
+): string {
+  const text = node.characters || "";
+  const fontSize = node.fontSize || 24;
+  const y = node.y;
+  const isAllCaps = text === text.toUpperCase() && text.length > 2;
+  
+  // Section label: small, near top, often ALL CAPS
+  if (y < 200 && fontSize <= 24 && isAllCaps) {
+    return "section_label";
+  }
+  
+  // Headline: large, bold, upper portion
+  if (fontSize >= 48 && y < 500) {
+    return "headline";
+  }
+  
+  // Subline/tagline: medium size, under headline position
+  if (fontSize >= 28 && fontSize < 48 && y > 400 && y < 650) {
+    return "subline";
+  }
+  
+  // Number/stat: large number, often in a card
+  if (/^\d+[%xX]?$/.test(text.trim()) || /^\$[\d,]+/.test(text.trim())) {
+    return "stat_number";
+  }
+  
+  // Card title: in a named container like "Card" or "Block"
+  const parentLower = parentName.toLowerCase();
+  if (parentLower.includes("card") || parentLower.includes("block") || parentLower.includes("point")) {
+    if (fontSize >= 20 && text.length < 100) {
+      return "card_title";
+    }
+    return "card_body";
+  }
+  
+  // Caption/label: small text
+  if (fontSize <= 18) {
+    return "caption";
+  }
+  
+  // Default: body text
+  return "body_text";
+}
+
+/**
+ * Infer the role of a frame based on heuristics:
+ * - Name (explicit naming like "Card", "Header")
+ * - Position
+ * - Child count and types
+ */
+function inferFrameRole(node: CapturedNode, depth: number): string | null {
+  const nameLower = node.name.toLowerCase();
+  
+  // Explicitly named structural frames
+  if (nameLower.includes("card") || nameLower.includes("block")) {
+    return "repeatable_card";
+  }
+  if (nameLower.includes("header") || nameLower.includes("label")) {
+    return "header_container";
+  }
+  if (nameLower.includes("content") || nameLower.includes("body")) {
+    return "content_container";
+  }
+  
+  // Numbered frames (e.g., "01", "1") suggest repeatable items
+  if (/^\d{1,2}$/.test(node.name.trim())) {
+    return "numbered_item";
+  }
+  
+  // Frames with Auto Layout at depth 1-2 are likely structural
+  if (node.layoutMode && node.layoutMode !== "NONE" && depth <= 2) {
+    return "layout_container";
+  }
+  
+  return null;  // Not a slot-worthy frame
+}
+
+/**
+ * Count total nodes in a subtree (for stats)
+ */
+function countNodes(node: CapturedNode): number {
+  let count = 1;
+  if (node.children) {
+    for (const child of node.children) {
+      count += countNodes(child);
+    }
+  }
+  return count;
+}
+
+/**
+ * Extract a compact template from a captured node tree.
+ * 
+ * Strategy:
+ * - Walk tree with depth tracking
+ * - TEXT nodes at depth 1-2 become slots
+ * - Named frames (Card, Block, etc.) at depth 1-2 become slots
+ * - Subtrees at depth > 2 become complex_regions (bounds only)
+ */
+function extractTemplate(captured: CapturedNode): ExtractedTemplate {
+  const slots: TemplateSlot[] = [];
+  const complexRegions: ComplexRegion[] = [];
+  let totalNodesInCapture = countNodes(captured);
+  let nodesFiltered = 0;
+  
+  // Extract background from slide root
+  let background: any = null;
+  if (captured.fills && captured.fills.length > 0) {
+    background = captured.fills[0];
+  }
+  
+  /**
+   * Recursive walker with depth tracking
+   */
+  function walk(node: CapturedNode, depth: number, parentName: string): void {
+    // Skip the slide root itself (depth 0)
+    if (depth === 0) {
+      if (node.children) {
+        for (const child of node.children) {
+          walk(child, depth + 1, node.name);
+        }
+      }
+      return;
+    }
+    
+    // At depth > MAX_SLOT_DEPTH, mark as complex region and stop
+    if (depth > MAX_SLOT_DEPTH) {
+      const nodeCount = countNodes(node);
+      // Only track complex regions if they have significant content
+      if (nodeCount >= 3) {
+        complexRegions.push({
+          id: node.id,
+          name: node.name,
+          bounds: { x: node.x, y: node.y, width: node.width, height: node.height },
+          nodeCount,
+          reason: `depth=${depth}, too deep`,
+        });
+        nodesFiltered += nodeCount;
+      }
+      return;  // Don't recurse further
+    }
+    
+    // TEXT nodes at depth 1-2 are slots
+    if (node.type === "TEXT") {
+      const role = inferTextRole(node, depth, parentName);
+      
+      // Extract fill color if solid
+      let textColor: { r: number; g: number; b: number } | undefined;
+      if (node.fills && node.fills.length > 0 && node.fills[0].type === "SOLID") {
+        textColor = node.fills[0].color;
+      }
+      
+      slots.push({
+        id: node.id,
+        role,
+        depth,
+        bounds: { x: node.x, y: node.y, width: node.width, height: node.height },
+        text: {
+          sample: (node.characters || "").substring(0, 50),
+          fontSize: node.fontSize || 24,
+          fontFamily: node.fontFamily || "Inter",
+          fontStyle: node.fontStyle || "Regular",
+          color: textColor,
+        },
+        parentName,
+      });
+      return;  // TEXT nodes have no children
+    }
+    
+    // FRAME nodes: check if they should be a slot themselves
+    if (node.type === "FRAME") {
+      const frameRole = inferFrameRole(node, depth);
+      
+      if (frameRole) {
+        // This frame is slot-worthy - capture its styling
+        slots.push({
+          id: node.id,
+          role: frameRole,
+          depth,
+          bounds: { x: node.x, y: node.y, width: node.width, height: node.height },
+          frame: {
+            fills: node.fills || [],
+            strokes: node.strokes || [],
+            cornerRadius: node.cornerRadius,
+            layoutMode: node.layoutMode,
+            itemSpacing: node.itemSpacing,
+          },
+          parentName,
+        });
+      }
+    }
+    
+    // Recurse into children
+    if (node.children) {
+      for (const child of node.children) {
+        walk(child, depth + 1, node.name);
+      }
+    }
+  }
+  
+  // Start walking from root
+  walk(captured, 0, "");
+  
+  // Sort slots by position (top-left to bottom-right)
+  slots.sort((a, b) => {
+    // Group by rough Y position (within 50px = same row)
+    const rowA = Math.floor(a.bounds.y / 50);
+    const rowB = Math.floor(b.bounds.y / 50);
+    if (rowA !== rowB) return rowA - rowB;
+    return a.bounds.x - b.bounds.x;
+  });
+  
+  return {
+    source_slide_id: captured.id,
+    source_slide_name: captured.name,
+    slots,
+    complex_regions: complexRegions,
+    background,
+    dimensions: { width: captured.width, height: captured.height },
+    stats: {
+      total_nodes_captured: totalNodesInCapture,
+      slots_identified: slots.length,
+      nodes_filtered: nodesFiltered,
+    },
+  };
+}
+
+// =============================================================================
 // ARCHETYPE CONSTRAINTS
 // =============================================================================
 
@@ -895,6 +1378,7 @@ function escapeHtml(text: string): string {
 // =============================================================================
 
 let currentIR: DeckIR | null = null;
+let lastCapturedTemplate: CapturedNode | string | null = null;  // Cache for extract_template
 
 // =============================================================================
 // SERVER SETUP
@@ -913,81 +1397,12 @@ const server = new Server(
   }
 );
 
-// List available tools
+// List available tools (consolidated: 14 → 6)
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: "monorail_create_deck",
-        description:
-          "Create a new deck IR from a JSON specification. The IR defines slides with archetypes, content, and status. Returns the validated IR and any warnings.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            ir: {
-              type: "string",
-              description:
-                "The deck IR as a JSON string with slides array. Each slide needs: id, archetype (title/section/big-idea/bullets/two-column/quote/chart/timeline/comparison/summary), status (draft/locked/stub), and content object.",
-            },
-          },
-          required: ["ir"],
-        },
-      },
-      {
-        name: "monorail_update_slides",
-        description:
-          "Update existing slides in the current deck. Only modifies slides that changed and respects locked status.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            ir: {
-              type: "string",
-              description: "The updated deck IR as JSON string",
-            },
-          },
-          required: ["ir"],
-        },
-      },
-      {
-        name: "monorail_get_deck",
-        description: "Get the current deck IR that was last created or updated.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {},
-        },
-      },
-      {
-        name: "monorail_validate_ir",
-        description:
-          "Validate an IR spec against archetype constraints. Returns warnings for any violations (word limits, missing fields, unknown archetypes).",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            ir: {
-              type: "string",
-              description: "The deck IR as JSON string to validate",
-            },
-          },
-          required: ["ir"],
-        },
-      },
-      {
-        name: "monorail_preview",
-        description:
-          "Generate an HTML preview file for the deck. The preview shows all slides rendered in a browser-viewable format with a Copy IR button for pasting into Figma plugin.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            output_path: {
-              type: "string",
-              description:
-                "Path where to save the HTML preview file. If not provided, saves to ./preview.html",
-            },
-          },
-        },
-      },
-      {
-        name: "monorail_connection_status",
+        name: "monorail_status",
         description:
           "Check if the Figma plugin is connected via WebSocket. Returns connection state and plugin info if connected.",
         inputSchema: {
@@ -996,38 +1411,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "monorail_push_ir",
+        name: "monorail_pull",
         description:
-          "Push IR directly to the connected Figma plugin. The plugin will receive the IR and can optionally auto-apply it to the deck. Requires plugin to be connected via WebSocket.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            ir: {
-              type: "string",
-              description: "The deck IR as a JSON string to send to the plugin",
-            },
-            autoApply: {
-              type: "boolean",
-              description:
-                "If true, the plugin will automatically apply the IR to the deck. If false, it just populates the input field.",
-            },
-          },
-          required: ["ir"],
-        },
-      },
-      {
-        name: "monorail_pull_ir",
-        description:
-          "Request the current deck IR from the connected Figma plugin. The plugin will export the current slides and return the IR. Requires plugin to be connected via WebSocket.",
+          "Pull the current deck state from Figma. Returns slides with all elements, their Figma node IDs, text content, positions, and styling. Use this to see what's in the deck before making changes. The 'elements' array contains node IDs you can target with monorail_patch.",
         inputSchema: {
           type: "object" as const,
           properties: {},
         },
       },
       {
-        name: "monorail_patch_elements",
+        name: "monorail_push",
         description:
-          "Patch specific text elements by their Figma node ID. Use this to modify individual elements without re-rendering the entire slide. Get element IDs from monorail_pull_ir (the 'elements' array). Preserves all styling and positioning.",
+          "Push IR to create/replace slides in Figma. Use for bootstrapping a new deck or bulk updates. For surgical edits to existing content, prefer pull → patch. Validates IR before sending (returns warnings for constraint violations).",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            ir: {
+              type: "string",
+              description:
+                "The deck IR as a JSON string. Each slide needs: id, archetype (title/section/big-idea/bullets/two-column/quote/chart/timeline/comparison/summary), status (draft/locked/stub), and content object.",
+            },
+            autoApply: {
+              type: "boolean",
+              description:
+                "If true (default), automatically render the slides in Figma. If false, just populates the plugin input field.",
+            },
+            start_index: {
+              type: "number",
+              description:
+                "Position to insert new slides (0-based). If omitted, appends to end. Use monorail_pull to see current slide order.",
+            },
+          },
+          required: ["ir"],
+        },
+      },
+      {
+        name: "monorail_patch",
+        description:
+          "Patch specific text elements by Figma node ID. This is the core editing tool — modify individual elements without re-rendering slides. Get element IDs from monorail_pull (the 'elements' array). Preserves all styling, positioning, and surrounding content.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -1064,233 +1485,84 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["patches"],
         },
       },
+      {
+        name: "monorail_capture",
+        description:
+          "Capture full node structure from the currently selected slide (or first slide). Returns complete frame tree with positions, fills, strokes, Auto Layout, text styling. Also extracts design system tokens (colors, fonts, spacing) and identifies template slots. Use this to analyze existing designs before cloning.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {},
+        },
+      },
+      {
+        name: "monorail_clone",
+        description:
+          "Clone a slide and update its text content. Creates a new slide that preserves all styling, positioning, and structure from the source — then updates specific text slots. Use capture first to identify slot IDs.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            source_slide_id: {
+              type: "string",
+              description:
+                "The Figma node ID of the source slide to clone (from capture output)",
+            },
+            content_map: {
+              type: "object",
+              description:
+                "Map of slot IDs to new text content. Keys are Figma node IDs, values are the new text.",
+              additionalProperties: { type: "string" },
+            },
+          },
+          required: ["source_slide_id"],
+        },
+      },
+      {
+        name: "monorail_delete",
+        description:
+          "Delete slides from the deck by their Figma node IDs. Use monorail_pull to get slide IDs first. This is destructive — slides are permanently removed.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            slide_ids: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Array of Figma node IDs to delete (from figma_id field in pull output)",
+            },
+          },
+          required: ["slide_ids"],
+        },
+      },
+      {
+        name: "monorail_reorder",
+        description:
+          "Reorder slides in the deck. Pass an array of Figma node IDs in the desired order. Slides will be rearranged to match this order.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            slide_ids: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Array of Figma node IDs in the desired order. All slides you want to keep must be included.",
+            },
+          },
+          required: ["slide_ids"],
+        },
+      },
     ],
   };
 });
 
-// Handle tool calls
+// Handle tool calls (consolidated: 14 → 6)
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   switch (name) {
-    case "monorail_create_deck": {
-      const irString = args?.ir as string;
-      if (!irString) {
-        return {
-          content: [{ type: "text" as const, text: "Error: No IR provided" }],
-          isError: true,
-        };
-      }
-
-      let ir: DeckIR;
-      try {
-        ir = JSON.parse(irString);
-      } catch (e) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: Failed to parse IR JSON - ${e instanceof Error ? e.message : "unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Validate
-      const warnings = validateIR(ir);
-      currentIR = ir;
-
-      const warningText =
-        warnings.length > 0
-          ? `\n\nWarnings:\n${warnings.map((w) => `- [${w.severity}] ${w.slideId}: ${w.message}`).join("\n")}`
-          : "";
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Created deck with ${ir.slides.length} slides.${warningText}\n\nUse monorail_preview to generate an HTML preview, or copy the IR to the Figma plugin.`,
-          },
-        ],
-      };
-    }
-
-    case "monorail_update_slides": {
-      const irString = args?.ir as string;
-      if (!irString) {
-        return {
-          content: [{ type: "text" as const, text: "Error: No IR provided" }],
-          isError: true,
-        };
-      }
-
-      let newIR: DeckIR;
-      try {
-        newIR = JSON.parse(irString);
-      } catch (e) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: Failed to parse IR JSON - ${e instanceof Error ? e.message : "unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      if (!currentIR) {
-        currentIR = newIR;
-      } else {
-        // Merge: update non-locked slides
-        const existingMap = new Map(currentIR.slides.map((s) => [s.id, s]));
-
-        for (const newSlide of newIR.slides) {
-          const existing = existingMap.get(newSlide.id);
-          if (existing && existing.status === "locked") {
-            // Keep locked slide as-is
-            continue;
-          }
-          existingMap.set(newSlide.id, newSlide);
-        }
-
-        currentIR = {
-          deck: newIR.deck || currentIR.deck,
-          slides: Array.from(existingMap.values()),
-        };
-      }
-
-      const warnings = validateIR(currentIR);
-      const warningText =
-        warnings.length > 0
-          ? `\n\nWarnings:\n${warnings.map((w) => `- [${w.severity}] ${w.slideId}: ${w.message}`).join("\n")}`
-          : "";
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Updated deck. Now has ${currentIR.slides.length} slides.${warningText}`,
-          },
-        ],
-      };
-    }
-
-    case "monorail_get_deck": {
-      if (!currentIR) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No deck currently loaded. Use monorail_create_deck first.",
-            },
-          ],
-        };
-      }
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(currentIR, null, 2),
-          },
-        ],
-      };
-    }
-
-    case "monorail_validate_ir": {
-      const irString = args?.ir as string;
-      if (!irString) {
-        return {
-          content: [{ type: "text" as const, text: "Error: No IR provided" }],
-          isError: true,
-        };
-      }
-
-      let ir: DeckIR;
-      try {
-        ir = JSON.parse(irString);
-      } catch (e) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: Failed to parse IR JSON - ${e instanceof Error ? e.message : "unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const warnings = validateIR(ir);
-
-      if (warnings.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `✓ IR is valid. ${ir.slides.length} slides, all constraints satisfied.`,
-            },
-          ],
-        };
-      }
-
-      const errors = warnings.filter((w) => w.severity === "error");
-      const warns = warnings.filter((w) => w.severity === "warning");
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Validation complete. ${errors.length} errors, ${warns.length} warnings.\n\n${warnings.map((w) => `[${w.severity.toUpperCase()}] ${w.slideId} - ${w.field}: ${w.message}`).join("\n")}`,
-          },
-        ],
-      };
-    }
-
-    case "monorail_preview": {
-      if (!currentIR) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No deck to preview. Use monorail_create_deck first.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const outputPath = (args?.output_path as string) || "./preview.html";
-      const html = generatePreviewHTML(currentIR);
-
-      try {
-        const resolvedPath = path.resolve(outputPath);
-        fs.writeFileSync(resolvedPath, html, "utf-8");
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Preview saved to: ${resolvedPath}\n\nOpen this file in a browser to see the deck. Use the "Copy IR for Figma" button to get the IR for the Figma plugin.`,
-            },
-          ],
-        };
-      } catch (e) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error saving preview: ${e instanceof Error ? e.message : "unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case "monorail_connection_status": {
+    // =========================================================================
+    // monorail_status - Check plugin connection
+    // =========================================================================
+    case "monorail_status": {
       const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
       
       if (isConnected) {
@@ -1314,69 +1586,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    case "monorail_push_ir": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
-      
-      if (!isConnected) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const irString = args?.ir as string;
-      if (!irString) {
-        return {
-          content: [{ type: "text" as const, text: "Error: No IR provided" }],
-          isError: true,
-        };
-      }
-
-      let ir: DeckIR;
-      try {
-        ir = JSON.parse(irString);
-      } catch (e) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: Failed to parse IR JSON - ${e instanceof Error ? e.message : "unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const autoApply = args?.autoApply === true;
-
-      // Send to plugin
-      connectedPlugin!.send(
-        JSON.stringify({
-          type: "push-ir",
-          ir: ir,
-          autoApply: autoApply,
-        })
-      );
-
-      // Also update currentIR in server state
-      currentIR = ir;
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `✓ Pushed ${ir.slides.length} slides to Figma plugin${autoApply ? " (auto-apply enabled)" : ""}\n\nThe IR is now in the plugin.${autoApply ? " It will be applied automatically." : " Click 'Apply to Deck' in the plugin to render."}`,
-          },
-        ],
-      };
-    }
-
-    case "monorail_pull_ir": {
+    // =========================================================================
+    // monorail_pull - Get deck state from Figma
+    // =========================================================================
+    case "monorail_pull": {
       const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
       
       if (!isConnected) {
@@ -1449,7 +1662,102 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    case "monorail_patch_elements": {
+    // =========================================================================
+    // monorail_push - Create/replace slides in Figma (with inline validation)
+    // =========================================================================
+    case "monorail_push": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const irString = args?.ir as string;
+      if (!irString) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No IR provided" }],
+          isError: true,
+        };
+      }
+
+      let ir: DeckIR;
+      try {
+        ir = JSON.parse(irString);
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: Failed to parse IR JSON - ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Inline validation (was separate monorail_validate_ir tool)
+      const warnings = validateIR(ir);
+      const errors = warnings.filter((w) => w.severity === "error");
+      
+      // Block on errors, warn on warnings
+      if (errors.length > 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: IR validation failed with ${errors.length} errors:\n\n${errors.map((w) => `- ${w.slideId}: ${w.message}`).join("\n")}\n\nFix these issues and try again.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const autoApply = args?.autoApply !== false; // Default to true
+      const startIndex = args?.start_index as number | undefined;
+
+      // Send to plugin
+      connectedPlugin!.send(
+        JSON.stringify({
+          type: "push-ir",
+          ir: ir,
+          autoApply: autoApply,
+          startIndex: startIndex,
+        })
+      );
+
+      // Also update currentIR in server state
+      currentIR = ir;
+
+      const warningText = warnings.length > 0
+        ? `\n\nWarnings:\n${warnings.map((w) => `- ${w.slideId}: ${w.message}`).join("\n")}`
+        : "";
+      
+      const positionText = startIndex !== undefined
+        ? ` at position ${startIndex}`
+        : "";
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `✓ Pushed ${ir.slides.length} slides to Figma${positionText}${warningText}`,
+          },
+        ],
+      };
+    }
+
+    // =========================================================================
+    // monorail_patch - Update specific elements by node ID
+    // =========================================================================
+    case "monorail_patch": {
       const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
       
       if (!isConnected) {
@@ -1524,6 +1832,423 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text" as const,
               text: `Error patching elements: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_capture - Capture slide structure + design system + slots
+    // =========================================================================
+    case "monorail_capture": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Check if there's already a pending capture request
+      if (pendingCaptureResolve) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another capture request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Create a promise to wait for the capture response
+      const capturePromise = new Promise<CapturedTemplate>((resolve, reject) => {
+        pendingCaptureResolve = resolve;
+        pendingCaptureReject = reject;
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (pendingCaptureResolve) {
+            pendingCaptureResolve = null;
+            pendingCaptureReject = null;
+            reject(new Error("Timeout waiting for template capture"));
+          }
+        }, 30000);
+      });
+
+      // Send capture request to plugin
+      connectedPlugin!.send(JSON.stringify({ type: "capture-template" }));
+
+      try {
+        const result = await capturePromise;
+        
+        // Store captured template for clone to use
+        lastCapturedTemplate = result.template;
+        
+        // Parse the captured template
+        const captured: CapturedNode = typeof result.template === 'string' 
+          ? JSON.parse(result.template) 
+          : result.template;
+        
+        // Extract template slots (merged from monorail_extract_template)
+        const template = extractTemplate(captured);
+        
+        // Extract design system (merged from monorail_extract_design_system)
+        const designSystem = extractDesignSystem(captured);
+        
+        // Build comprehensive output
+        const output = {
+          slide_id: captured.id,
+          slide_name: captured.name,
+          dimensions: { width: captured.width, height: captured.height },
+          
+          // Design system tokens
+          design_system: {
+            colors: designSystem.colors,
+            fonts: designSystem.fonts,
+            spacing: designSystem.spacing,
+            corners: designSystem.corners,
+          },
+          
+          // Template slots (text nodes and frames that can be updated)
+          slots: template.slots.map(s => ({
+            id: s.id,
+            role: s.role,
+            text: s.text?.sample,
+            bounds: s.bounds,
+          })),
+          
+          // Complex regions (diagrams, charts - not editable via clone)
+          complex_regions: template.complex_regions,
+          
+          // Stats
+          stats: {
+            total_nodes: result.nodeCount,
+            slots_found: template.slots.length,
+            colors_found: designSystem.colors.length,
+            fonts_found: designSystem.fonts.length,
+          },
+        };
+        
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ Captured "${captured.name}" (${result.nodeCount} nodes)
+
+**Design System:**
+- Colors: ${designSystem.colors.map(c => c.hex).join(', ')}
+- Fonts: ${designSystem.fonts.map(f => `${f.family} ${f.style}`).join(', ')}
+
+**Slots (${template.slots.length}):**
+${template.slots.map(s => `- [${s.role}] ${s.id}: "${s.text?.sample || '(frame)'}"`).join('\n')}
+
+**Complex Regions:** ${template.complex_regions.length > 0 ? template.complex_regions.map(r => r.name).join(', ') : 'none'}
+
+\`\`\`json
+${JSON.stringify(output, null, 2)}
+\`\`\``,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error capturing template: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_clone - Clone slide and update content
+    // =========================================================================
+    case "monorail_clone": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const sourceSlideId = args?.source_slide_id as string;
+      const contentMap = args?.content_map as Record<string, string>;
+
+      if (!sourceSlideId) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No source_slide_id provided" }],
+          isError: true,
+        };
+      }
+
+      // Check if there's already a pending instantiate request
+      if (pendingInstantiateResolve) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another instantiate request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Create a promise to wait for the instantiate response
+      const instantiatePromise = new Promise<InstantiateResult>((resolve, reject) => {
+        pendingInstantiateResolve = resolve;
+        pendingInstantiateReject = reject;
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (pendingInstantiateResolve) {
+            pendingInstantiateResolve = null;
+            pendingInstantiateReject = null;
+            reject(new Error("Timeout waiting for instantiation"));
+          }
+        }, 30000);
+      });
+
+      // Send instantiate request to plugin
+      connectedPlugin!.send(JSON.stringify({ 
+        type: "instantiate-template", 
+        sourceId: sourceSlideId,
+        contentMap: contentMap || {}
+      }));
+
+      try {
+        const result = await instantiatePromise;
+        
+        if (!result.success) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error creating slide: ${result.error}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ Created new slide from template
+
+**New slide ID:** ${result.newSlideId}
+**Text slots updated:** ${result.updated}
+${result.failed && result.failed.length > 0 ? `**Failed:** ${result.failed.join(", ")}` : ""}
+
+The new slide has been selected in Figma.`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error instantiating template: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_delete - Delete slides by ID
+    // =========================================================================
+    case "monorail_delete": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const slideIds = args?.slide_ids as string[];
+      if (!slideIds || slideIds.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No slide_ids provided" }],
+          isError: true,
+        };
+      }
+
+      // Check if there's already a pending delete request
+      if (pendingDeleteResolve) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another delete request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Create a promise to wait for the delete response
+      const deletePromise = new Promise<DeleteResult>((resolve, reject) => {
+        pendingDeleteResolve = resolve;
+        pendingDeleteReject = reject;
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (pendingDeleteResolve) {
+            pendingDeleteResolve = null;
+            pendingDeleteReject = null;
+            reject(new Error("Timeout waiting for delete result"));
+          }
+        }, 30000);
+      });
+
+      // Send delete request to plugin
+      connectedPlugin!.send(JSON.stringify({ type: "delete-slides", slideIds }));
+
+      try {
+        const result = await deletePromise;
+        
+        const failedText = result.failed.length > 0 
+          ? `\n\nFailed to delete: ${result.failed.join(", ")}`
+          : "";
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ Deleted ${result.deleted} slides${failedText}`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error deleting slides: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_reorder - Reorder slides
+    // =========================================================================
+    case "monorail_reorder": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const slideIds = args?.slide_ids as string[];
+      if (!slideIds || slideIds.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No slide_ids provided" }],
+          isError: true,
+        };
+      }
+
+      // Check if there's already a pending reorder request
+      if (pendingReorderResolve) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another reorder request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Create a promise to wait for the reorder response
+      const reorderPromise = new Promise<ReorderResult>((resolve, reject) => {
+        pendingReorderResolve = resolve;
+        pendingReorderReject = reject;
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (pendingReorderResolve) {
+            pendingReorderResolve = null;
+            pendingReorderReject = null;
+            reject(new Error("Timeout waiting for reorder result"));
+          }
+        }, 30000);
+      });
+
+      // Send reorder request to plugin
+      connectedPlugin!.send(JSON.stringify({ type: "reorder-slides", slideIds }));
+
+      try {
+        const result = await reorderPromise;
+        
+        if (!result.success) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error reordering slides: ${result.error}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ Reordered ${result.count} slides`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error reordering slides: ${e instanceof Error ? e.message : "unknown error"}`,
             },
           ],
           isError: true,
@@ -1648,11 +2373,11 @@ Closing slide with key takeaways.
 
 The IR (Intermediate Representation) is a JSON format for defining decks.
 
+## Push Format (input to monorail_push)
+
 \`\`\`json
 {
-  "deck": {
-    "title": "Deck Title"
-  },
+  "deck": { "title": "Deck Title" },
   "slides": [
     {
       "id": "unique-id",
@@ -1661,7 +2386,36 @@ The IR (Intermediate Representation) is a JSON format for defining decks.
       "content": {
         // archetype-specific fields
       },
-      "speaker_notes": "Optional notes for presenter"
+      "speaker_notes": "Optional notes"
+    }
+  ]
+}
+\`\`\`
+
+## Pull Format (output from monorail_pull)
+
+When you pull from Figma, you get richer data:
+
+\`\`\`json
+{
+  "slides": [
+    {
+      "id": "slide-1",
+      "figma_id": "9:666",      // Use this for delete, reorder, patch
+      "archetype": "title",
+      "status": "draft",
+      "content": { "headline": "...", "subline": "..." },
+      "elements": [            // All text nodes with IDs
+        {
+          "id": "9:669",       // Node ID for patching
+          "type": "headline",
+          "text": "The headline text",
+          "x": 200, "y": 420,
+          "fontSize": 96,
+          "isBold": true
+        }
+      ],
+      "has_diagram": false     // True if complex nested content
     }
   ]
 }
@@ -1670,35 +2424,27 @@ The IR (Intermediate Representation) is a JSON format for defining decks.
 ## Status Values
 
 - **draft**: Work in progress, can be modified
-- **locked**: Finalized, won't be overwritten
+- **locked**: Finalized, won't be overwritten  
 - **stub**: Placeholder, needs content
 
-## Example
+## Key IDs
+
+- **slide.id**: Your ID (preserved across push/pull)
+- **slide.figma_id**: Figma's ID (use for delete, reorder)
+- **element.id**: Text node ID (use for patch)
+
+## Example Push
 
 \`\`\`json
 {
-  "deck": { "title": "Project Proposal" },
   "slides": [
     {
-      "id": "slide-1",
+      "id": "intro",
       "archetype": "title",
       "status": "draft",
       "content": {
         "headline": "Project Alpha",
         "subline": "Transforming how we work"
-      }
-    },
-    {
-      "id": "slide-2",
-      "archetype": "bullets",
-      "status": "draft",
-      "content": {
-        "headline": "Three key benefits",
-        "bullets": [
-          "50% faster delivery",
-          "Lower operational costs",
-          "Happier customers"
-        ]
       }
     }
   ]
@@ -1743,6 +2489,51 @@ interface PatchResult {
 }
 let pendingPatchResolve: ((result: PatchResult) => void) | null = null;
 let pendingPatchReject: ((error: Error) => void) | null = null;
+
+// Pending template capture request (for monorail_capture_template)
+interface CapturedTemplate {
+  template: any;
+  nodeCount: number;
+}
+let pendingCaptureResolve: ((result: CapturedTemplate) => void) | null = null;
+let pendingCaptureReject: ((error: Error) => void) | null = null;
+
+// Pending instantiate request (for monorail_instantiate_template)
+interface InstantiateResult {
+  success: boolean;
+  newSlideId?: string;
+  updated?: number;
+  failed?: string[];
+  error?: string;
+}
+let pendingInstantiateResolve: ((result: InstantiateResult) => void) | null = null;
+let pendingInstantiateReject: ((error: Error) => void) | null = null;
+
+// Pending create styled slide request
+interface CreateResult {
+  success: boolean;
+  slideId?: string;
+  error?: string;
+}
+let pendingCreateResolve: ((result: CreateResult) => void) | null = null;
+let pendingCreateReject: ((error: Error) => void) | null = null;
+
+// Pending delete request (for monorail_delete)
+interface DeleteResult {
+  deleted: number;
+  failed: string[];
+}
+let pendingDeleteResolve: ((result: DeleteResult) => void) | null = null;
+let pendingDeleteReject: ((error: Error) => void) | null = null;
+
+// Pending reorder request (for monorail_reorder)
+interface ReorderResult {
+  success: boolean;
+  count?: number;
+  error?: string;
+}
+let pendingReorderResolve: ((result: ReorderResult) => void) | null = null;
+let pendingReorderReject: ((error: Error) => void) | null = null;
 
 function startWebSocketServer() {
   wsServer = new WebSocketServer({ port: WS_PORT });
@@ -1806,6 +2597,71 @@ function startWebSocketServer() {
             });
             pendingPatchResolve = null;
             pendingPatchReject = null;
+          }
+        } else if (parsed.type === "template-captured") {
+          // Plugin sent captured template
+          console.error(`[WebSocket] Captured template with ${parsed.nodeCount} nodes`);
+          
+          if (pendingCaptureResolve) {
+            pendingCaptureResolve({
+              template: parsed.template,
+              nodeCount: parsed.nodeCount || 0,
+            });
+            pendingCaptureResolve = null;
+            pendingCaptureReject = null;
+          }
+        } else if (parsed.type === "instantiated") {
+          // Plugin sent instantiate result
+          console.error(`[WebSocket] Instantiate result: success=${parsed.success}, updated=${parsed.updated}`);
+          
+          if (pendingInstantiateResolve) {
+            pendingInstantiateResolve({
+              success: parsed.success,
+              newSlideId: parsed.newSlideId,
+              updated: parsed.updated,
+              failed: parsed.failed,
+              error: parsed.error,
+            });
+            pendingInstantiateResolve = null;
+            pendingInstantiateReject = null;
+          }
+        } else if (parsed.type === "styled-slide-created") {
+          // Plugin sent create styled slide result
+          console.error(`[WebSocket] Create styled slide result: success=${parsed.success}`);
+          
+          if (pendingCreateResolve) {
+            pendingCreateResolve({
+              success: parsed.success,
+              slideId: parsed.slideId,
+              error: parsed.error,
+            });
+            pendingCreateResolve = null;
+            pendingCreateReject = null;
+          }
+        } else if (parsed.type === "slides-deleted") {
+          // Plugin sent delete result
+          console.error(`[WebSocket] Delete result: deleted=${parsed.deleted}, failed=${parsed.failed?.length || 0}`);
+          
+          if (pendingDeleteResolve) {
+            pendingDeleteResolve({
+              deleted: parsed.deleted || 0,
+              failed: parsed.failed || [],
+            });
+            pendingDeleteResolve = null;
+            pendingDeleteReject = null;
+          }
+        } else if (parsed.type === "slides-reordered") {
+          // Plugin sent reorder result
+          console.error(`[WebSocket] Reorder result: success=${parsed.success}, count=${parsed.count}`);
+          
+          if (pendingReorderResolve) {
+            pendingReorderResolve({
+              success: parsed.success,
+              count: parsed.count,
+              error: parsed.error,
+            });
+            pendingReorderResolve = null;
+            pendingReorderReject = null;
           }
         } else {
           // Echo unknown messages for now (debugging)

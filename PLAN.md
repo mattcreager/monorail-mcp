@@ -39,41 +39,198 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 **v0 complete.** Full round-trip loop working.
 
-**Session 11 complete.** Rich read + targeted write working.
+**Session 15 complete.** Tool Consolidation: 14 → 6 tools!
 
 ### What Works ✅
 - WebSocket bridge — no copy/paste, live sync
 - Rich export — captures ALL elements with Figma node IDs
 - Targeted patches — update specific elements, preserve layouts
-- 10 hardcoded archetypes (title, bullets, big-idea, etc.)
+- Template capture with design system extraction + slot identification
+- **Full deck rendering** — 10 slides from IR in one push
+- **Auto Layout for big-idea** — headline/subline no longer overlap
+- **Consolidated tool surface** — 6 tools instead of 14
 
 ### The Gap 🔨
-- **New slides don't match existing styles** — archetypes are hardcoded
-- **Need: Dynamic Templates** — extract from Figma, instantiate with new content
+- **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
+- **Font handling** — custom fonts (Supply) cause failures, need fallback chain
+- **Role mapping** — content uses node IDs, should use roles (headline, etc.)
+- **Archetype detection** — bullets slides export as "unknown" on round-trip
+- **Limited diagrams** — timeline is linear only, no loop arrows or callouts
+- **Diagrams** — text editable, but images/structure not yet (future work)
 
 ### Key Files
 | File | Purpose |
 |------|---------|
-| `figma-plugin/code.ts` | Plugin: export, apply, patch |
-| `src/index.ts` | MCP server + WebSocket |
-| `docs/references/mcp-tools.md` | Tool documentation |
-| `docs/decisions/dynamic-templates.md` | Next major feature design |
+| `figma-plugin/code.ts` | Plugin: export, apply, patch, capture, instantiate |
+| `figma-plugin/ui.html` | Plugin UI + WebSocket bridge |
+| `src/index.ts` | MCP server: 6 consolidated tools |
+| `docs/decisions/dynamic-templates.md` | Template design + full spike results |
+
+### MCP Tools (8 total)
+| Tool | Purpose |
+|------|---------|
+| `monorail_status` | Check if Figma plugin is connected |
+| `monorail_pull` | Get deck state from Figma (slides, elements, IDs) |
+| `monorail_push` | Create/replace slides from IR (with inline validation, optional `start_index`) |
+| `monorail_patch` | Update specific text elements by Figma node ID |
+| `monorail_capture` | Full node tree + design system + slots (all-in-one) |
+| `monorail_clone` | Clone slide + update content |
+| `monorail_delete` | Delete slides by Figma node ID |
+| `monorail_reorder` | Reorder slides to match specified order |
 
 ---
 
 ## What's Next
 
-**Dynamic Templates** — see `docs/decisions/dynamic-templates.md`
+**Slide operations complete.** 8 tools total, full deck manipulation.
 
-The next session is a **DESIGN session**, not coding:
-- Walk through "make SOLUTION slide like slide-10" end-to-end
-- Decide: How to identify template slots vs decoration?
-- Decide: Where do templates live? (Figma components? JSON?)
-- Spike: Can we read full frame structure from plugin?
+### Priority 1: Fix Core Loop Gaps
+- [ ] Auto Layout for remaining archetypes (title, quote, summary)
+- [ ] Dumber plugin (just report elements, Claude interprets archetype)
+
+### Priority 2: Reliability
+- [ ] Font fallback chain (custom → similar → Inter)
+- [ ] Better error messages when fonts unavailable
+
+### Future Work (defer)
+- Diagram/visualization editing (arrows, connectors)
+- Full Figma visual language (effects, blending, masks)
+- Design system auto-application
+- Dynamic template learning
 
 ---
 
 ## Session Log
+
+### Session 16 (2026-01-11)
+**Slide Operations: delete, position, reorder + Rich Feedback**
+
+Added three new capabilities for full deck manipulation:
+
+**New tools:**
+- `monorail_delete` — delete slides by Figma node ID
+- `monorail_reorder` — reorder slides to match specified order
+
+**Enhanced:**
+- `monorail_push` now accepts `start_index` param to insert at position
+
+**Rich feedback in plugin UI:**
+- Delete shows slide names: `Deleted: "Testing Rich Feedback"`
+- Push shows what was created/updated: `Created "My Title" • Updated "Intro"`
+- Reorder shows what moved: `Moved: "Conclusion", "Summary"`
+- Position shows index: `... at pos 0`
+
+**Vocabulary alignment:**
+- "Export" → "Pull" throughout plugin UI
+- Consistent with MCP tool naming (push/pull)
+
+**Discovery:**
+- Each Figma file runs its own plugin instance (same MCP server, multiple clients)
+- Need to surface which deck is active → added to Gap
+
+**Docs updated:**
+- `docs/references/mcp-tools.md` — new tools documented
+- `docs/discovery/architecture-review.md` — tool list updated
+- MCP resource `monorail://ir-format` — now shows pull format with `figma_id` and `elements`
+
+**Tool count:** 6 → 8
+
+### Session 15 (2026-01-11)
+**Tool Consolidation: 14 → 6**
+
+Simplified the MCP tool surface to reduce cognitive load for Claude.
+
+**Tools consolidated:**
+- `monorail_status` (was `connection_status`)
+- `monorail_pull` (was `pull_ir`)
+- `monorail_push` (was `push_ir`, now with inline validation)
+- `monorail_patch` (was `patch_elements`)
+- `monorail_capture` (was `capture_template` + `extract_template` + `extract_design_system`)
+- `monorail_clone` (was `instantiate_template`)
+
+**Tools removed:**
+- `create_deck`, `update_slides`, `get_deck` → use push/pull
+- `validate_ir` → inlined into push
+- `preview` → rarely used
+- `create_styled_slide` → deferred
+
+**Key insight:** The `pull → patch` loop IS the product. Push is just bootstrapping.
+
+### Session 14 (2026-01-11)
+**Dogfooding: Render Monorail Deck via MCP**
+
+Tested the full pipeline by rendering `examples/monorail-deck-v0.html` (10 slides) through MCP → Figma.
+
+**What worked:**
+- ✅ All 10 slides rendered in one push_ir call
+- ✅ Archetypes: title, bullets, big-idea, two-column, quote, summary, timeline
+- ✅ Timeline with blue dots, connecting lines, 4 stages
+- ✅ Auto Layout for bullets works correctly
+
+**Bug fixed:**
+- 🔧 Big-idea slides had overlapping headline/subline (fixed Y positions)
+- → Changed to Auto Layout container, now flows properly
+
+**Gaps discovered:**
+- Slide positioning (appends to end, can't insert at position)
+- Archetype detection (bullets → "unknown" on export)
+- Limited visualizations (no loop arrows, callouts, emphasis boxes)
+- Design system not applied (using Inter + defaults)
+
+**Docs:** `docs/discovery/dogfood-gaps.md`
+
+### Session 13 (2026-01-11)
+**Template Extraction + Instantiation + Design System Spike**
+
+Built:
+- `monorail_extract_template` — compact template from captured slide
+- `monorail_instantiate_template` — clone slide + update text
+- `monorail_extract_design_system` — pull colors, fonts, spacing as tokens
+- `monorail_create_styled_slide` — generate new layouts with design tokens
+
+**Full Pipeline Tested:**
+1. Capture slide-10 (120 nodes, 143KB)
+2. Extract template (9 slots, 6KB — 89% smaller)
+3. Clone → SOLUTION slide with new content (4/5 text slots updated)
+4. Extract design system (11 colors, 4 fonts, spacing values)
+5. Generate new "quote" slide using extracted tokens
+
+**What Works:**
+- ✅ Clone + update preserves ALL styling, diagrams, images
+- ✅ Design tokens extracted and applied to new layouts
+- ✅ Text patching works for available fonts
+- ✅ Complex diagrams stay intact (filtered but preserved)
+
+**Gaps Identified:**
+- ⚠️ Font availability — custom fonts (Supply) cause failures, need fallbacks
+- ⚠️ Accent color selection — picked red instead of lime for quote
+- ⚠️ Diagram text editable via patch, but images/structure not yet
+- ⚠️ Section label role detection needs absolute Y, not local
+
+**Decision: Focus on base use-case first**
+- Get text + layout flow flawless before tackling diagram editing
+- Diagrams/visualizations are future work (Figma's full visual language)
+
+### Session 12 (2026-01-11)
+**Template Capture Spike**
+
+Proved:
+- ✅ Can read full frame structure recursively (120 nodes from complex slide)
+- ✅ Get all styling: fills, strokes, gradients, Auto Layout, fonts, effects
+- ✅ Custom fonts captured (e.g., "Supply" font in section label)
+- ✅ MCP tool `monorail_capture_template` working end-to-end
+
+Discovered:
+- ⚠️ Complex slides are HUGE (slide-10: 120 nodes, 143KB vs slide-11: 6 nodes, 2KB)
+- Need to filter/summarize for practical templates
+- Slot identification needs heuristics: depth, naming, position
+
+Design decisions made:
+- Diagrams → placeholder/omit for MVP (option C)
+- Template = left-side structure only for now
+- Focus on: section_label, headline, accent_points (repeatable cards)
+
+Next: Build `monorail_extract_template` with filtering
 
 ### Session 11 (2026-01-11)
 **Rich Read + Targeted Write**
@@ -139,15 +296,34 @@ Copy this to start:
 ```
 I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
-**Read first:** PLAN.md, then docs/decisions/dynamic-templates.md
+**Read first:** PLAN.md (current state, priorities)
 
-**Current state:**
-- Rich read + targeted write: WORKING
-- New slide creation: doesn't match existing styles
-- Next: Dynamic templates design session
+**Key files:**
+- src/index.ts (MCP server — 8 tools)
+- figma-plugin/code.ts (plugin — export, apply, patch, capture, instantiate, delete, reorder)
 
-**This session:** Design session for dynamic templates
-- Not coding — figuring out HOW templates should work
-- Key questions in docs/decisions/dynamic-templates.md
-- Goal: Clear implementation plan for next coding session
+**MCP Tools (8):**
+| Tool | Purpose |
+|------|---------|
+| monorail_status | Is plugin connected? |
+| monorail_pull | Get deck state (slides, elements, IDs) |
+| monorail_push | Create/replace slides from IR (+ start_index) |
+| monorail_patch | Update specific elements by ID |
+| monorail_capture | Full node tree + design system + slots |
+| monorail_clone | Clone slide + update content |
+| monorail_delete | Delete slides by ID |
+| monorail_reorder | Reorder slides |
+
+**This session:** Core Loop Gaps
+
+Current gaps:
+- Archetype detection (bullets → "unknown" on export)
+- Auto Layout for title/quote/summary
+- Font fallback chain
+
+Possible approaches:
+- Dumber plugin: just report elements, Claude interprets archetype
+- Font fallback: custom → similar → Inter
+
+**Key insight:** The pull → patch loop IS the product. Push is just bootstrapping.
 ```
