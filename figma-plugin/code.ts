@@ -73,6 +73,74 @@ function isInSlides(): boolean {
   return figma.editorType === 'slides';
 }
 
+// =============================================================================
+// FONT FALLBACK CHAIN
+// =============================================================================
+// Try fonts in order until one loads successfully.
+// This prevents failures when custom fonts aren't available.
+
+const FONT_FALLBACKS = ['Inter', 'SF Pro Display', 'Helvetica Neue', 'Arial'];
+
+interface LoadedFont {
+  family: string;
+  regular: FontName;
+  bold: FontName;
+}
+
+// Cache for successfully loaded fonts
+let loadedFontCache: LoadedFont | null = null;
+
+/**
+ * Try to load a font family with both Regular and Bold styles.
+ * Returns the font names if successful, null if not available.
+ */
+async function tryLoadFont(family: string): Promise<LoadedFont | null> {
+  try {
+    const regular: FontName = { family, style: 'Regular' };
+    const bold: FontName = { family, style: 'Bold' };
+    
+    await figma.loadFontAsync(regular);
+    await figma.loadFontAsync(bold);
+    
+    return { family, regular, bold };
+  } catch {
+    // Font not available
+    return null;
+  }
+}
+
+/**
+ * Load the first available font from the fallback chain.
+ * Caches the result for subsequent calls.
+ */
+async function loadFontWithFallback(): Promise<LoadedFont> {
+  // Return cached font if available
+  if (loadedFontCache) {
+    return loadedFontCache;
+  }
+  
+  // Try each font in the fallback chain
+  for (const family of FONT_FALLBACKS) {
+    const loaded = await tryLoadFont(family);
+    if (loaded) {
+      loadedFontCache = loaded;
+      console.log(`[Font] Using ${family}`);
+      return loaded;
+    }
+  }
+  
+  // This shouldn't happen as Inter should always be available
+  throw new Error(`No fonts available from fallback chain: ${FONT_FALLBACKS.join(', ')}`);
+}
+
+/**
+ * Get the appropriate FontName for the current style.
+ */
+async function getFontName(bold: boolean = false): Promise<FontName> {
+  const font = await loadFontWithFallback();
+  return bold ? font.bold : font.regular;
+}
+
 // Helper to add text (with optional name for update-in-place)
 async function addText(
   parent: SceneNode & ChildrenMixin,
@@ -94,8 +162,8 @@ async function addText(
     textNode.name = nodeName;
   }
   
-  const fontName = { family: 'Inter', style: bold ? 'Bold' : 'Regular' };
-  await figma.loadFontAsync(fontName);
+  // Use font fallback chain
+  const fontName = await getFontName(bold);
   
   textNode.fontName = fontName;
   textNode.fontSize = fontSize;
@@ -191,8 +259,8 @@ async function addAutoLayoutText(
     textNode.name = nodeName;
   }
   
-  const fontName = { family: 'Inter', style: bold ? 'Bold' : 'Regular' };
-  await figma.loadFontAsync(fontName);
+  // Use font fallback chain
+  const fontName = await getFontName(bold);
   
   textNode.fontName = fontName;
   textNode.fontSize = fontSize;
@@ -889,9 +957,229 @@ interface SlideAnalysis {
   extras?: string[];  // Text not claimed by archetype detection
 }
 
-function analyzeSlideContent(textNodes: TextNode[]): SlideAnalysis {
-  // Extract text info with reference to original node for tracking
-  const texts: (TextAnalysis & { node: TextNode })[] = textNodes.map(t => ({
+// Helper to get all text nodes recursively from a parent (for bullets in containers)
+function getRecursiveTextNodes(node: SceneNode): TextNode[] {
+  if (node.type === 'TEXT') return [node];
+  if ('children' in node) {
+    const result: TextNode[] = [];
+    for (const child of (node as any).children) {
+      result.push(...getRecursiveTextNodes(child));
+    }
+    return result;
+  }
+  return [];
+}
+
+function analyzeSlideContent(directTextNodes: TextNode[], parent?: SceneNode & ChildrenMixin): SlideAnalysis {
+  // First, try frame-based detection (most reliable for Monorail-created slides)
+  if (parent) {
+    const children = (parent as any).children || [];
+    const frameNodes = children.filter((n: any) => n.type === 'FRAME') as FrameNode[];
+    const frameNames = new Set(frameNodes.map(f => f.name));
+    const textNames = new Set(directTextNodes.map(t => t.name));
+    
+    // BULLETS: Check for bullets-container frame
+    if (frameNames.has('bullets-container')) {
+      const bulletsFrame = frameNodes.find(f => f.name === 'bullets-container');
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      const bulletNodes = bulletsFrame ? getRecursiveTextNodes(bulletsFrame) : [];
+      
+      return {
+        archetype: 'bullets',
+        content: {
+          headline: headline?.characters || '',
+          bullets: bulletNodes.map(t => t.characters.replace(/^[•-]\s*/, '')),
+        }
+      };
+    }
+    
+    // BIG-IDEA: Check for big-idea-container frame
+    if (frameNames.has('big-idea-container')) {
+      const container = frameNodes.find(f => f.name === 'big-idea-container');
+      const containerTexts = container ? getRecursiveTextNodes(container) : [];
+      const headline = containerTexts.find(t => t.name === 'headline');
+      const subline = containerTexts.find(t => t.name === 'subline');
+      
+      return {
+        archetype: 'big-idea',
+        content: {
+          headline: headline?.characters || '',
+          subline: subline?.characters,
+        }
+      };
+    }
+    
+    // TITLE: Has gradient background and headline + optional subline
+    if (frameNames.has('title-gradient-bg') || children.some((n: any) => n.name === 'title-gradient-bg')) {
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      const subline = directTextNodes.find(t => t.name === 'subline');
+      
+      return {
+        archetype: 'title',
+        content: {
+          headline: headline?.characters || '',
+          subline: subline?.characters,
+        }
+      };
+    }
+    
+    // TWO-COLUMN: Has left-title or right-title
+    if (textNames.has('left-title') || textNames.has('right-title')) {
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      const leftTitle = directTextNodes.find(t => t.name === 'left-title');
+      const leftBody = directTextNodes.find(t => t.name === 'left-body');
+      const rightTitle = directTextNodes.find(t => t.name === 'right-title');
+      const rightBody = directTextNodes.find(t => t.name === 'right-body');
+      
+      return {
+        archetype: 'two-column',
+        content: {
+          headline: headline?.characters || '',
+          left: { title: leftTitle?.characters || '', body: leftBody?.characters || '' },
+          right: { title: rightTitle?.characters || '', body: rightBody?.characters || '' },
+        }
+      };
+    }
+    
+    // QUOTE: Has quote and attribution named nodes
+    if (textNames.has('quote') && textNames.has('attribution')) {
+      const quote = directTextNodes.find(t => t.name === 'quote');
+      const attribution = directTextNodes.find(t => t.name === 'attribution');
+      
+      return {
+        archetype: 'quote',
+        content: {
+          quote: quote?.characters.replace(/^[""]|[""]$/g, '') || '',
+          attribution: attribution?.characters.replace(/^[—-]\s*/, '') || '',
+        }
+      };
+    }
+    
+    // SUMMARY: Has item-* named nodes
+    if (Array.from(textNames).some(n => n.startsWith('item-'))) {
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      const items = directTextNodes.filter(t => t.name.startsWith('item-'));
+      items.sort((a, b) => {
+        const aNum = parseInt(a.name.replace('item-', '')) || 0;
+        const bNum = parseInt(b.name.replace('item-', '')) || 0;
+        return aNum - bNum;
+      });
+      
+      return {
+        archetype: 'summary',
+        content: {
+          headline: headline?.characters || '',
+          items: items.map(t => t.characters),
+        }
+      };
+    }
+    
+    // TIMELINE: Has stage-* named nodes
+    if (Array.from(textNames).some(n => n.startsWith('stage-'))) {
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      const stageLabels = directTextNodes.filter(t => t.name.match(/^stage-\d+-label$/));
+      const stageDescs = directTextNodes.filter(t => t.name.match(/^stage-\d+-desc$/));
+      
+      const stages: Array<{ label: string; description?: string }> = [];
+      stageLabels.sort((a, b) => {
+        const aNum = parseInt(a.name.match(/stage-(\d+)/)?.[1] || '0');
+        const bNum = parseInt(b.name.match(/stage-(\d+)/)?.[1] || '0');
+        return aNum - bNum;
+      });
+      
+      for (const label of stageLabels) {
+        const idx = label.name.match(/stage-(\d+)/)?.[1];
+        const desc = stageDescs.find(d => d.name === `stage-${idx}-desc`);
+        stages.push({
+          label: label.characters,
+          description: desc?.characters,
+        });
+      }
+      
+      return {
+        archetype: 'timeline',
+        content: {
+          headline: headline?.characters || '',
+          stages,
+        }
+      };
+    }
+    
+    // CHART: Has chart-placeholder
+    if (textNames.has('chart-placeholder')) {
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      const takeaway = directTextNodes.find(t => t.name === 'takeaway');
+      const chartText = directTextNodes.find(t => t.name === 'chart-placeholder');
+      const chartType = chartText?.characters.match(/\[Chart:\s*(\w+)\]/)?.[1] || 'data';
+      
+      return {
+        archetype: 'chart',
+        content: {
+          headline: headline?.characters || '',
+          chart: { type: chartType, placeholder: true },
+          takeaway: takeaway?.characters,
+        }
+      };
+    }
+    
+    // COMPARISON: Has col-* or cell-* named nodes
+    if (Array.from(textNames).some(n => n.startsWith('col-') || n.startsWith('cell-'))) {
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      const colNodes = directTextNodes.filter(t => t.name.startsWith('col-'));
+      const cellNodes = directTextNodes.filter(t => t.name.startsWith('cell-'));
+      
+      colNodes.sort((a, b) => {
+        const aNum = parseInt(a.name.replace('col-', '')) || 0;
+        const bNum = parseInt(b.name.replace('col-', '')) || 0;
+        return aNum - bNum;
+      });
+      
+      const columns = colNodes.map(c => c.characters);
+      const rows: string[][] = [];
+      
+      // Group cells by row
+      const cellMap = new Map<number, Map<number, string>>();
+      for (const cell of cellNodes) {
+        const match = cell.name.match(/cell-(\d+)-(\d+)/);
+        if (match) {
+          const [, rowStr, colStr] = match;
+          const row = parseInt(rowStr);
+          const col = parseInt(colStr);
+          if (!cellMap.has(row)) cellMap.set(row, new Map());
+          cellMap.get(row)!.set(col, cell.characters);
+        }
+      }
+      
+      // Build rows array
+      const rowNums = Array.from(cellMap.keys()).sort((a, b) => a - b);
+      for (const rowNum of rowNums) {
+        const rowCells = cellMap.get(rowNum)!;
+        const colNums = Array.from(rowCells.keys()).sort((a, b) => a - b);
+        rows.push(colNums.map(c => rowCells.get(c) || ''));
+      }
+      
+      return {
+        archetype: 'comparison',
+        content: {
+          headline: headline?.characters || '',
+          columns,
+          rows,
+        }
+      };
+    }
+    
+    // SECTION: Only has a single headline
+    if (textNames.size === 1 && textNames.has('headline')) {
+      const headline = directTextNodes.find(t => t.name === 'headline');
+      return {
+        archetype: 'section',
+        content: { headline: headline?.characters || '' }
+      };
+    }
+  }
+  
+  // Fallback: Pattern-matching on text content (for non-Monorail slides)
+  const texts: (TextAnalysis & { node: TextNode })[] = directTextNodes.map(t => ({
     text: t.characters,
     x: t.x,
     y: t.y,
@@ -1109,9 +1397,8 @@ async function applyPatches(patches: PatchRequest): Promise<{ updated: number; f
   let updated = 0;
   const failed: string[] = [];
   
-  // Load font upfront (we might need it)
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-  await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+  // Load fallback font upfront (we might need it for new text)
+  await loadFontWithFallback();
   
   for (const patch of patches.changes) {
     try {
@@ -1170,9 +1457,8 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       const mode = isInSlides() ? 'Figma Slides' : 'Figma Design';
       console.log(`Editor: ${figma.editorType}, Mode: ${mode}`);
       
-      // Load fonts upfront
-      await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-      await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+      // Load fonts upfront with fallback chain
+      await loadFontWithFallback();
       
       // Load existing mapping (for updates)
       const existingMapping = await figma.clientStorage.getAsync(MAPPING_KEY) || {};
@@ -1394,7 +1680,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           });
           
           // =====================================================
-          // LEGACY: Also do pattern-matching for backward compat
+          // ARCHETYPE DETECTION: Frame-based first, then pattern-matching
           // =====================================================
           const children = (node as any).children || [];
           const directTextNodes = children.filter((n: any) => n.type === 'TEXT') as TextNode[];
@@ -1402,7 +1688,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
             if (Math.abs(a.y - b.y) > 50) return a.y - b.y;
             return a.x - b.x;
           });
-          const analysis = analyzeSlideContent(directTextNodes);
+          const analysis = analyzeSlideContent(directTextNodes, node as SceneNode & ChildrenMixin);
           
           // Get or generate slide ID
           const slideId = reverseMapping[node.id] || `slide-${slides.length + 1}`;
@@ -1591,14 +1877,16 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           await figma.loadFontAsync({ family: headlineFont.family, style: headlineFont.style });
           headlineFontName = { family: headlineFont.family, style: headlineFont.style };
         } catch {
-          await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+          // Use font fallback chain
+          headlineFontName = await getFontName(true);
         }
         
         try {
           await figma.loadFontAsync({ family: bodyFont.family, style: bodyFont.style });
           bodyFontName = { family: bodyFont.family, style: bodyFont.style };
         } catch {
-          await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+          // Use font fallback chain
+          bodyFontName = await getFontName(false);
         }
         
         const accentColor = getAccentColor();
@@ -1797,9 +2085,8 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           }
         }
         
-        // Load fonts we might need
-        await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-        await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+        // Load fonts we might need with fallback chain
+        await loadFontWithFallback();
         
         // Update text nodes based on content map
         let updated = 0;

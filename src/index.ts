@@ -1378,7 +1378,6 @@ function escapeHtml(text: string): string {
 // =============================================================================
 
 let currentIR: DeckIR | null = null;
-let lastCapturedTemplate: CapturedNode | string | null = null;  // Cache for extract_template
 
 // =============================================================================
 // SERVER SETUP
@@ -1397,7 +1396,7 @@ const server = new Server(
   }
 );
 
-// List available tools (consolidated: 14 → 6)
+// List available tools (8 total)
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
@@ -1554,7 +1553,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-// Handle tool calls (consolidated: 14 → 6)
+// Handle tool calls (8 total)
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
@@ -1605,7 +1604,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Check if there's already a pending pull request
-      if (pendingPullResolve) {
+      if (hasPendingRequest('pull')) {
         return {
           content: [
             {
@@ -1617,22 +1616,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Create a promise to wait for the exported response
-      const pullPromise = new Promise<DeckIR>((resolve, reject) => {
-        pendingPullResolve = resolve;
-        pendingPullReject = reject;
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (pendingPullResolve) {
-            pendingPullResolve = null;
-            pendingPullReject = null;
-            reject(new Error("Timeout waiting for plugin export"));
-          }
-        }, 30000);
-      });
-
-      // Send export request to plugin
+      // Create pending request and send to plugin
+      const pullPromise = createPendingRequest<DeckIR>('pull', "Timeout waiting for plugin export");
       connectedPlugin!.send(JSON.stringify({ type: "request-export" }));
 
       try {
@@ -1781,7 +1766,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Check if there's already a pending patch request
-      if (pendingPatchResolve) {
+      if (hasPendingRequest('patch')) {
         return {
           content: [
             {
@@ -1793,22 +1778,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Create a promise to wait for the patch response
-      const patchPromise = new Promise<PatchResult>((resolve, reject) => {
-        pendingPatchResolve = resolve;
-        pendingPatchReject = reject;
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (pendingPatchResolve) {
-            pendingPatchResolve = null;
-            pendingPatchReject = null;
-            reject(new Error("Timeout waiting for patch result"));
-          }
-        }, 30000);
-      });
-
-      // Send patch request to plugin
+      // Create pending request and send to plugin
+      const patchPromise = createPendingRequest<PatchResult>('patch', "Timeout waiting for patch result");
       connectedPlugin!.send(JSON.stringify({ type: "patch-elements", patches }));
 
       try {
@@ -1858,7 +1829,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Check if there's already a pending capture request
-      if (pendingCaptureResolve) {
+      if (hasPendingRequest('capture')) {
         return {
           content: [
             {
@@ -1870,29 +1841,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Create a promise to wait for the capture response
-      const capturePromise = new Promise<CapturedTemplate>((resolve, reject) => {
-        pendingCaptureResolve = resolve;
-        pendingCaptureReject = reject;
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (pendingCaptureResolve) {
-            pendingCaptureResolve = null;
-            pendingCaptureReject = null;
-            reject(new Error("Timeout waiting for template capture"));
-          }
-        }, 30000);
-      });
-
-      // Send capture request to plugin
+      // Create pending request and send to plugin
+      const capturePromise = createPendingRequest<CapturedTemplate>('capture', "Timeout waiting for template capture");
       connectedPlugin!.send(JSON.stringify({ type: "capture-template" }));
 
       try {
         const result = await capturePromise;
-        
-        // Store captured template for clone to use
-        lastCapturedTemplate = result.template;
         
         // Parse the captured template
         const captured: CapturedNode = typeof result.template === 'string' 
@@ -2002,34 +1956,20 @@ ${JSON.stringify(output, null, 2)}
       }
 
       // Check if there's already a pending instantiate request
-      if (pendingInstantiateResolve) {
+      if (hasPendingRequest('instantiate')) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: Another instantiate request is already in progress. Please wait.",
+              text: "Error: Another clone request is already in progress. Please wait.",
             },
           ],
           isError: true,
         };
       }
 
-      // Create a promise to wait for the instantiate response
-      const instantiatePromise = new Promise<InstantiateResult>((resolve, reject) => {
-        pendingInstantiateResolve = resolve;
-        pendingInstantiateReject = reject;
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (pendingInstantiateResolve) {
-            pendingInstantiateResolve = null;
-            pendingInstantiateReject = null;
-            reject(new Error("Timeout waiting for instantiation"));
-          }
-        }, 30000);
-      });
-
-      // Send instantiate request to plugin
+      // Create pending request and send to plugin
+      const instantiatePromise = createPendingRequest<InstantiateResult>('instantiate', "Timeout waiting for clone");
       connectedPlugin!.send(JSON.stringify({ 
         type: "instantiate-template", 
         sourceId: sourceSlideId,
@@ -2105,7 +2045,7 @@ The new slide has been selected in Figma.`,
       }
 
       // Check if there's already a pending delete request
-      if (pendingDeleteResolve) {
+      if (hasPendingRequest('delete')) {
         return {
           content: [
             {
@@ -2117,22 +2057,8 @@ The new slide has been selected in Figma.`,
         };
       }
 
-      // Create a promise to wait for the delete response
-      const deletePromise = new Promise<DeleteResult>((resolve, reject) => {
-        pendingDeleteResolve = resolve;
-        pendingDeleteReject = reject;
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (pendingDeleteResolve) {
-            pendingDeleteResolve = null;
-            pendingDeleteReject = null;
-            reject(new Error("Timeout waiting for delete result"));
-          }
-        }, 30000);
-      });
-
-      // Send delete request to plugin
+      // Create pending request and send to plugin
+      const deletePromise = createPendingRequest<DeleteResult>('delete', "Timeout waiting for delete result");
       connectedPlugin!.send(JSON.stringify({ type: "delete-slides", slideIds }));
 
       try {
@@ -2190,7 +2116,7 @@ The new slide has been selected in Figma.`,
       }
 
       // Check if there's already a pending reorder request
-      if (pendingReorderResolve) {
+      if (hasPendingRequest('reorder')) {
         return {
           content: [
             {
@@ -2202,22 +2128,8 @@ The new slide has been selected in Figma.`,
         };
       }
 
-      // Create a promise to wait for the reorder response
-      const reorderPromise = new Promise<ReorderResult>((resolve, reject) => {
-        pendingReorderResolve = resolve;
-        pendingReorderReject = reject;
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (pendingReorderResolve) {
-            pendingReorderResolve = null;
-            pendingReorderReject = null;
-            reject(new Error("Timeout waiting for reorder result"));
-          }
-        }, 30000);
-      });
-
-      // Send reorder request to plugin
+      // Create pending request and send to plugin
+      const reorderPromise = createPendingRequest<ReorderResult>('reorder', "Timeout waiting for reorder result");
       connectedPlugin!.send(JSON.stringify({ type: "reorder-slides", slideIds }));
 
       try {
@@ -2478,62 +2390,73 @@ let wsServer: WebSocketServer | null = null;
 let connectedPlugin: WebSocket | null = null;
 let pluginInfo: { name?: string; version?: string; connectedAt?: string } = {};
 
-// Pending pull request (for monorail_pull_ir)
-let pendingPullResolve: ((ir: DeckIR) => void) | null = null;
-let pendingPullReject: ((error: Error) => void) | null = null;
+// =============================================================================
+// PENDING REQUEST MANAGER
+// =============================================================================
+// Consolidated request/response handling for WebSocket communication.
+// Each request type gets a pending entry that tracks resolve/reject/timeout.
 
-// Pending patch request (for monorail_patch_elements)
-interface PatchResult {
-  updated: number;
-  failed: string[];
+interface PendingRequest<T> {
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
 }
-let pendingPatchResolve: ((result: PatchResult) => void) | null = null;
-let pendingPatchReject: ((error: Error) => void) | null = null;
 
-// Pending template capture request (for monorail_capture_template)
-interface CapturedTemplate {
-  template: any;
-  nodeCount: number;
-}
-let pendingCaptureResolve: ((result: CapturedTemplate) => void) | null = null;
-let pendingCaptureReject: ((error: Error) => void) | null = null;
+// Result types for each request
+interface PatchResult { updated: number; failed: string[]; }
+interface CapturedTemplate { template: any; nodeCount: number; }
+interface InstantiateResult { success: boolean; newSlideId?: string; updated?: number; failed?: string[]; error?: string; }
+interface CreateResult { success: boolean; slideId?: string; error?: string; }
+interface DeleteResult { deleted: number; failed: string[]; }
+interface ReorderResult { success: boolean; count?: number; error?: string; }
 
-// Pending instantiate request (for monorail_instantiate_template)
-interface InstantiateResult {
-  success: boolean;
-  newSlideId?: string;
-  updated?: number;
-  failed?: string[];
-  error?: string;
-}
-let pendingInstantiateResolve: ((result: InstantiateResult) => void) | null = null;
-let pendingInstantiateReject: ((error: Error) => void) | null = null;
+// Type-safe request type keys
+type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder';
 
-// Pending create styled slide request
-interface CreateResult {
-  success: boolean;
-  slideId?: string;
-  error?: string;
-}
-let pendingCreateResolve: ((result: CreateResult) => void) | null = null;
-let pendingCreateReject: ((error: Error) => void) | null = null;
+// Map of pending requests by type
+const pendingRequests = new Map<RequestType, PendingRequest<any>>();
 
-// Pending delete request (for monorail_delete)
-interface DeleteResult {
-  deleted: number;
-  failed: string[];
-}
-let pendingDeleteResolve: ((result: DeleteResult) => void) | null = null;
-let pendingDeleteReject: ((error: Error) => void) | null = null;
+const REQUEST_TIMEOUT_MS = 30000;
 
-// Pending reorder request (for monorail_reorder)
-interface ReorderResult {
-  success: boolean;
-  count?: number;
-  error?: string;
+/**
+ * Create a pending request with automatic timeout.
+ * Returns a promise that resolves when the corresponding response arrives.
+ */
+function createPendingRequest<T>(type: RequestType, timeoutMessage: string): Promise<T> {
+  // Reject if there's already a pending request of this type
+  if (pendingRequests.has(type)) {
+    return Promise.reject(new Error(`Another ${type} request is already in progress. Please wait.`));
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      pendingRequests.delete(type);
+      reject(new Error(timeoutMessage));
+    }, REQUEST_TIMEOUT_MS);
+
+    pendingRequests.set(type, { resolve, reject, timeoutId });
+  });
 }
-let pendingReorderResolve: ((result: ReorderResult) => void) | null = null;
-let pendingReorderReject: ((error: Error) => void) | null = null;
+
+/**
+ * Resolve a pending request with the result.
+ */
+function resolvePendingRequest<T>(type: RequestType, result: T): boolean {
+  const pending = pendingRequests.get(type);
+  if (!pending) return false;
+  
+  clearTimeout(pending.timeoutId);
+  pendingRequests.delete(type);
+  pending.resolve(result);
+  return true;
+}
+
+/**
+ * Check if a request type has a pending request.
+ */
+function hasPendingRequest(type: RequestType): boolean {
+  return pendingRequests.has(type);
+}
 
 function startWebSocketServer() {
   wsServer = new WebSocketServer({ port: WS_PORT });
@@ -2577,11 +2500,8 @@ function startWebSocketServer() {
         } else if (parsed.type === "exported") {
           // Plugin sent exported IR (response to request-export)
           console.error(`[WebSocket] Received exported IR with ${parsed.ir?.slides?.length || 0} slides`);
-          
-          if (pendingPullResolve && parsed.ir) {
-            pendingPullResolve(parsed.ir as DeckIR);
-            pendingPullResolve = null;
-            pendingPullReject = null;
+          if (parsed.ir) {
+            resolvePendingRequest<DeckIR>('pull', parsed.ir as DeckIR);
           }
         } else if (parsed.type === "applied") {
           // Plugin confirmed it applied IR
@@ -2589,80 +2509,50 @@ function startWebSocketServer() {
         } else if (parsed.type === "patched") {
           // Plugin sent patch result
           console.error(`[WebSocket] Patched ${parsed.updated} elements, ${parsed.failed?.length || 0} failed`);
-          
-          if (pendingPatchResolve) {
-            pendingPatchResolve({
-              updated: parsed.updated || 0,
-              failed: parsed.failed || [],
-            });
-            pendingPatchResolve = null;
-            pendingPatchReject = null;
-          }
+          resolvePendingRequest<PatchResult>('patch', {
+            updated: parsed.updated || 0,
+            failed: parsed.failed || [],
+          });
         } else if (parsed.type === "template-captured") {
           // Plugin sent captured template
           console.error(`[WebSocket] Captured template with ${parsed.nodeCount} nodes`);
-          
-          if (pendingCaptureResolve) {
-            pendingCaptureResolve({
-              template: parsed.template,
-              nodeCount: parsed.nodeCount || 0,
-            });
-            pendingCaptureResolve = null;
-            pendingCaptureReject = null;
-          }
+          resolvePendingRequest<CapturedTemplate>('capture', {
+            template: parsed.template,
+            nodeCount: parsed.nodeCount || 0,
+          });
         } else if (parsed.type === "instantiated") {
           // Plugin sent instantiate result
           console.error(`[WebSocket] Instantiate result: success=${parsed.success}, updated=${parsed.updated}`);
-          
-          if (pendingInstantiateResolve) {
-            pendingInstantiateResolve({
-              success: parsed.success,
-              newSlideId: parsed.newSlideId,
-              updated: parsed.updated,
-              failed: parsed.failed,
-              error: parsed.error,
-            });
-            pendingInstantiateResolve = null;
-            pendingInstantiateReject = null;
-          }
+          resolvePendingRequest<InstantiateResult>('instantiate', {
+            success: parsed.success,
+            newSlideId: parsed.newSlideId,
+            updated: parsed.updated,
+            failed: parsed.failed,
+            error: parsed.error,
+          });
         } else if (parsed.type === "styled-slide-created") {
           // Plugin sent create styled slide result
           console.error(`[WebSocket] Create styled slide result: success=${parsed.success}`);
-          
-          if (pendingCreateResolve) {
-            pendingCreateResolve({
-              success: parsed.success,
-              slideId: parsed.slideId,
-              error: parsed.error,
-            });
-            pendingCreateResolve = null;
-            pendingCreateReject = null;
-          }
+          resolvePendingRequest<CreateResult>('create', {
+            success: parsed.success,
+            slideId: parsed.slideId,
+            error: parsed.error,
+          });
         } else if (parsed.type === "slides-deleted") {
           // Plugin sent delete result
           console.error(`[WebSocket] Delete result: deleted=${parsed.deleted}, failed=${parsed.failed?.length || 0}`);
-          
-          if (pendingDeleteResolve) {
-            pendingDeleteResolve({
-              deleted: parsed.deleted || 0,
-              failed: parsed.failed || [],
-            });
-            pendingDeleteResolve = null;
-            pendingDeleteReject = null;
-          }
+          resolvePendingRequest<DeleteResult>('delete', {
+            deleted: parsed.deleted || 0,
+            failed: parsed.failed || [],
+          });
         } else if (parsed.type === "slides-reordered") {
           // Plugin sent reorder result
           console.error(`[WebSocket] Reorder result: success=${parsed.success}, count=${parsed.count}`);
-          
-          if (pendingReorderResolve) {
-            pendingReorderResolve({
-              success: parsed.success,
-              count: parsed.count,
-              error: parsed.error,
-            });
-            pendingReorderResolve = null;
-            pendingReorderReject = null;
-          }
+          resolvePendingRequest<ReorderResult>('reorder', {
+            success: parsed.success,
+            count: parsed.count,
+            error: parsed.error,
+          });
         } else {
           // Echo unknown messages for now (debugging)
           console.error(`[WebSocket] Unknown message type: ${parsed.type}`);

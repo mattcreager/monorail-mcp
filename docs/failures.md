@@ -345,3 +345,67 @@ const node = figma.createNodeFromSvg(svg);
 - But SVG import covers the key gap (diagrams, visual elements)
 - For pure HTML conversion, third-party tools exist (html.to.design, etc.)
 - Recommendation: Don't build an HTML parser; leverage SVG for visuals
+
+---
+
+### 2026-01-11 - Archetype detection: Direct children vs recursive
+
+**What we found:** The `analyzeSlideContent()` function was only looking at direct text node children of a slide. But when slides use Auto Layout containers (like `bullets-container`), the actual text nodes are nested inside frames. This caused bullets slides to export as `archetype: "unknown"` on round-trip.
+
+**Root cause:** Pattern-matching on direct children misses text inside layout containers.
+
+```typescript
+// OLD: Only sees direct children
+const directTextNodes = children.filter(n => n.type === 'TEXT');
+
+// NEW: Also checks frame names for Monorail-created content
+if (frameNames.has('bullets-container')) return detectBullets(...);
+```
+
+**Impact:** Round-trip fidelity was broken. Push a bullets slide, pull it back → "unknown".
+
+**Fix:** Rebuilt archetype detection to use two-phase approach:
+1. **Frame-based detection** (for Monorail-created slides) — check for named containers
+2. **Pattern-matching fallback** (for non-Monorail slides) — analyze text content
+
+This mirrors how `detectExistingArchetype()` already worked for update-in-place detection.
+
+**Lesson learned:** When building export/import round-trip systems, always test the full cycle. Export alone looked fine; import alone looked fine; but the round-trip revealed the mismatch.
+
+---
+
+### 2026-01-11 - Pending request state: Fragmented variables invite bugs
+
+**What we found:** The MCP server had 14 separate variables for tracking pending WebSocket requests:
+
+```typescript
+let pendingPullResolve: ((ir: DeckIR) => void) | null = null;
+let pendingPullReject: ((error: Error) => void) | null = null;
+// ... 12 more for patch, capture, clone, delete, reorder, create ...
+```
+
+Each request type had its own resolve/reject pair with duplicated timeout logic. This was error-prone and hard to extend.
+
+**Impact:** 
+- Easy to forget to clear state after timeout
+- Hard to add new request types
+- Code duplication across 7 request handlers
+
+**Fix:** Consolidated into generic `PendingRequest<T>` manager:
+
+```typescript
+interface PendingRequest<T> {
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
+}
+
+const pendingRequests = new Map<RequestType, PendingRequest<any>>();
+```
+
+Three utility functions handle all request lifecycle:
+- `createPendingRequest<T>(type, timeoutMsg)` — create with auto-timeout
+- `resolvePendingRequest<T>(type, result)` — resolve and clean up
+- `hasPendingRequest(type)` — check if request in progress
+
+**Lesson learned:** When you see parallel structures with the same shape, consolidate into a generic. The Map + generic pattern is cleaner than N × 2 variables.

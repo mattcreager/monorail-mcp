@@ -52,11 +52,13 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### The Gap 🔨
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
-- **Font handling** — custom fonts (Supply) cause failures, need fallback chain
 - **Role mapping** — content uses node IDs, should use roles (headline, etc.)
-- **Archetype detection** — bullets slides export as "unknown" on round-trip
 - **Limited diagrams** — timeline is linear only, no loop arrows or callouts
 - **Diagrams** — text editable, but images/structure not yet (future work)
+
+### Recently Fixed ✅
+- ~~Font handling~~ — Now has fallback chain (Session 17)
+- ~~Archetype detection~~ — Frame-based detection, bullets now work (Session 17)
 
 ### Key Files
 | File | Purpose |
@@ -86,10 +88,10 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### Priority 1: Fix Core Loop Gaps
 - [ ] Auto Layout for remaining archetypes (title, quote, summary)
-- [ ] Dumber plugin (just report elements, Claude interprets archetype)
+- [x] ~~Dumber plugin~~ → Smarter detection: frame-based archetype detection (Session 17)
 
 ### Priority 2: Reliability
-- [ ] Font fallback chain (custom → similar → Inter)
+- [x] Font fallback chain (Inter → SF Pro → Helvetica → Arial) — Session 17
 - [ ] Better error messages when fonts unavailable
 
 ### Future Work (defer)
@@ -101,6 +103,51 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 17 (2026-01-11)
+**Technical Due Diligence: Code Review & Improvements**
+
+Comprehensive code review of the entire codebase, followed by implementation of identified improvements.
+
+**Code Review Findings:**
+- IR format reference is ✅ current and valid
+- Documentation mostly aligned, some stale tool names in ARCHITECTURE.md
+- Codebase well-structured with consistent patterns
+- Identified technical debt items for remediation
+
+**Immediate Fixes (completed):**
+- ✅ Updated ARCHITECTURE.md with current 8-tool names
+- ✅ Fixed IR format example (content must be nested, not flat)
+- ✅ Fixed stale "Open Questions" (delete capability now exists)
+- ✅ Fixed tool count comments in src/index.ts (was 6, now 8)
+- ✅ Removed unused `lastCapturedTemplate` variable
+
+**Major Improvements (completed):**
+
+1. **Pending Request Manager** — Consolidated 14 fragmented variables into clean generic system:
+   - `createPendingRequest<T>(type, timeoutMsg)` — create with auto-timeout
+   - `resolvePendingRequest<T>(type, result)` — resolve pending request
+   - `hasPendingRequest(type)` — check if request in progress
+   - Prevents race conditions, reduces code duplication
+
+2. **Archetype Detection** — Rebuilt `analyzeSlideContent()` to use frame-based detection:
+   - Now detects `bullets-container`, `big-idea-container`, etc.
+   - Falls back to pattern-matching for non-Monorail slides
+   - Fixes bullets → "unknown" round-trip bug
+   - All 10 archetypes now properly detected
+
+3. **Font Fallback Chain** — Added `loadFontWithFallback()`:
+   - Tries fonts in order: Inter → SF Pro Display → Helvetica Neue → Arial
+   - Caches successful font load
+   - Prevents crashes when custom fonts unavailable
+   - Removed all hardcoded Inter font loads
+
+**Files changed:**
+- `src/index.ts` — pending request consolidation, dead code removal
+- `figma-plugin/code.ts` — archetype detection, font fallback
+- `docs/ARCHITECTURE.md` — tool names, IR format, open questions
+
+**Technical debt reduced:** Cleaner async handling, better type safety, improved reliability.
 
 ### Session 16 (2026-01-11)
 **Slide Operations: delete, position, reorder + Rich Feedback**

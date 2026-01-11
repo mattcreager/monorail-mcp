@@ -11,7 +11,7 @@ The key unlock: **Figma as shared canvas, not just output target.**
 ```
      Claude (Cursor)                    Figma
         │                                 │
-        │    monorail_push_ir            │
+        │    monorail_push               │
         ├────────────────────────────────►│  Plugin auto-applies
         │         (via WebSocket)         │
         │                                 │
@@ -19,7 +19,7 @@ The key unlock: **Figma as shared canvas, not just output target.**
         │                            move, restyle,
         │                            add content
         │                                 │
-        │    monorail_pull_ir            │
+        │    monorail_pull               │
         │◄────────────────────────────────┤  Plugin exports IR
         │         (via WebSocket)         │
         │                                 │
@@ -74,18 +74,20 @@ slides:
   - id: slide-1
     archetype: title
     status: locked          # locked | draft | stub
-    headline: "The Support Scaling Problem"
-    subline: "Why we need to act before Q3 2026"
+    content:
+      headline: "The Support Scaling Problem"
+      subline: "Why we need to act before Q3 2026"
     speaker_notes: "Set context..."
     
   - id: slide-2
     archetype: chart
     status: draft
-    headline: "Ticket Volume Is Outpacing Capacity"
-    chart:
-      type: line
-      description: "Tickets vs. headcount, 2023-2026"
-    takeaway: "The lines cross in Q3 2026."
+    content:
+      headline: "Ticket Volume Is Outpacing Capacity"
+      chart:
+        type: line
+        description: "Tickets vs. headcount, 2023-2026"
+      takeaway: "The lines cross in Q3 2026."
 ```
 
 Key fields:
@@ -118,11 +120,14 @@ Key fields:
 
 | Tool | Purpose |
 |------|---------|
-| `monorail_connection_status` | Check if plugin is connected |
-| `monorail_push_ir` | Send IR to plugin (auto-apply) |
-| `monorail_pull_ir` | Request export from plugin |
-| `monorail_create_deck` | Create deck (in-memory) |
-| `monorail_preview` | Generate HTML preview |
+| `monorail_status` | Check if plugin is connected |
+| `monorail_pull` | Get deck state (slides, elements, IDs) |
+| `monorail_push` | Create/replace slides from IR |
+| `monorail_patch` | Update specific text by node ID |
+| `monorail_capture` | Full node tree + design system + slots |
+| `monorail_clone` | Clone slide + update content |
+| `monorail_delete` | Delete slides by ID |
+| `monorail_reorder` | Reorder slides |
 
 **Why custom MCP?** The official Figma MCP doesn't support Slides, and REST API is read-only for design content. WebSocket bridge connects directly to the Figma plugin.
 
@@ -244,7 +249,7 @@ This forces us through the whole loop and surfaces gaps.
 1. **Visual feedback** — Claude can't see rendered output (text overflow, broken layouts)
 2. **Template integration** — Our archetypes bypass Figma's native template system
 3. **Design co-creation** — HTML output is rich, Figma output is functional text
-4. **Delete capability** — Plugin can only create/update, not delete slides
+4. **Font handling** — Custom fonts cause failures; need fallback chain
 
 ---
 
