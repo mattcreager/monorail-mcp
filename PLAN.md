@@ -97,7 +97,10 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ### Priority 1: Dogfood Fixes (HIGH)
 - [x] **Push modes** — Add `mode: "replace" | "append"` parameter (Session 17)
 - [x] **Three-column archetype** — `position-cards` archetype handles this (Session 18)
-- [ ] **Capture → Clone workflow** — Design slide in Figma → capture → clone with new content (validates alternative to archetypes)
+- [x] **Capture → Clone workflow** — Design slide in Figma → capture → clone with new content (Session 19)
+- [x] **Configurable capture depth** — `max_depth` param for complex nested slides (Session 19)
+- [x] **Capture by slide ID** — No selection required, capture any slide by ID (Session 19)
+- [x] **Font fallback for patches** — Deep nodes now use fallback chain (Session 19)
 - [ ] **Video/embed archetype** — Even if just a URL field
 - [ ] **Simpler three-column** — Basic 3-col without badges (lower complexity than position-cards)
 
@@ -127,6 +130,30 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 19 (2026-01-11)
+**Capture → Clone Workflow Validated + Plugin Enhancements**
+
+Full validation of the capture → clone workflow for complex slides.
+
+**Workflow tested:**
+1. Created fresh "Monorail" deck using templates from slides 4 (position-cards) and 5 (3-column)
+2. Cloned templates with new content — preserved all styling, structure, fonts
+3. Patched deep nested elements (depth 4) — required font fallback fix
+
+**Enhancements implemented:**
+- ✅ **Configurable `max_depth`** for `monorail_capture` — allows capturing deeper nested content as editable slots
+- ✅ **Capture by `slide_id`** — no selection required, fetch any slide by Figma node ID
+- ✅ **Font fallback for patches** — `applyPatches()` now uses fallback chain like clone does
+- ✅ **Font substitution reporting** — both patch and clone report when fonts are substituted
+
+**Key insight:** Both limitations we hit (deep patch failures, capture requiring selection) were **our plugin code choices**, not Figma API restrictions. Easy fixes.
+
+**Files changed:**
+- `figma-plugin/code.ts` — font fallback in applyPatches, slideId param in capture-template
+- `src/index.ts` — slide_id param for monorail_capture tool
+
+**Monorail deck created:** 4-slide deck demonstrating the tool's own workflow (meta!)
 
 ### Session 18 (2026-01-11)
 **Complex Template Strategy: position-cards Archetype**

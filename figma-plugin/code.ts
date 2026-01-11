@@ -96,7 +96,7 @@ function isInSlides(): boolean {
 // Try fonts in order until one loads successfully.
 // This prevents failures when custom fonts aren't available.
 
-const FONT_FALLBACKS = ['Inter', 'SF Pro Display', 'Helvetica Neue', 'Arial'];
+const FONT_FALLBACKS = ['Supply', 'Inter', 'SF Pro Display', 'Helvetica Neue', 'Arial'];
 
 interface LoadedFont {
   family: string;
@@ -1540,9 +1540,10 @@ interface PatchRequest {
   changes: ElementPatch[];
 }
 
-async function applyPatches(patches: PatchRequest): Promise<{ updated: number; failed: string[] }> {
+async function applyPatches(patches: PatchRequest): Promise<{ updated: number; failed: string[]; fontSubstitutions: string[] }> {
   let updated = 0;
   const failed: string[] = [];
+  const fontSubstitutions: string[] = [];
   
   // Load fallback font upfront (we might need it for new text)
   await loadFontWithFallback();
@@ -1565,13 +1566,48 @@ async function applyPatches(patches: PatchRequest): Promise<{ updated: number; f
       
       const textNode = node as TextNode;
       
-      // Load the existing font to preserve styling
+      // Try to load the existing font, fall back if unavailable
       const fontName = textNode.fontName;
+      let fontLoaded = false;
+      
       if (fontName !== figma.mixed) {
-        await figma.loadFontAsync(fontName);
+        try {
+          await figma.loadFontAsync(fontName as FontName);
+          fontLoaded = true;
+        } catch {
+          // Original font unavailable, try fallbacks
+          const originalFontInfo = `${(fontName as FontName).family} ${(fontName as FontName).style}`;
+          const wasBold = (fontName as FontName).style.includes('Bold');
+          
+          for (const fallbackFamily of FONT_FALLBACKS) {
+            try {
+              const fallbackFont: FontName = { family: fallbackFamily, style: wasBold ? 'Bold' : 'Regular' };
+              await figma.loadFontAsync(fallbackFont);
+              textNode.fontName = fallbackFont;
+              fontLoaded = true;
+              fontSubstitutions.push(`${originalFontInfo} → ${fallbackFamily}`);
+              console.log(`Font fallback for ${patch.target}: ${originalFontInfo} → ${fallbackFamily}`);
+              break;
+            } catch {
+              continue;
+            }
+          }
+        }
+      } else {
+        // Mixed fonts - load fallback and apply uniformly
+        const fallbackFont = await getFontName(false);
+        textNode.fontName = fallbackFont;
+        fontLoaded = true;
+        fontSubstitutions.push(`mixed → ${fallbackFont.family}`);
       }
       
-      // Update text content only (preserves position, size, color, font)
+      if (!fontLoaded) {
+        console.warn(`No fonts available for ${patch.target}`);
+        failed.push(patch.target);
+        continue;
+      }
+      
+      // Update text content only (preserves position, size, color)
       textNode.characters = patch.text;
       updated++;
       
@@ -1583,7 +1619,7 @@ async function applyPatches(patches: PatchRequest): Promise<{ updated: number; f
     }
   }
   
-  return { updated, failed };
+  return { updated, failed, fontSubstitutions };
 }
 
 // Main message handler
@@ -1926,30 +1962,44 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
     if (msg.type === 'patch-elements') {
       if (!msg.patches || !msg.patches.changes || msg.patches.changes.length === 0) {
         figma.notify('No patches provided', { error: true });
-        figma.ui.postMessage({ type: 'patched', updated: 0, failed: [] });
+        figma.ui.postMessage({ type: 'patched', updated: 0, failed: [], fontSubstitutions: [] });
         return;
       }
       
       const result = await applyPatches(msg.patches);
       
-      if (result.failed.length > 0) {
-        figma.notify(`Patched ${result.updated} elements (${result.failed.length} failed)`, { error: true });
-      } else {
-        figma.notify(`✓ Patched ${result.updated} elements`);
+      // Build notification message
+      let notifyMsg = result.failed.length > 0
+        ? `Patched ${result.updated} elements (${result.failed.length} failed)`
+        : `✓ Patched ${result.updated} elements`;
+      
+      if (result.fontSubstitutions.length > 0) {
+        const uniqueSubs = [...new Set(result.fontSubstitutions)];
+        notifyMsg += ` (${uniqueSubs.length} font sub${uniqueSubs.length > 1 ? 's' : ''})`;
       }
       
+      figma.notify(notifyMsg, { error: result.failed.length > 0 });
       figma.ui.postMessage({ type: 'patched', ...result });
     }
     
     // SPIKE: Export full template structure
     if (msg.type === 'capture-template') {
-      // Get the first selected node, or first slide
+      // Get target node: by ID, by selection, or first slide
       let targetNode: SceneNode | null = null;
+      const requestedSlideId = (msg as any).slideId as string | undefined;
       
-      if (figma.currentPage.selection.length > 0) {
+      if (requestedSlideId) {
+        // Capture specific slide by ID (no selection needed)
+        targetNode = await (figma as any).getNodeByIdAsync(requestedSlideId);
+        if (!targetNode) {
+          figma.notify(`Slide not found: ${requestedSlideId}`, { error: true });
+          figma.ui.postMessage({ type: 'template-captured', error: `Slide not found: ${requestedSlideId}` });
+          return;
+        }
+      } else if (figma.currentPage.selection.length > 0) {
         targetNode = figma.currentPage.selection[0];
       } else {
-        // Find first slide
+        // Find first slide as fallback
         if (isInSlides()) {
           function findFirstSlide(node: SceneNode): SceneNode | null {
             if ((node as any).type === 'SLIDE') return node;
@@ -1970,6 +2020,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       if (!targetNode) {
         figma.notify('No slide selected or found', { error: true });
+        figma.ui.postMessage({ type: 'template-captured', error: 'No slide selected or found' });
         return;
       }
       
@@ -2292,6 +2343,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         // Update text nodes based on content map
         let updated = 0;
         const failed: string[] = [];
+        const fontSubstitutions: string[] = [];  // Track when we use fallback fonts
         
         // Build a map of old ID -> new node in clone
         // Since clone creates new IDs, we need to match by structure
@@ -2320,19 +2372,48 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                   }
                 }
               } else {
-                // Single font
+                // Single font - try to load it
                 await figma.loadFontAsync(fontName as FontName);
               }
               
               textNode.characters = newText;
               updated++;
             } catch (fontError) {
-              // Font unavailable - log and skip this node
-              const fontInfo = textNode.fontName !== figma.mixed 
+              // Original font unavailable - try fallback fonts
+              const originalFontInfo = textNode.fontName !== figma.mixed 
                 ? `${(textNode.fontName as FontName).family} ${(textNode.fontName as FontName).style}`
                 : 'mixed fonts';
-              console.warn(`Skipping text node ${original.id}: font "${fontInfo}" unavailable`);
-              failed.push(`${original.id} (font: ${fontInfo})`);
+              
+              // Try each fallback font
+              let fallbackSucceeded = false;
+              for (const fallbackFamily of FONT_FALLBACKS) {
+                try {
+                  // Determine if original was bold
+                  const wasBold = textNode.fontName !== figma.mixed && 
+                    (textNode.fontName as FontName).style.includes('Bold');
+                  const fallbackStyle = wasBold ? 'Bold' : 'Regular';
+                  const fallbackFont: FontName = { family: fallbackFamily, style: fallbackStyle };
+                  
+                  await figma.loadFontAsync(fallbackFont);
+                  
+                  // Success! Apply fallback font and update text
+                  textNode.fontName = fallbackFont;
+                  textNode.characters = newText;
+                  updated++;
+                  fallbackSucceeded = true;
+                  fontSubstitutions.push(`${originalFontInfo} → ${fallbackFamily}`);
+                  console.log(`Used fallback font ${fallbackFamily} for node ${original.id} (original: ${originalFontInfo})`);
+                  break;
+                } catch {
+                  // This fallback didn't work, try next
+                  continue;
+                }
+              }
+              
+              if (!fallbackSucceeded) {
+                console.warn(`Skipping text node ${original.id}: no fonts available (tried ${originalFontInfo} and fallbacks)`);
+                failed.push(`${original.id} (font: ${originalFontInfo})`);
+              }
             }
           }
           
@@ -2354,13 +2435,21 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         figma.currentPage.selection = [clonedSlide];
         figma.viewport.scrollAndZoomIntoView([clonedSlide]);
         
-        figma.notify(`✓ Created new slide with ${updated} text updates`);
+        // Build notification message
+        let notifyMsg = `✓ Created new slide with ${updated} text updates`;
+        if (fontSubstitutions.length > 0) {
+          const uniqueSubs = [...new Set(fontSubstitutions)];
+          notifyMsg += ` (${uniqueSubs.length} font substitution${uniqueSubs.length > 1 ? 's' : ''})`;
+        }
+        figma.notify(notifyMsg);
+        
         figma.ui.postMessage({ 
           type: 'instantiated', 
           success: true, 
           newSlideId: clonedSlide.id,
           updated,
-          failed 
+          failed,
+          fontSubstitutions: [...new Set(fontSubstitutions)]  // Deduplicated
         });
         
       } catch (err) {

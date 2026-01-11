@@ -90,18 +90,24 @@ Parameters:
 ---
 
 ### `monorail_capture`
-Capture full structure of selected slide (or first slide).
+Capture full structure of a slide.
 
 ```
+Parameters:
+- slide_id?: string — Figma node ID to capture (optional, defaults to selected slide)
+- max_depth?: number — Nesting depth for editable slots (default: 2, increase for complex slides)
+
 Returns:
 - slide_id, slide_name, dimensions
 - design_system: { colors, fonts, spacing, corners }
 - slots[]: { id, role, text, bounds } — editable text nodes
-- complex_regions[]: diagrams/charts (not directly editable)
-- stats: node counts
+- complex_regions[]: diagrams/charts (deeper than max_depth)
+- stats: node counts, max_depth_used
 ```
 
 **Use when:** Analyzing an existing slide before cloning, or extracting design tokens.
+
+**Tip:** If important content appears in `complex_regions`, re-capture with higher `max_depth` (3 or 4).
 
 ---
 

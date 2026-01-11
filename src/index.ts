@@ -179,7 +179,7 @@ interface DesignSystem {
 // TEMPLATE EXTRACTION LOGIC
 // =============================================================================
 
-const MAX_SLOT_DEPTH = 2;  // Don't look deeper than 2 levels for slots
+const DEFAULT_MAX_SLOT_DEPTH = 2;  // Default depth for slot capture
 
 /**
  * Convert RGB to hex string
@@ -413,11 +413,14 @@ function countNodes(node: CapturedNode): number {
  * 
  * Strategy:
  * - Walk tree with depth tracking
- * - TEXT nodes at depth 1-2 become slots
- * - Named frames (Card, Block, etc.) at depth 1-2 become slots
- * - Subtrees at depth > 2 become complex_regions (bounds only)
+ * - TEXT nodes at depth 1-maxDepth become slots
+ * - Named frames (Card, Block, etc.) at depth 1-maxDepth become slots
+ * - Subtrees at depth > maxDepth become complex_regions (bounds only)
+ * 
+ * @param captured - The full node tree from Figma
+ * @param maxDepth - Maximum depth to capture as slots (default: 2). Increase for complex nested layouts.
  */
-function extractTemplate(captured: CapturedNode): ExtractedTemplate {
+function extractTemplate(captured: CapturedNode, maxDepth: number = DEFAULT_MAX_SLOT_DEPTH): ExtractedTemplate {
   const slots: TemplateSlot[] = [];
   const complexRegions: ComplexRegion[] = [];
   let totalNodesInCapture = countNodes(captured);
@@ -443,8 +446,8 @@ function extractTemplate(captured: CapturedNode): ExtractedTemplate {
       return;
     }
     
-    // At depth > MAX_SLOT_DEPTH, mark as complex region and stop
-    if (depth > MAX_SLOT_DEPTH) {
+    // At depth > maxDepth, mark as complex region and stop
+    if (depth > maxDepth) {
       const nodeCount = countNodes(node);
       // Only track complex regions if they have significant content
       if (nodeCount >= 3) {
@@ -1512,10 +1515,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_capture",
         description:
-          "Capture full node structure from the currently selected slide (or first slide). Returns complete frame tree with positions, fills, strokes, Auto Layout, text styling. Also extracts design system tokens (colors, fonts, spacing) and identifies template slots. Use this to analyze existing designs before cloning.",
+          "Capture full node structure from a slide. Returns complete frame tree with positions, fills, strokes, Auto Layout, text styling. Also extracts design system tokens (colors, fonts, spacing) and identifies template slots. Use this to analyze existing designs before cloning. If important content appears in complex_regions, re-capture with higher max_depth.",
         inputSchema: {
           type: "object" as const,
-          properties: {},
+          properties: {
+            slide_id: {
+              type: "string",
+              description:
+                "Optional Figma node ID of slide to capture. If omitted, captures the currently selected slide (or first slide).",
+            },
+            max_depth: {
+              type: "number",
+              description:
+                "Maximum nesting depth to capture as editable slots (default: 2). Increase to 3 or 4 for complex slides with nested cards/columns. Content deeper than this becomes complex_regions.",
+            },
+          },
         },
       },
       {
@@ -1841,9 +1855,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // =========================================================================
     // monorail_capture - Capture slide structure + design system + slots
     // =========================================================================
-    case "monorail_capture": {
+case "monorail_capture": {
       const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
-      
+
+      // Extract parameters
+      const maxDepth = typeof request.params?.arguments?.max_depth === 'number'
+        ? request.params.arguments.max_depth
+        : DEFAULT_MAX_SLOT_DEPTH;
+      const slideId = typeof request.params?.arguments?.slide_id === 'string'
+        ? request.params.arguments.slide_id
+        : undefined;
+
       if (!isConnected) {
         return {
           content: [
@@ -1869,9 +1891,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Create pending request and send to plugin
+      // Create pending request and send to plugin (with optional slideId)
       const capturePromise = createPendingRequest<CapturedTemplate>('capture', "Timeout waiting for template capture");
-      connectedPlugin!.send(JSON.stringify({ type: "capture-template" }));
+      connectedPlugin!.send(JSON.stringify({ type: "capture-template", slideId }));
 
       try {
         const result = await capturePromise;
@@ -1881,8 +1903,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? JSON.parse(result.template) 
           : result.template;
         
-        // Extract template slots (merged from monorail_extract_template)
-        const template = extractTemplate(captured);
+        // Extract template slots with configurable depth
+        const template = extractTemplate(captured, maxDepth);
         
         // Extract design system (merged from monorail_extract_design_system)
         const designSystem = extractDesignSystem(captured);
@@ -1918,6 +1940,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             slots_found: template.slots.length,
             colors_found: designSystem.colors.length,
             fonts_found: designSystem.fonts.length,
+            max_depth_used: maxDepth,
           },
         };
         
@@ -1925,7 +1948,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text" as const,
-              text: `✓ Captured "${captured.name}" (${result.nodeCount} nodes)
+              text: `✓ Captured "${captured.name}" (${result.nodeCount} nodes, max_depth: ${maxDepth})
 
 **Design System:**
 - Colors: ${designSystem.colors.map(c => c.hex).join(', ')}
@@ -1934,7 +1957,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 **Slots (${template.slots.length}):**
 ${template.slots.map(s => `- [${s.role}] ${s.id}: "${s.text?.sample || '(frame)'}"`).join('\n')}
 
-**Complex Regions:** ${template.complex_regions.length > 0 ? template.complex_regions.map(r => r.name).join(', ') : 'none'}
+**Complex Regions:** ${template.complex_regions.length > 0 ? template.complex_regions.map(r => r.name).join(', ') : 'none'}${template.complex_regions.length > 0 ? `\n(Tip: Re-capture with higher max_depth to access nested content)` : ''}
 
 \`\`\`json
 ${JSON.stringify(output, null, 2)}
@@ -2027,8 +2050,7 @@ ${JSON.stringify(output, null, 2)}
 
 **New slide ID:** ${result.newSlideId}
 **Text slots updated:** ${result.updated}
-${result.failed && result.failed.length > 0 ? `**Failed:** ${result.failed.join(", ")}` : ""}
-
+${result.failed && result.failed.length > 0 ? `**Failed:** ${result.failed.join(", ")}\n` : ""}${result.fontSubstitutions && result.fontSubstitutions.length > 0 ? `**Font substitutions:** ${result.fontSubstitutions.join(", ")}\n` : ""}
 The new slide has been selected in Figma.`,
             },
           ],
@@ -2466,7 +2488,7 @@ interface PendingRequest<T> {
 // Result types for each request
 interface PatchResult { updated: number; failed: string[]; }
 interface CapturedTemplate { template: any; nodeCount: number; }
-interface InstantiateResult { success: boolean; newSlideId?: string; updated?: number; failed?: string[]; error?: string; }
+interface InstantiateResult { success: boolean; newSlideId?: string; updated?: number; failed?: string[]; fontSubstitutions?: string[]; error?: string; }
 interface CreateResult { success: boolean; slideId?: string; error?: string; }
 interface DeleteResult { deleted: number; failed: string[]; }
 interface ReorderResult { success: boolean; count?: number; error?: string; }
@@ -2589,6 +2611,7 @@ function startWebSocketServer() {
             newSlideId: parsed.newSlideId,
             updated: parsed.updated,
             failed: parsed.failed,
+            fontSubstitutions: parsed.fontSubstitutions,
             error: parsed.error,
           });
         } else if (parsed.type === "styled-slide-created") {
