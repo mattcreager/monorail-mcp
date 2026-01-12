@@ -125,7 +125,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [x] **Smart sizing defaults** — Right=65%, Center=70%, Below=40%×35% of slide dimensions. (Session 21)
 - [ ] **Placeholder frames** — Mark "visual goes here" in IR, renders as labeled placeholder in Figma. User fills in manually.
 - [ ] **More diagram types** — funnel, timeline, 2x2 matrix, org chart. Same DSL approach as cycle.
-- [ ] **Icon component library** — Ship Monorail icon library, reference via `importComponentByKeyAsync()`. Programmatic shapes don't look good. (Session 21 discovery)
+- [ ] **Icon component library** — Use Figma's built-in Heroicons library (outline + solid) via `importComponentByKeyAsync()`. Programmatic shapes don't look good. Figma also has "Diagrams by Figma" library worth exploring. (Session 21 discovery)
 
 **Key insight (Session 21):** Diagrams need a **dedicated mode**. Mixing diagram design into deck iteration breaks flow. Build deck structure first (fast), design diagrams later (focused).
 
@@ -133,6 +133,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
 - [ ] **Visual feedback / screenshot** — Export slide as PNG/SVG and return to LLM so it can "see" what was rendered. Figma's `exportAsync()` supports this. Would help with debugging, iteration, and QA.
 - [ ] **Shape round-tripping** — Pull only captures text nodes, not shapes (ellipses, vectors, arrows). Manual diagram edits are lost on re-push. Need to detect/extract shapes during pull, store in IR, recreate on push. Would enable true round-trip of user-customized diagrams.
+- [ ] **Table support** — Figma Slides has native tables (seen in asset panel). Pull doesn't capture table cells — special node type not traversed. Need to detect tables, extract cell structure/content, and create via API (if available). Useful for comparisons, feature matrices.
 
 ### Future Work (defer)
 - Inline styling (mixed colors/weights in text) — use capture/clone instead
@@ -173,8 +174,13 @@ Figma icons are typically managed via:
 1. Component libraries (publish, reference by key)
 2. Icon plugins (Iconify, Material Icons)
 3. Team libraries
-Best path for Monorail: Ship a small icon component library, reference via `importComponentByKeyAsync()`
-**Decision:** Defer icons to future polish. Cycle diagram without icons is already a win.
+
+**Better path discovered:** Figma has built-in libraries accessible from the assets panel:
+- **Heroicons by Tailwind CSS** — outline + solid variants, production-quality
+- **Diagrams by Figma** — native diagram components
+
+Use `importComponentByKeyAsync()` to pull from these libraries instead of hand-drawing.
+**Decision:** Defer icons to future session. Cycle diagram without icons is already a win.
 
 **Key insight:**
 Diagrams need a **dedicated mode**. Mixing diagram design into deck iteration breaks flow:
