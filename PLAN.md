@@ -123,7 +123,9 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [x] Shared types — extract to `shared/types.ts`, import in both plugin/server (Session 26)
 - [ ] Auto-generate MCP resources — derive from ARCHETYPES object
 - [x] **esbuild for plugin** — bundler set up, targets ES2017 for Figma compatibility (Session 26)
-- [ ] **Split plugin into modules** — `code.ts` is 3,400+ lines; esbuild ready, needs actual split
+- [ ] **Split plugin into modules** — modules extracted to `src/`, wiring pending (Session 26)
+  - Created: constants, fonts, primitives, archetypes, diagrams, update
+  - Next: write tests against `code.ts`, then refactor to use modules
 
 ### Priority 5: Visual Richness
 - [x] **SVG support in IR** — `visual: { type: "svg", content: "..." }` with `createNodeFromSvg()`. Works but quality is poor — text wrapping unpredictable, positioning blind. (Session 21)
@@ -195,6 +197,19 @@ Addressed key technical debt items from the codebase review.
 - `.gitignore` — ignore generated files
 
 **Key learning:** Figma plugins need a bundler. Plain `tsc` output includes ES module syntax that Figma's runtime doesn't support. This is standard practice — official Figma samples use esbuild/webpack.
+
+**Modular Plugin Structure (WIP):**
+- Created `figma-plugin/src/` with extracted modules:
+  - `constants.ts` — colors, dimensions (30 lines)
+  - `fonts.ts` — font fallback chain (72 lines)
+  - `primitives.ts` — addText, addRect, createAutoLayoutFrame (166 lines)
+  - `archetypes.ts` — slide rendering by archetype (571 lines)
+  - `diagrams.ts` — cycle/icon rendering (437 lines)
+  - `update.ts` — patch and update logic (254 lines)
+  - `index.ts` — barrel file
+- Original `code.ts` preserved (3,482 lines)
+- Modules compile but not wired up yet
+- **Next step:** Write tests against `code.ts`, then safely refactor to use modules
 
 ### Session 25 (2026-01-12)
 **Visual QA Workflow Validated + Video Play Button Fix**
@@ -814,14 +829,15 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 - **Table creation** — Can read tables, but can't create/update via IR yet.
 - **Icons** — Hand-drawn shapes look bad. Figma has Heroicons library we could use.
 - **Simpler three-column** — Basic 3-col without badges (position-cards is complex)
-- **Plugin is monolithic** — 3,400 lines in one file; esbuild is set up, ready to split
+- **Plugin module wiring** — modules extracted to `src/`, need tests then wiring
 
 **This session options:**
 
-**Option A: Split plugin into modules**
-Now that esbuild is set up, split `code.ts` into logical modules:
-- `archetypes/` — one file per archetype renderer
-- `utils/` — font loading, Auto Layout helpers
+**Option A: Wire up plugin modules (test-driven refactor)**
+Modules extracted to `figma-plugin/src/` but not connected yet:
+- Write tests against current `code.ts` behavior
+- Refactor `code.ts` to import from modules
+- Verify tests still pass
 - `handlers/` — message handlers (push, pull, patch, etc.)
 - Would make codebase much more maintainable
 
