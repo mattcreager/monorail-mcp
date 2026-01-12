@@ -446,35 +446,30 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
 **Read first:** PLAN.md (current state, priorities)
 
+**This session:** Developer experience — reduce friction for humans AND the AI
+
+**Pain points for humans (adding archetypes):**
+1. Type duplication — `SlideContent` in both plugin and server
+2. Hardcoded MCP resources — easy to forget updates  
+3. ARCHETYPES not DRY — constraints, docs, resources all separate
+
+**Pain point for AI:**
+4. No visual feedback — LLM can't "see" what was rendered, has to trust structure
+
 **Key files:**
-- src/index.ts (MCP server — 8 tools, 11 archetypes)
-- figma-plugin/code.ts (plugin — all rendering + operations)
-- docs/ADDING-ARCHETYPES.md (guide for adding new archetypes)
+- `src/index.ts` — search for `ARCHETYPES`, `monorail://archetypes`
+- `figma-plugin/code.ts` — search for `SlideContent`, `exportAsync`
+- `docs/ADDING-ARCHETYPES.md` — guide that surfaces the friction
 
-**Archetypes (11):**
-title, section, big-idea, bullets, two-column, quote, chart, timeline, comparison, summary, **position-cards**
+**Potential improvements:**
+- Shared types file between plugin/server
+- Auto-generate MCP resources from ARCHETYPES object
+- `monorail_screenshot` tool — export slide as PNG, return to LLM
 
-**MCP Tools (8):**
-| Tool | Purpose |
-|------|---------|
-| monorail_status | Is plugin connected? |
-| monorail_pull | Get deck state (slides, elements, IDs) |
-| monorail_push | Create/replace slides from IR |
-| monorail_patch | Update specific elements by ID |
-| monorail_capture | Full node tree + design system + slots |
-| monorail_clone | Clone slide + update content |
-| monorail_delete | Delete slides by ID |
-| monorail_reorder | Reorder slides |
-
-**This session:** [describe focus]
-
-Current priorities:
-1. **Capture → Clone workflow** — design slide in Figma, capture it, clone with new content
-2. Video/embed archetype — even if just a URL field
-3. Simpler three-column — basic 3-col without badges
-4. Auto Layout consistency — title/quote/summary use fixed Y positions
-5. Developer experience — shared types, auto-generated MCP resources
+**Questions:**
+- Can plugin and server share types? (different build targets)
+- How well do MCP clients handle image responses?
+- How much abstraction is worth it for 11 archetypes?
 
 **Key insight:** The pull → patch loop IS the product. Push is just bootstrapping.
-Complex layouts → new archetype OR capture/clone. Collab works regardless of complexity.
 ```
