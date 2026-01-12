@@ -7,5 +7,5 @@
     "typeRoots": ["./node_modules/@figma"],
     "noEmit": true
   },
-  "include": ["code.ts", "../shared/types.ts"]
+  "include": ["code.ts", "src/**/*.ts", "../shared/types.ts"]
 }
