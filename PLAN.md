@@ -566,22 +566,23 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
 **Read first:** PLAN.md (current state, priorities, session 21 learnings)
 
-**Context from Session 21:**
-- Added visual diagram support via two approaches
-- SVG rendering works but quality is poor (text wrapping, blind iteration)
-- **Native Figma diagram DSL works well** — `visual: { type: "cycle", nodes: [...] }`
-- Key insight: Diagrams need **dedicated mode**, separate from rapid deck iteration
+**What works now:**
+- Full round-trip: pull → patch → push
+- 8 MCP tools, 10 archetypes
+- **Cycle diagrams** with native Figma rendering: colored nodes, curved connectors, directional arrows, bold 32px labels
+- `visual: { type: "cycle", nodes: [...], colors: [...], position: "right" }`
 
-**Current capabilities:**
-- `visual: { type: "svg", content: "..." }` — raw SVG, poor quality
-- `visual: { type: "cycle", nodes: [...], colors: [...] }` — native Figma, works well
+**Gaps discovered (Session 21):**
+- **Shape round-tripping** — Pull only gets text, not shapes. Manual diagram edits lost on re-push.
+- **Tables** — Figma Slides has native tables, but pull doesn't capture them.
+- **Icons** — Hand-drawn shapes look bad. Figma has Heroicons library we could use.
 
 **This session options:**
 
 **Option A: More diagram types (Priority 5)**
-Extend the diagram DSL with more types:
+Extend the diagram DSL:
 - `funnel` — top-to-bottom narrowing stages
-- `timeline` — horizontal stages with markers
+- `timeline` — horizontal stages with markers  
 - `matrix` — 2x2 grid with labels
 - File: `figma-plugin/code.ts`, search for `renderCycleDiagram`
 
@@ -596,17 +597,26 @@ Let LLM "see" what was rendered.
 - Return image in MCP response
 - Would help with diagram iteration
 
-**Option E: Shape round-tripping (Discovery)**
+**Option D: Shape round-tripping (Discovery)**
 Enable true round-trip of manual diagram edits.
 - Extend pull to detect shapes (ellipses, vectors, rectangles)
 - Store positions/sizes/colors in IR
 - Recreate exactly on push
-- Would preserve user's manual tweaks
 
-**Option D: Placeholder visual type**
-Quick win: `visual: { type: "placeholder", label: "Diagram here" }`
-- Renders labeled box in Figma
-- User fills in manually or comes back in "visualization mode"
+**Option E: Table support (Discovery)**
+Figma Slides has native tables — explore the API.
+- Can we create tables programmatically?
+- Can we read table cell contents during pull?
+- Useful for comparisons, feature matrices
 
-**Key insight:** The pull → patch loop IS the product. Diagrams are a separate focused activity.
+**Option F: Heroicons integration (Discovery)**
+Use Figma's built-in Heroicons library for diagram icons.
+- `importComponentByKeyAsync()` to pull from library
+- Much cleaner than hand-drawing shapes
+- Both outline + solid variants available
+
+**Key files:**
+- `figma-plugin/code.ts` — rendering logic
+- `src/index.ts` — MCP tools + IR schema
+- `PLAN.md` — session logs, priorities
 ```
