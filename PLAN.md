@@ -134,6 +134,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 **Key insight (Session 21):** Diagrams need a **dedicated mode**. Mixing diagram design into deck iteration breaks flow. Build deck structure first (fast), design diagrams later (focused).
 
 ### Discovery Needed
+- [ ] **AI Developer Experience (AI DX)** — How do we make Monorail easy for Claude to use? Tool descriptions, workflow hints, error recovery, proactive suggestions. See `docs/discovery/ai-dx.md`
 - [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
 - [x] **Visual feedback / screenshot** — `monorail_screenshot` exports slides as PNG (Session 24)
 - [ ] **Shape round-tripping** — Pull only captures text nodes, not shapes (ellipses, vectors, arrows). Manual diagram edits are lost on re-push. Need to detect/extract shapes during pull, store in IR, recreate on push. Would enable true round-trip of user-customized diagrams.

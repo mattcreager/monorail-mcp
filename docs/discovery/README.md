@@ -26,6 +26,7 @@
 
 | Discovery | Status | Summary |
 |-----------|--------|---------|
+| [ai-dx.md](ai-dx.md) | 🆕 Open | AI Developer Experience — making Monorail easy for Claude |
 | [table-support.md](table-support.md) | ✅ Read works | Tables readable! Create needs workaround |
 | [design-system-remap.md](design-system-remap.md) | 📋 Documented | Clone with palette swap |
 | [complex-template-experiment.md](complex-template-experiment.md) | ✅ Complete | Keycard-style slides |
