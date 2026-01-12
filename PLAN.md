@@ -120,6 +120,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### Discovery Needed
 - [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
+- [ ] **Visual feedback / screenshot** — Export slide as PNG/SVG and return to LLM so it can "see" what was rendered. Figma's `exportAsync()` supports this. Would help with debugging, iteration, and QA.
 
 ### Future Work (defer)
 - Inline styling (mixed colors/weights in text) — use capture/clone instead
