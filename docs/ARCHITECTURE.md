@@ -246,10 +246,10 @@ This forces us through the whole loop and surfaces gaps.
 
 ## Open Questions (v1+)
 
-1. **Visual feedback** — Claude can't see rendered output (text overflow, broken layouts)
+1. ~~**Visual feedback**~~ — Solved: `monorail_screenshot` exports slides as PNG
 2. **Template integration** — Our archetypes bypass Figma's native template system
 3. **Design co-creation** — HTML output is rich, Figma output is functional text
-4. **Font handling** — Custom fonts cause failures; need fallback chain
+4. ~~**Font handling**~~ — Solved: Font fallback chain (Inter → SF Pro → Helvetica → Arial)
 
 ---
 

@@ -72,7 +72,8 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 |------|---------|
 | `figma-plugin/code.ts` | Plugin: export, apply, patch, capture, instantiate |
 | `figma-plugin/ui.html` | Plugin UI + WebSocket bridge |
-| `src/index.ts` | MCP server: 8 tools |
+| `src/index.ts` | MCP server: 9 tools |
+| `shared/types.ts` | Shared TypeScript types (DeckIR, Slide, etc.) |
 | `docs/decisions/dynamic-templates.md` | Template design + full spike results |
 
 ### MCP Tools (9 total)
@@ -119,9 +120,10 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [x] Eyebrow text — implemented in `position-cards` archetype (Session 18)
 - [ ] Clone workflow docs — document "design once, clone many" pattern
 - [ ] Role mapping — use semantic roles instead of node IDs
-- [ ] Shared types — extract `SlideContent` to avoid duplication between plugin/server
+- [x] Shared types — extract to `shared/types.ts`, import in both plugin/server (Session 26)
 - [ ] Auto-generate MCP resources — derive from ARCHETYPES object
-- [ ] **Split plugin code** — `code.ts` is 3,500+ lines; add esbuild to split into modules
+- [x] **esbuild for plugin** — bundler set up, targets ES2017 for Figma compatibility (Session 26)
+- [ ] **Split plugin into modules** — `code.ts` is 3,400+ lines; esbuild ready, needs actual split
 
 ### Priority 5: Visual Richness
 - [x] **SVG support in IR** — `visual: { type: "svg", content: "..." }` with `createNodeFromSvg()`. Works but quality is poor — text wrapping unpredictable, positioning blind. (Session 21)
@@ -152,6 +154,47 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 26 (2026-01-12)
+**Technical Debt: Shared Types + esbuild Setup**
+
+Addressed key technical debt items from the codebase review.
+
+**Shared Types (`shared/types.ts`):**
+- Moved all shared TypeScript interfaces to new `shared/types.ts` file
+- Server imports via `import type { ... } from "../shared/types.js"`
+- Plugin imports via `import type { ... } from '../shared/types'`
+- Eliminates duplication between plugin (3,400 lines) and server (2,000 lines)
+- Types: `DeckIR`, `Slide`, `SlideContent`, `ElementInfo`, `CapturedNode`, `DesignSystem`, etc.
+
+**Dead Code Removal:**
+- Removed `generatePreviewHTML()` and `escapeHtml()` from server (~700 lines)
+- Was remnant of HTML preview feature, never used via MCP
+
+**esbuild for Plugin:**
+- Standard approach for Figma plugins (discovered via research)
+- TypeScript does type checking only (`noEmit: true`)
+- esbuild bundles to single file, strips `import type` statements
+- Targets ES2017 for Figma runtime compatibility
+- Fixes two issues:
+  1. `export {}` at end of file (Figma doesn't support ES modules)
+  2. `catch {}` syntax (ES2019, not supported in Figma's runtime)
+
+**Build Commands:**
+- Server: `npm run build` (unchanged)
+- Plugin: `npm run build` (now runs `tsc` + `esbuild`)
+- Plugin watch: `npm run watch` (esbuild watch mode)
+
+**Files changed:**
+- `shared/types.ts` — new file with all shared types
+- `src/index.ts` — imports from shared, dead code removed
+- `figma-plugin/code.ts` — imports from shared
+- `figma-plugin/package.json` — added esbuild, updated scripts
+- `figma-plugin/tsconfig.json` — noEmit, include shared types
+- `tsconfig.json` — rootDir adjusted for shared types
+- `.gitignore` — ignore generated files
+
+**Key learning:** Figma plugins need a bundler. Plain `tsc` output includes ES module syntax that Figma's runtime doesn't support. This is standard practice — official Figma samples use esbuild/webpack.
 
 ### Session 25 (2026-01-12)
 **Visual QA Workflow Validated + Video Play Button Fix**
@@ -753,7 +796,7 @@ Copy this to start:
 ```
 I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
-**Read first:** PLAN.md (current state, priorities, session 23 learnings)
+**Read first:** PLAN.md (current state, priorities, session 26 learnings)
 
 **What works now:**
 - Full round-trip: pull → patch → push
@@ -763,53 +806,58 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 - **Cycle diagrams** with native Figma rendering
 - **Table extraction** — pull captures Figma tables with cell content + row/col metadata
 - **Screenshot export** — `monorail_screenshot` gives AI "eyes" to see rendered slides
+- **Shared types** — `shared/types.ts` for plugin + server
+- **esbuild bundler** — proper Figma plugin build pipeline
 
 **Gaps:**
 - **Shape round-tripping** — Pull only gets text, not shapes. Manual diagram edits lost on re-push.
 - **Table creation** — Can read tables, but can't create/update via IR yet.
 - **Icons** — Hand-drawn shapes look bad. Figma has Heroicons library we could use.
 - **Simpler three-column** — Basic 3-col without badges (position-cards is complex)
+- **Plugin is monolithic** — 3,400 lines in one file; esbuild is set up, ready to split
 
 **This session options:**
 
-**Option A: More diagram types (Priority 5)**
+**Option A: Split plugin into modules**
+Now that esbuild is set up, split `code.ts` into logical modules:
+- `archetypes/` — one file per archetype renderer
+- `utils/` — font loading, Auto Layout helpers
+- `handlers/` — message handlers (push, pull, patch, etc.)
+- Would make codebase much more maintainable
+
+**Option B: More diagram types (Priority 5)**
 Extend the diagram DSL:
 - `funnel` — top-to-bottom narrowing stages
 - `timeline` — horizontal stages with markers  
 - `matrix` — 2x2 grid with labels
 - File: `figma-plugin/code.ts`, search for `renderCycleDiagram`
 
-**Option B: Shape round-tripping (Discovery)**
+**Option C: Shape round-tripping (Discovery)**
 Enable true round-trip of manual diagram edits.
 - Extend pull to detect shapes (ellipses, vectors, rectangles)
 - Store positions/sizes/colors in IR
 - Recreate exactly on push
 
-**Option C: Table write support (Discovery)**
+**Option D: Table write support (Discovery)**
 Can read tables, now explore creating/updating them.
 - Investigate `figma.createTable()` API
 - Add `table` archetype or IR field
 - Useful for comparisons, feature matrices
 
-**Option D: Heroicons integration (Discovery)**
+**Option E: Heroicons integration (Discovery)**
 Use Figma's built-in Heroicons library for diagram icons.
 - `importComponentByKeyAsync()` to pull from library
 - Much cleaner than hand-drawing shapes
 - Both outline + solid variants available
 
-**Option E: Simpler three-column archetype**
+**Option F: Simpler three-column archetype**
 Basic 3-col layout without badges/complexity of position-cards.
 - Just headline + 3 titled body sections
 - Use Auto Layout pattern from two-column
 
-**Option F: AI DX improvements**
-Make Monorail easier for Claude to use.
-- Audit tool descriptions for "when to use" clarity
-- Add workflow hints to tool responses
-- See `docs/discovery/ai-dx.md`
-
 **Key files:**
-- `figma-plugin/code.ts` — rendering logic
+- `figma-plugin/code.ts` — rendering logic (monolithic, ready to split)
 - `src/index.ts` — MCP tools + IR schema
+- `shared/types.ts` — shared TypeScript types
 - `PLAN.md` — session logs, priorities
 ```
