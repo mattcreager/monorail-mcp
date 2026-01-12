@@ -1,70 +1,11 @@
 // Monorail Figma Plugin
 // Converts IR (deck spec) into Figma Slides
 
+// Import shared types (type-only imports are erased at compile time by esbuild)
+import type { SlideContent, Slide, DeckIR, ElementInfo } from '../shared/types';
+
 // Show the UI
 figma.showUI(__html__, { width: 320, height: 280 });
-
-// Types for our IR format
-interface SlideContent {
-  headline?: string;
-  subline?: string;
-  bullets?: string[];
-  quote?: string;
-  attribution?: string;
-  takeaway?: string;
-  left?: { title: string; body: string };
-  right?: { title: string; body: string };
-  stages?: Array<{ label: string; description?: string }>;
-  columns?: string[];
-  rows?: string[][];
-  items?: string[];
-  chart?: { type: string; placeholder?: boolean };
-  // Position Cards archetype (Keycard-style)
-  eyebrow?: string;
-  cards?: Array<{
-    label: string;
-    title: string;
-    body: string;
-    badge?: string;
-    badge_color?: 'green' | 'cyan' | 'orange';
-  }>;
-  features?: Array<{ label: string; description: string }>;
-  // Video archetype
-  video_url?: string;
-  caption?: string;
-  // Visual element (diagram, icon, etc.)
-  visual?: {
-    type: 'svg' | 'cycle';
-    // For SVG type
-    content?: string;  // Raw SVG string
-    // For cycle type (native Figma rendering)
-    nodes?: string[];  // Labels for each node in the cycle
-    colors?: Array<'cyan' | 'green' | 'orange' | 'pink' | 'purple' | 'blue' | 'white'>;  // Color for each node
-    icons?: Array<'presence' | 'lightbulb' | 'refresh' | 'chart' | 'magnet' | 'rocket' | 'target' | 'users' | 'check' | 'star'>;  // Icon for each node
-    // Common options
-    position?: 'right' | 'below' | 'center';  // Where to place relative to text content
-    width?: number;   // Optional width in pixels
-    height?: number;  // Optional height in pixels
-  };
-}
-
-interface Slide {
-  id: string;
-  archetype: string;
-  status: 'draft' | 'locked' | 'stub';
-  content: SlideContent;
-  extras?: string[];  // Unrecognized text added by human (captured, not modified)
-  speaker_notes?: string;
-  // Rich read fields (for intent-based collaboration)
-  figma_id?: string;           // Figma node ID for this slide
-  elements?: ElementInfo[];    // All text elements with IDs
-  has_diagram?: boolean;       // True if complex nested content detected
-}
-
-interface DeckIR {
-  deck?: { title: string };
-  slides: Slide[];
-}
 
 // Colors - dark theme
 const COLORS = {
@@ -600,14 +541,15 @@ async function addContentToParent(parent: SceneNode & ChildrenMixin, slide: Slid
         playCircle.fills = [{ type: 'SOLID', color: COLORS.white, opacity: 0.9 }];
         placeholderFrame.appendChild(playCircle);
 
-        // Play triangle
+        // Play triangle (pointing right)
         const playTriangle = figma.createPolygon();
         playTriangle.name = 'play-triangle';
         playTriangle.pointCount = 3;
-        playTriangle.resize(40, 40);
-        playTriangle.x = 582;  // center-ish in circle
-        playTriangle.y = 317;
-        playTriangle.rotation = 90;  // point right
+        playTriangle.resize(36, 36);
+        playTriangle.rotation = -90;  // point right (clockwise from up)
+        // Positioned for optical centering within circle (manually tuned)
+        playTriangle.x = 600;
+        playTriangle.y = 320;
         playTriangle.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.15 } }];
         placeholderFrame.appendChild(playTriangle);
 
@@ -1647,25 +1589,7 @@ function captureNodeTree(node: SceneNode): CapturedNode {
 // RICH EXPORT: Capture ALL elements for intent-based collaboration
 // =============================================================================
 
-// Element info for rich read (Claude can see and target individual elements)
-interface ElementInfo {
-  id: string;              // Figma node ID (stable, for targeted updates)
-  type: string;            // 'section_label', 'headline', 'body_text', 'accent_text', 'diagram_text', 'table_cell', etc.
-  text: string;            // The text content
-  x: number;               // Absolute position on slide
-  y: number;
-  fontSize: number;
-  isBold: boolean;
-  width: number;
-  height: number;
-  parentName: string;      // Parent frame name (helps identify context)
-  depth: number;           // Nesting depth (0 = direct child of slide)
-  isInDiagram: boolean;    // True if deeply nested (likely part of diagram)
-  // Table cell metadata (only present for table cells)
-  isTableCell?: boolean;
-  tableRow?: number;
-  tableCol?: number;
-}
+// ElementInfo imported from shared/types.ts
 
 // Rich slide export (full element visibility)
 interface RichSlideExport {

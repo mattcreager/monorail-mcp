@@ -409,3 +409,17 @@ Three utility functions handle all request lifecycle:
 - `hasPendingRequest(type)` — check if request in progress
 
 **Lesson learned:** When you see parallel structures with the same shape, consolidate into a generic. The Map + generic pattern is cleaner than N × 2 variables.
+
+---
+
+### 2026-01-12 - Figma plugin hot reloads on code.js change
+
+**What we found:** When you run `npm run build` (which compiles `code.ts` → `code.js`), the Figma plugin automatically hot reloads. No need to manually close and reopen the plugin.
+
+**Impact:** Much faster iteration cycle during plugin development. Build → test immediately, no manual steps.
+
+**How it works:** Figma watches the plugin's `code.js` file. When the file changes on disk, Figma reloads the plugin code while keeping the UI open and WebSocket connection alive.
+
+**Caveat:** The WebSocket connection may briefly disconnect and reconnect during hot reload. The MCP server handles reconnection gracefully.
+
+**Path forward:** Document this in the development workflow. Use `npm run watch` (which runs `tsc --watch`) for continuous compilation during development.

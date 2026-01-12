@@ -3,14 +3,17 @@
   "version": "0.1.0",
   "description": "Monorail plugin for Figma - converts IR to slides",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc --watch"
+    "build": "npm run typecheck && npm run bundle",
+    "typecheck": "tsc",
+    "bundle": "esbuild code.ts --bundle --outfile=code.js --target=es2017",
+    "watch": "esbuild code.ts --bundle --outfile=code.js --target=es2017 --watch"
   },
   "keywords": ["figma", "plugin", "monorail", "slides"],
   "author": "",
   "license": "MIT",
   "devDependencies": {
     "@figma/plugin-typings": "^1.121.0",
+    "esbuild": "^0.24.2",
     "typescript": "^5.9.3"
   }
 }

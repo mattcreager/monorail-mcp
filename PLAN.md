@@ -138,6 +138,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
 - [x] **Visual feedback / screenshot** — `monorail_screenshot` exports slides as PNG (Session 24)
 - [ ] **Shape round-tripping** — Pull only captures text nodes, not shapes (ellipses, vectors, arrows). Manual diagram edits are lost on re-push. Need to detect/extract shapes during pull, store in IR, recreate on push. Would enable true round-trip of user-customized diagrams.
+- [ ] **Shape position in capture** — `monorail_capture` extracts colors from shapes but not x/y positions. Limits "capture user's manual fix → update code" workflow. See `docs/discovery/shape-position-capture.md` (Session 25)
 - [x] **Table read support** — Pull now captures Figma Slides tables with cell content, row/col metadata (Session 22)
 - [ ] **Table write support** — Create/update tables via IR. Need to explore Figma API for table creation.
 
@@ -151,6 +152,50 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 25 (2026-01-12)
+**Visual QA Workflow Validated + Video Play Button Fix**
+
+Tested the screenshot capability end-to-end and fixed a visual bug using the new feedback loop.
+
+**Visual QA Workflow:**
+1. `monorail_push` — create video slide
+2. `monorail_screenshot` — see what Figma rendered
+3. Identified issue: play button triangle pointing LEFT instead of RIGHT, off-center
+4. Fixed code, rebuilt plugin (hot reloads automatically!)
+5. `monorail_screenshot` — verified fix worked
+
+**Bug Fixed — Video Play Button:**
+- **Problem:** Triangle was pointing left (◀) and off-center
+- **Root cause:** `rotation = 90` goes counter-clockwise, needed `-90` for clockwise
+- **Fix:** Changed rotation to `-90`, adjusted x/y to (600, 320) for optical centering, reduced size (40→36px)
+- **Iteration:** AI got close but user manually fine-tuned in Figma, then reported values back
+- **Result:** Clean centered play button (▶) in circle
+
+**Gap Discovered — Shape Position Capture:**
+- `monorail_capture` extracts colors from shapes (ellipses, polygons) but not their x/y positions
+- Only TEXT and FRAME nodes get position data as "slots"
+- This limits the "capture what user did → replicate in code" workflow for visual elements
+- Added to Discovery Needed
+
+**Discovery — Plugin Hot Reload:**
+- Figma automatically reloads plugin when `code.js` changes on disk
+- No need to manually close/reopen plugin during development
+- Use `npm run watch` for continuous compilation
+- Documented in `docs/failures.md`
+
+**Key Insight:**
+The screenshot capability enables a true visual QA loop. AI can now:
+1. Make changes
+2. See the result
+3. Spot issues
+4. Fix and verify
+
+This closes the "blind AI" gap identified in Session 20.
+
+**Files changed:**
+- `figma-plugin/code.ts` — video play button positioning fix
+- `docs/failures.md` — hot reload discovery
 
 ### Session 24 (2026-01-12)
 **Screenshot Export — Giving AI "Eyes"**
@@ -231,9 +276,9 @@ New `video` archetype for embedding video placeholders:
 
 **Archetype count:** 10 → 11
 
-**Known issues:**
-- Video play button icon is off-center (triangle rotation/positioning)
-- Need screenshot export so LLM can see what it renders
+**Known issues (now fixed):**
+- ~~Video play button icon is off-center~~ — Fixed in Session 25
+- ~~Need screenshot export~~ — Added in Session 24
 
 **Video embed discovery:**
 - Figma Slides HAS native YouTube embeds (user can paste URL manually)
@@ -757,10 +802,11 @@ Basic 3-col layout without badges/complexity of position-cards.
 - Just headline + 3 titled body sections
 - Use Auto Layout pattern from two-column
 
-**Option F: Visual QA workflow testing**
-Test the new screenshot capability end-to-end.
-- Try push → screenshot → verify layout
-- Use it to fix the video play button positioning (known issue from Session 23)
+**Option F: AI DX improvements**
+Make Monorail easier for Claude to use.
+- Audit tool descriptions for "when to use" clarity
+- Add workflow hints to tool responses
+- See `docs/discovery/ai-dx.md`
 
 **Key files:**
 - `figma-plugin/code.ts` — rendering logic

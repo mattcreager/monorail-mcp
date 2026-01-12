@@ -4,7 +4,8 @@
     "lib": ["ES2017"],
     "strict": true,
     "skipLibCheck": true,
-    "typeRoots": ["./node_modules/@figma"]
+    "typeRoots": ["./node_modules/@figma"],
+    "noEmit": true
   },
-  "files": ["code.ts"]
+  "include": ["code.ts", "../shared/types.ts"]
 }

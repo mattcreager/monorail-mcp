@@ -32,3 +32,4 @@
 | [complex-template-experiment.md](complex-template-experiment.md) | ✅ Complete | Keycard-style slides |
 | [dogfood-gaps.md](dogfood-gaps.md) | ✅ Complete | Gaps from deck rendering |
 | [dogfood-claude-desktop.md](dogfood-claude-desktop.md) | ✅ Complete | Claude Desktop validation |
+| [shape-position-capture.md](shape-position-capture.md) | 🆕 Open | Capture shape x/y for "learn from user edits" workflow |
