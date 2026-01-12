@@ -470,8 +470,8 @@
               addActivity('✎', `Claude patching ${count} elements`);
               parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches } }, '*');
             } else if (msg.type === 'capture-template') {
-              addActivity('🧪', 'Claude requesting template capture');
-              parent.postMessage({ pluginMessage: { type: 'capture-template' } }, '*');
+              addActivity('🧪', msg.slideId ? `Claude capturing slide ${msg.slideId}` : 'Claude requesting template capture');
+              parent.postMessage({ pluginMessage: { type: 'capture-template', slideId: msg.slideId, maxDepth: msg.maxDepth } }, '*');
             } else if (msg.type === 'instantiate-template') {
               addActivity('🆕', 'Claude creating slide from template');
               parent.postMessage({ pluginMessage: { type: 'instantiate-template', sourceId: msg.sourceId, contentMap: msg.contentMap } }, '*');
@@ -486,6 +486,10 @@
               const count = msg.slideIds?.length || 0;
               addActivity('↕️', `Claude reordering ${count} slides`);
               parent.postMessage({ pluginMessage: { type: 'reorder-slides', slideIds: msg.slideIds } }, '*');
+            } else if (msg.type === 'request-screenshot') {
+              const slideId = msg.slideId ? ` (${msg.slideId})` : '';
+              addActivity('📷', `Claude requesting screenshot${slideId}`);
+              parent.postMessage({ pluginMessage: { type: 'export-screenshot', slideId: msg.slideId, scale: msg.scale } }, '*');
             }
           } catch (e) {
             console.error('[WS] Failed to parse message:', e);
@@ -772,6 +776,32 @@
             count: msg.count,
             beforeOrder: msg.beforeOrder,
             afterOrder: msg.afterOrder,
+            error: msg.error
+          }));
+        }
+      }
+      
+      // Screenshot result
+      if (msg.type === 'screenshot-exported') {
+        if (msg.success) {
+          const sizeKB = Math.round((msg.base64?.length || 0) * 3 / 4 / 1024);
+          addActivity('📷', `Screenshot: "${msg.slideName}" (${sizeKB}KB)`);
+          showToast(`Screenshot exported!`);
+        } else {
+          addActivity('✗', `Screenshot failed: ${msg.error}`);
+          showToast(`Screenshot failed: ${msg.error}`, true);
+        }
+        
+        // Send through WebSocket if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'screenshot-exported',
+            success: msg.success,
+            slideId: msg.slideId,
+            slideName: msg.slideName,
+            base64: msg.base64,
+            width: msg.width,
+            height: msg.height,
             error: msg.error
           }));
         }

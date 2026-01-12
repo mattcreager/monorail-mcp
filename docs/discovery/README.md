@@ -24,4 +24,10 @@
 
 ## Current Discoveries
 
-(None yet — next session on dynamic templates may generate some)
+| Discovery | Status | Summary |
+|-----------|--------|---------|
+| [table-support.md](table-support.md) | ✅ Read works | Tables readable! Create needs workaround |
+| [design-system-remap.md](design-system-remap.md) | 📋 Documented | Clone with palette swap |
+| [complex-template-experiment.md](complex-template-experiment.md) | ✅ Complete | Keycard-style slides |
+| [dogfood-gaps.md](dogfood-gaps.md) | ✅ Complete | Gaps from deck rendering |
+| [dogfood-claude-desktop.md](dogfood-claude-desktop.md) | ✅ Complete | Claude Desktop validation |

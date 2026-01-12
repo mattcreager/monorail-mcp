@@ -47,23 +47,25 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - Targeted patches — update specific elements, preserve layouts
 - Template capture with design system extraction + slot identification
 - **Full deck rendering** — 10 slides from IR in one push
-- **Auto Layout for big-idea** — headline/subline no longer overlap
-- **Consolidated tool surface** — 8 tools total
+- **Auto Layout for ALL archetypes** — title, section, quote, summary, big-idea, bullets, two-column all use containers
+- **Consolidated tool surface** — 9 tools total, 11 archetypes
+- **Visual feedback** — `monorail_screenshot` exports slides as PNG so AI can "see" what it rendered
 - **Complex archetypes** — `position-cards` renders 3-column cards with badges
+- **Video archetype** — placeholder with play icon + URL for video embeds
 - **Collaborative editing** — pull → patch works on complex slides (24 elements)
 - **Capture → Clone workflow** — design in Figma, capture structure, clone with new content
 - **Capture by slide ID** — no selection required
 - **Configurable capture depth** — `max_depth` param for complex nested slides
 - **Font fallback everywhere** — patches and clones both use fallback chain
+- **Table extraction** — pull captures Figma Slides tables with cell content and row/col metadata
 
 ### The Gap 🔨
-- **No video/embed archetype** — even just a URL placeholder would help
 - **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
-- **Auto Layout consistency** — title/quote/summary/section use fixed Y positions (see `docs/decisions/auto-layout-consistency.md`)
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
 - **No inline styling** — can't do mixed colors in text (e.g., "ACP is north." in cyan) — use capture/clone instead
 - **Clone preserves exact colors** — need design system remap (see `docs/discovery/design-system-remap.md`)
 - **Limited diagrams** — timeline is linear only, no loop arrows or callouts (FUTURE)
+- **Simpler three-column** — position-cards is complex; basic 3-col would be useful
 
 ### Key Files
 | File | Purpose |
@@ -73,7 +75,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 | `src/index.ts` | MCP server: 8 tools |
 | `docs/decisions/dynamic-templates.md` | Template design + full spike results |
 
-### MCP Tools (8 total)
+### MCP Tools (9 total)
 | Tool | Purpose |
 |------|---------|
 | `monorail_status` | Check if Figma plugin is connected |
@@ -84,6 +86,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 | `monorail_clone` | Clone slide + update content |
 | `monorail_delete` | Delete slides by Figma node ID |
 | `monorail_reorder` | Reorder slides to match specified order |
+| `monorail_screenshot` | Export slide as PNG image — gives AI "eyes" to see what was rendered |
 
 ---
 
@@ -99,12 +102,12 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [x] **Configurable capture depth** — `max_depth` param for complex nested slides (Session 19)
 - [x] **Capture by slide ID** — No selection required, capture any slide by ID (Session 19)
 - [x] **Font fallback for patches** — Deep nodes now use fallback chain (Session 19)
-- [ ] **Video/embed archetype** — Even if just a URL field
+- [x] **Video/embed archetype** — `video` archetype with URL placeholder + play icon (Session 23)
 - [ ] **Simpler three-column** — Basic 3-col without badges (lower complexity than position-cards)
 
 ### Priority 2: Figma Best Practices
-- [ ] Auto Layout for remaining archetypes (title, quote, summary, section) — see `docs/decisions/auto-layout-consistency.md`
-- [ ] **Fix two-column archetype** — layout is broken (overlapping positions, content off-screen). Needs Auto Layout like bullets/big-idea.
+- [x] **Auto Layout for all archetypes** — title, quote, summary, section now use containers (Session 23)
+- [x] **Fix two-column archetype** — Now uses nested Auto Layout containers (Session 22)
 - [x] ~~Archetype detection~~ — Frame-based detection (Session 17)
 - [x] ~~Font fallback chain~~ — Inter → SF Pro → Helvetica → Arial (Session 17)
 
@@ -118,6 +121,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [ ] Role mapping — use semantic roles instead of node IDs
 - [ ] Shared types — extract `SlideContent` to avoid duplication between plugin/server
 - [ ] Auto-generate MCP resources — derive from ARCHETYPES object
+- [ ] **Split plugin code** — `code.ts` is 3,500+ lines; add esbuild to split into modules
 
 ### Priority 5: Visual Richness
 - [x] **SVG support in IR** — `visual: { type: "svg", content: "..." }` with `createNodeFromSvg()`. Works but quality is poor — text wrapping unpredictable, positioning blind. (Session 21)
@@ -131,9 +135,10 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### Discovery Needed
 - [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
-- [ ] **Visual feedback / screenshot** — Export slide as PNG/SVG and return to LLM so it can "see" what was rendered. Figma's `exportAsync()` supports this. Would help with debugging, iteration, and QA.
+- [x] **Visual feedback / screenshot** — `monorail_screenshot` exports slides as PNG (Session 24)
 - [ ] **Shape round-tripping** — Pull only captures text nodes, not shapes (ellipses, vectors, arrows). Manual diagram edits are lost on re-push. Need to detect/extract shapes during pull, store in IR, recreate on push. Would enable true round-trip of user-customized diagrams.
-- [ ] **Table support** — Figma Slides has native tables (seen in asset panel). Pull doesn't capture table cells — special node type not traversed. Need to detect tables, extract cell structure/content, and create via API (if available). Useful for comparisons, feature matrices.
+- [x] **Table read support** — Pull now captures Figma Slides tables with cell content, row/col metadata (Session 22)
+- [ ] **Table write support** — Create/update tables via IR. Need to explore Figma API for table creation.
 
 ### Future Work (defer)
 - Inline styling (mixed colors/weights in text) — use capture/clone instead
@@ -145,6 +150,144 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 24 (2026-01-12)
+**Screenshot Export — Giving AI "Eyes"**
+
+Added `monorail_screenshot` tool so the AI can see what Figma renders.
+
+**Implementation:**
+- Plugin: `export-screenshot` message handler using `node.exportAsync({ format: 'PNG' })` + `figma.base64Encode()`
+- UI: WebSocket relay for `request-screenshot` → `screenshot-exported`
+- Server: `monorail_screenshot` tool returning image content type
+
+**Features:**
+- Export any slide by ID or selection
+- Configurable scale (default 0.5x for smaller images)
+- Returns PNG as base64 with dimensions
+- Enables visual QA workflow: push → screenshot → iterate
+
+**Why this matters:**
+- AI was blind — could read content but never see the actual design
+- Now can verify layouts, check alignment, spot visual issues
+- Closes the loop on quality — no more "trust me, it looks right"
+
+**Files changed:**
+- `figma-plugin/code.ts` — screenshot export handler
+- `figma-plugin/ui.html` — WebSocket relay for screenshot
+- `src/index.ts` — `monorail_screenshot` tool + pending request handling
+- `docs/references/mcp-tools.md` — tool documentation
+
+**Tool count:** 8 → 9
+
+### Session 23 (2026-01-12)
+**Auto Layout Consistency + Video Archetype**
+
+Two improvements this session:
+
+#### 1. Auto Layout for Remaining Archetypes
+
+Converted the last four archetypes from fixed Y positions to Auto Layout:
+
+| Archetype | Container | Notes |
+|-----------|-----------|-------|
+| title | `title-container` | Keeps gradient background, text flows in container |
+| section | `section-container` | Single headline, ready for subline if needed |
+| quote | `quote-container` | Quote + attribution with 40px spacing |
+| summary | `summary-container` + `items-container` | Nested containers for proper item spacing |
+
+**Pattern:** Same as big-idea/bullets/two-column — `createAutoLayoutFrame()` + `addAutoLayoutText()`.
+
+**Detection updated:** Added container-based detection for all four archetypes in `analyzeSlideContent()`.
+
+#### 2. Video/Embed Archetype
+
+New `video` archetype for embedding video placeholders:
+
+```typescript
+{
+  archetype: "video",
+  content: {
+    headline: "Product Demo",
+    video_url: "https://www.loom.com/share/...",
+    caption: "2-minute walkthrough of the new dashboard"
+  }
+}
+```
+
+**Renders as:**
+- Headline at top
+- 16:9 placeholder frame with play button icon
+- Clickable URL text below
+- Optional caption
+
+**Not actual video playback** — Figma doesn't support that. This is a placeholder that makes it clear where video content goes.
+
+**Files changed:**
+- `figma-plugin/code.ts` — Auto Layout for 4 archetypes, video archetype rendering + detection
+- `src/index.ts` — video archetype in ARCHETYPES, SlideContent fields
+- `docs/decisions/auto-layout-consistency.md` — marked as implemented
+
+**Archetype count:** 10 → 11
+
+**Known issues:**
+- Video play button icon is off-center (triangle rotation/positioning)
+- Need screenshot export so LLM can see what it renders
+
+**Video embed discovery:**
+- Figma Slides HAS native YouTube embeds (user can paste URL manually)
+- Plugin API does NOT expose this — only `createVideoAsync()` with raw bytes
+- Our `video` archetype is a placeholder, not a real embed
+- Best workflow: use archetype as "video goes here" marker, user embeds manually
+
+### Session 22 (2026-01-12)
+**Fix: Two-Column Auto Layout + Table Support Discovery**
+
+Two fixes this session:
+
+#### 1. Two-Column Archetype Auto Layout
+
+Fixed the broken two-column archetype that used fixed Y positions causing overlaps when text wrapped.
+
+**Problem:**
+- Old layout used hardcoded positions: headline at y=150, titles at y=320, bodies at y=390
+- Long text would overlap because positions didn't adapt
+
+**Solution:**
+Converted to nested Auto Layout structure (like big-idea and bullets):
+```
+two-column-container (VERTICAL, y=150)
+├── headline
+└── columns-container (HORIZONTAL, gap=40)
+    ├── left-column (VERTICAL, width=740)
+    │   ├── left-title
+    │   └── left-body
+    └── right-column (VERTICAL, width=740)
+        ├── right-title
+        └── right-body
+```
+
+**Tested:**
+- ✅ Push creates Auto Layout structure
+- ✅ Pull detects archetype and extracts content from nested containers
+- ✅ Patch works on deeply nested elements (depth 4)
+
+#### 2. Table Support (Discovery)
+
+Added table extraction to capture and pull functions.
+
+**What works:**
+- `monorail_capture` now extracts TABLE nodes with `numRows`, `numColumns`, `tableCells`
+- `monorail_pull` now includes table cells as elements with `type: "table_cell"`
+- Table cells include metadata: `isTableCell`, `tableRow`, `tableCol`
+
+**What's missing:**
+- No table creation via IR/push (read-only for now)
+- No table patching (need to test if standard patch works on table cells)
+- Cell positions are approximated (Figma doesn't expose individual cell coords)
+
+**Files changed:**
+- `figma-plugin/code.ts` — Two-column Auto Layout, table capture/pull
 
 ### Session 21 (2026-01-12)
 **Visual Richness: SVG → Native Figma Diagrams**
@@ -564,18 +707,22 @@ Copy this to start:
 ```
 I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
-**Read first:** PLAN.md (current state, priorities, session 21 learnings)
+**Read first:** PLAN.md (current state, priorities, session 23 learnings)
 
 **What works now:**
 - Full round-trip: pull → patch → push
-- 8 MCP tools, 10 archetypes
-- **Cycle diagrams** with native Figma rendering: colored nodes, curved connectors, directional arrows, bold 32px labels
-- `visual: { type: "cycle", nodes: [...], colors: [...], position: "right" }`
+- 9 MCP tools, 11 archetypes
+- **Auto Layout for ALL archetypes** — title, section, quote, summary, big-idea, bullets, two-column
+- **Video archetype** — placeholder with play icon + URL
+- **Cycle diagrams** with native Figma rendering
+- **Table extraction** — pull captures Figma tables with cell content + row/col metadata
+- **Screenshot export** — `monorail_screenshot` gives AI "eyes" to see rendered slides
 
-**Gaps discovered (Session 21):**
+**Gaps:**
 - **Shape round-tripping** — Pull only gets text, not shapes. Manual diagram edits lost on re-push.
-- **Tables** — Figma Slides has native tables, but pull doesn't capture them.
+- **Table creation** — Can read tables, but can't create/update via IR yet.
 - **Icons** — Hand-drawn shapes look bad. Figma has Heroicons library we could use.
+- **Simpler three-column** — Basic 3-col without badges (position-cards is complex)
 
 **This session options:**
 
@@ -586,34 +733,33 @@ Extend the diagram DSL:
 - `matrix` — 2x2 grid with labels
 - File: `figma-plugin/code.ts`, search for `renderCycleDiagram`
 
-**Option B: Fix two-column archetype (Priority 2)**
-Layout is broken — overlapping positions, content off-screen.
-- Add Auto Layout like bullets/big-idea
-- File: `figma-plugin/code.ts`, search for `two-column`
-
-**Option C: Visual feedback / screenshot (Discovery)**
-Let LLM "see" what was rendered.
-- Use `figma.exportAsync()` to get PNG
-- Return image in MCP response
-- Would help with diagram iteration
-
-**Option D: Shape round-tripping (Discovery)**
+**Option B: Shape round-tripping (Discovery)**
 Enable true round-trip of manual diagram edits.
 - Extend pull to detect shapes (ellipses, vectors, rectangles)
 - Store positions/sizes/colors in IR
 - Recreate exactly on push
 
-**Option E: Table support (Discovery)**
-Figma Slides has native tables — explore the API.
-- Can we create tables programmatically?
-- Can we read table cell contents during pull?
+**Option C: Table write support (Discovery)**
+Can read tables, now explore creating/updating them.
+- Investigate `figma.createTable()` API
+- Add `table` archetype or IR field
 - Useful for comparisons, feature matrices
 
-**Option F: Heroicons integration (Discovery)**
+**Option D: Heroicons integration (Discovery)**
 Use Figma's built-in Heroicons library for diagram icons.
 - `importComponentByKeyAsync()` to pull from library
 - Much cleaner than hand-drawing shapes
 - Both outline + solid variants available
+
+**Option E: Simpler three-column archetype**
+Basic 3-col layout without badges/complexity of position-cards.
+- Just headline + 3 titled body sections
+- Use Auto Layout pattern from two-column
+
+**Option F: Visual QA workflow testing**
+Test the new screenshot capability end-to-end.
+- Try push → screenshot → verify layout
+- Use it to fix the video play button positioning (known issue from Session 23)
 
 **Key files:**
 - `figma-plugin/code.ts` — rendering logic

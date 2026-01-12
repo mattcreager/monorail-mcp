@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-> The 8 tools Claude uses to collaborate on decks via Figma.
+> The 9 tools Claude uses to collaborate on decks via Figma.
 
 ---
 
@@ -152,6 +152,33 @@ Returns: Success/failure with count
 
 ---
 
+### `monorail_screenshot`
+Export a slide as a PNG image. Gives the AI "eyes" to see what was rendered.
+
+```
+Parameters:
+- slide_id?: string — Figma node ID of slide to export (optional, defaults to first slide)
+- scale?: number — Export scale factor (default: 0.5 for 50% size)
+
+Returns: PNG image (base64-encoded) with dimensions
+```
+
+**Use when:** 
+- Verifying layouts after push/patch
+- Checking alignment and spacing
+- Debugging visual issues
+- QA before presenting to user
+
+**Example:**
+```json
+{
+  "slide_id": "9:666",
+  "scale": 0.5
+}
+```
+
+---
+
 ## Workflow Patterns
 
 ### Edit existing content (most common)
@@ -201,6 +228,13 @@ Returns: Success/failure with count
 ```
 1. monorail_pull          — get all slide IDs
 2. monorail_reorder       — pass IDs in desired order
+```
+
+### Visual QA (see what you rendered)
+```
+1. monorail_push          — create/update slides
+2. monorail_screenshot    — see the result as an image
+3. (iterate if needed)
 ```
 
 ---

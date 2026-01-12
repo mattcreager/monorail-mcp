@@ -27,6 +27,8 @@ interface SlideContent {
   right?: { title: string; body: string };
   stages?: Array<{ label: string; description?: string }>;
   columns?: string[];
+  video_url?: string;
+  caption?: string;
   rows?: string[][];
   items?: string[];
   chart?: { type: string; placeholder?: boolean };
@@ -648,6 +650,13 @@ const ARCHETYPES: Record<
       headline: { maxWords: 15 },
       subline: { maxWords: 10 },
       cards: { maxItems: 3 },
+    },
+  },
+  video: {
+    requiredFields: ["headline", "video_url"],
+    constraints: {
+      headline: { maxWords: 10 },
+      caption: { maxWords: 20 },
     },
   },
 };
@@ -1421,7 +1430,7 @@ let currentIR: DeckIR | null = null;
 
 const server = new Server(
   {
-    name: "monorail-mcp",
+    name: "Monorail",
     version: "0.1.0",
   },
   {
@@ -1432,7 +1441,7 @@ const server = new Server(
   }
 );
 
-// List available tools (8 total)
+// List available tools (9 total)
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
@@ -1602,11 +1611,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["slide_ids"],
         },
       },
+      {
+        name: "monorail_screenshot",
+        description:
+          "Export a slide as a PNG image. Returns a base64-encoded image that can be displayed. Use this to see what Figma rendered — gives you 'eyes' to verify layouts, check alignment, spot issues. Can target a specific slide by ID or defaults to first slide.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            slide_id: {
+              type: "string",
+              description:
+                "Optional Figma node ID of the slide to screenshot. If omitted, exports the first slide.",
+            },
+            scale: {
+              type: "number",
+              description:
+                "Export scale factor (default: 0.5 for 50% size). Use 1 for full resolution, 0.25 for small preview.",
+            },
+          },
+        },
+      },
     ],
   };
 });
 
-// Handle tool calls (8 total)
+// Handle tool calls (9 total)
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
@@ -1905,9 +1934,9 @@ case "monorail_capture": {
         };
       }
 
-      // Create pending request and send to plugin (with optional slideId)
+      // Create pending request and send to plugin (with optional slideId and maxDepth)
       const capturePromise = createPendingRequest<CapturedTemplate>('capture', "Timeout waiting for template capture");
-      connectedPlugin!.send(JSON.stringify({ type: "capture-template", slideId }));
+      connectedPlugin!.send(JSON.stringify({ type: "capture-template", slideId, maxDepth }));
 
       try {
         const result = await capturePromise;
@@ -2232,6 +2261,87 @@ The new slide has been selected in Figma.`,
       }
     }
 
+    // =========================================================================
+    // monorail_screenshot - Export slide as PNG image
+    // =========================================================================
+    case "monorail_screenshot": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const slideId = args?.slide_id as string | undefined;
+      const scale = (args?.scale as number) || 0.5;
+
+      // Check if there's already a pending screenshot request
+      if (hasPendingRequest('screenshot')) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another screenshot request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Create pending request and send to plugin
+      const screenshotPromise = createPendingRequest<ScreenshotResult>('screenshot', "Timeout waiting for screenshot");
+      connectedPlugin!.send(JSON.stringify({ type: "request-screenshot", slideId, scale }));
+
+      try {
+        const result = await screenshotPromise;
+        
+        if (!result.success || !result.base64) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error taking screenshot: ${result.error || "No image data returned"}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const sizeKB = Math.round((result.base64.length * 3 / 4) / 1024);
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `📷 Screenshot of "${result.slideName}" (${result.width}×${result.height}, ${sizeKB}KB)`,
+            },
+            {
+              type: "image" as const,
+              data: result.base64,
+              mimeType: "image/png",
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error taking screenshot: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -2287,7 +2397,26 @@ When creating presentation decks, focus on:
 2. Find the argument (what's the one thing?)
 3. Structure the arc (setup → tension → resolution)
 4. Draft slides using archetypes
-5. Iterate with feedback
+5. **Verify with screenshots** - Use monorail_screenshot to see what you rendered
+6. Iterate with feedback
+
+## Visual QA Workflow
+
+You have "eyes" now! Use \`monorail_screenshot\` to see what Figma actually renders:
+
+\`\`\`
+1. monorail_push    → create/update slides
+2. monorail_screenshot → see the result as an image
+3. (spot issues? fix and iterate)
+\`\`\`
+
+**When to screenshot:**
+- After creating new slides (verify layout)
+- After patching content (check text fits)
+- When user reports visual issues (see what they see)
+- Before presenting work to user (QA check)
+
+**Tip:** Use \`scale: 0.5\` (default) for quick checks, \`scale: 1\` for full resolution.
 `,
 
     "monorail://archetypes": `# Slide Archetypes
@@ -2459,6 +2588,13 @@ When you pull from Figma, you get richer data:
   ]
 }
 \`\`\`
+
+## Verify Your Work
+
+After pushing slides, use \`monorail_screenshot\` to see what was rendered:
+- Verify layouts look correct
+- Check text fits and doesn't overflow
+- Spot alignment issues before the user does
 `,
   };
 
@@ -2506,9 +2642,10 @@ interface InstantiateResult { success: boolean; newSlideId?: string; updated?: n
 interface CreateResult { success: boolean; slideId?: string; error?: string; }
 interface DeleteResult { deleted: number; failed: string[]; }
 interface ReorderResult { success: boolean; count?: number; error?: string; }
+interface ScreenshotResult { success: boolean; slideId?: string; slideName?: string; base64?: string; width?: number; height?: number; error?: string; }
 
 // Type-safe request type keys
-type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder';
+type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot';
 
 // Map of pending requests by type
 const pendingRequests = new Map<RequestType, PendingRequest<any>>();
@@ -2649,6 +2786,19 @@ function startWebSocketServer() {
           resolvePendingRequest<ReorderResult>('reorder', {
             success: parsed.success,
             count: parsed.count,
+            error: parsed.error,
+          });
+        } else if (parsed.type === "screenshot-exported") {
+          // Plugin sent screenshot result
+          const sizeKB = parsed.base64 ? Math.round((parsed.base64.length * 3 / 4) / 1024) : 0;
+          console.error(`[WebSocket] Screenshot result: success=${parsed.success}, size=${sizeKB}KB`);
+          resolvePendingRequest<ScreenshotResult>('screenshot', {
+            success: parsed.success,
+            slideId: parsed.slideId,
+            slideName: parsed.slideName,
+            base64: parsed.base64,
+            width: parsed.width,
+            height: parsed.height,
             error: parsed.error,
           });
         } else {

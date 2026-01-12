@@ -237,15 +237,25 @@ async function addContentToParent(parent, slide) {
                         gradientTransform: [[0.7, 0.7, 0], [-0.7, 0.7, 0.5]] // 135deg diagonal
                     }];
                 parent.appendChild(gradientBg);
+                // Auto Layout container for text (vertically centered)
+                const titleContainer = createAutoLayoutFrame(parent, 'title-container', 200, 380, // roughly vertically centered
+                'VERTICAL', 24 // spacing between headline and subline
+                );
+                if (c.headline)
+                    await addAutoLayoutText(titleContainer, c.headline, 96, true, COLORS.headline, 1520, 'headline');
+                if (c.subline)
+                    await addAutoLayoutText(titleContainer, c.subline, 36, false, COLORS.muted, 1520, 'subline');
             }
-            if (c.headline)
-                await addText(parent, c.headline, 200, 420, 96, true, COLORS.headline, undefined, 'headline');
-            if (c.subline)
-                await addText(parent, c.subline, 200, 550, 36, false, COLORS.muted, undefined, 'subline');
             break;
         case 'section':
-            if (c.headline)
-                await addText(parent, c.headline, 200, 480, 72, true, COLORS.headline, undefined, 'headline');
+            {
+                // Auto Layout container for section headline (vertically centered)
+                const sectionContainer = createAutoLayoutFrame(parent, 'section-container', 200, 450, // vertically centered
+                'VERTICAL', 24 // spacing if we add subline later
+                );
+                if (c.headline)
+                    await addAutoLayoutText(sectionContainer, c.headline, 72, true, COLORS.headline, 1520, 'headline');
+            }
             break;
         case 'big-idea':
             {
@@ -275,29 +285,68 @@ async function addContentToParent(parent, slide) {
             }
             break;
         case 'two-column':
-            if (c.headline)
-                await addText(parent, c.headline, 200, 150, 56, true, COLORS.headline, undefined, 'headline');
-            if (c.left) {
-                await addText(parent, c.left.title, 200, 320, 36, true, COLORS.accent, undefined, 'left-title');
-                await addText(parent, c.left.body, 200, 390, 28, false, COLORS.body, 680, 'left-body');
-            }
-            if (c.right) {
-                await addText(parent, c.right.title, 1040, 320, 36, true, COLORS.headline, undefined, 'right-title');
-                await addText(parent, c.right.body, 1040, 390, 28, false, COLORS.body, 680, 'right-body');
+            {
+                // Use Auto Layout so content flows properly regardless of text length
+                const twoColContainer = createAutoLayoutFrame(parent, 'two-column-container', 200, // x position (left margin)
+                150, // y position
+                'VERTICAL', 48 // spacing between headline and columns
+                );
+                if (c.headline)
+                    await addAutoLayoutText(twoColContainer, c.headline, 56, true, COLORS.headline, 1520, 'headline');
+                // Create horizontal container for the two columns
+                const columnsContainer = createAutoLayoutFrame(twoColContainer, 'columns-container', 0, 0, // position handled by parent Auto Layout
+                'HORIZONTAL', 40 // gap between columns
+                );
+                // Left column (vertical stack of title + body)
+                if (c.left) {
+                    const leftColumn = createAutoLayoutFrame(columnsContainer, 'left-column', 0, 0, 'VERTICAL', 16 // spacing between title and body
+                    );
+                    // Set fixed width so columns don't overlap
+                    leftColumn.counterAxisSizingMode = 'FIXED';
+                    leftColumn.resize(740, leftColumn.height);
+                    await addAutoLayoutText(leftColumn, c.left.title, 36, true, COLORS.accent, 740, 'left-title');
+                    await addAutoLayoutText(leftColumn, c.left.body, 28, false, COLORS.body, 740, 'left-body');
+                }
+                // Right column (vertical stack of title + body)
+                if (c.right) {
+                    const rightColumn = createAutoLayoutFrame(columnsContainer, 'right-column', 0, 0, 'VERTICAL', 16 // spacing between title and body
+                    );
+                    // Set fixed width so columns don't overlap
+                    rightColumn.counterAxisSizingMode = 'FIXED';
+                    rightColumn.resize(740, rightColumn.height);
+                    await addAutoLayoutText(rightColumn, c.right.title, 36, true, COLORS.headline, 740, 'right-title');
+                    await addAutoLayoutText(rightColumn, c.right.body, 28, false, COLORS.body, 740, 'right-body');
+                }
             }
             break;
         case 'quote':
-            if (c.quote)
-                await addText(parent, `"${c.quote}"`, 200, 380, 48, true, COLORS.white, 1520, 'quote');
-            if (c.attribution)
-                await addText(parent, `— ${c.attribution}`, 200, 560, 28, false, COLORS.muted, undefined, 'attribution');
+            {
+                // Auto Layout container for quote text (vertically centered)
+                const quoteContainer = createAutoLayoutFrame(parent, 'quote-container', 200, 350, // roughly vertically centered
+                'VERTICAL', 40 // spacing between quote and attribution
+                );
+                if (c.quote)
+                    await addAutoLayoutText(quoteContainer, `"${c.quote}"`, 48, true, COLORS.white, 1520, 'quote');
+                if (c.attribution)
+                    await addAutoLayoutText(quoteContainer, `— ${c.attribution}`, 28, false, COLORS.muted, 1520, 'attribution');
+            }
             break;
         case 'summary':
-            if (c.headline)
-                await addText(parent, c.headline, 200, 200, 72, true, COLORS.headline, undefined, 'headline');
-            if (c.items) {
-                for (let i = 0; i < c.items.length; i++) {
-                    await addText(parent, c.items[i], 200, 380 + i * 100, 36, false, COLORS.body, undefined, `item-${i}`);
+            {
+                // Auto Layout container for headline and items
+                const summaryContainer = createAutoLayoutFrame(parent, 'summary-container', 200, 180, // near top
+                'VERTICAL', 48 // spacing between headline and items
+                );
+                if (c.headline)
+                    await addAutoLayoutText(summaryContainer, c.headline, 72, true, COLORS.headline, 1520, 'headline');
+                if (c.items) {
+                    // Nested container for items with tighter spacing
+                    const itemsContainer = createAutoLayoutFrame(summaryContainer, 'items-container', 0, 0, // position handled by parent Auto Layout
+                    'VERTICAL', 24 // spacing between items
+                    );
+                    for (let i = 0; i < c.items.length; i++) {
+                        await addAutoLayoutText(itemsContainer, c.items[i], 36, false, COLORS.body, 1520, `item-${i}`);
+                    }
                 }
             }
             break;
@@ -308,6 +357,50 @@ async function addContentToParent(parent, slide) {
             await addText(parent, `[Chart: ${((_a = c.chart) === null || _a === void 0 ? void 0 : _a.type) || 'data'}]`, 860, 500, 28, false, COLORS.muted, undefined, 'chart-placeholder');
             if (c.takeaway)
                 await addText(parent, c.takeaway, 200, 820, 28, false, COLORS.muted, undefined, 'takeaway');
+            break;
+        case 'video':
+            {
+                // Auto Layout container for video slide
+                const videoContainer = createAutoLayoutFrame(parent, 'video-container', 200, 150, 'VERTICAL', 32 // spacing between elements
+                );
+                if (c.headline)
+                    await addAutoLayoutText(videoContainer, c.headline, 56, true, COLORS.headline, 1520, 'headline');
+                // Video placeholder frame (16:9 aspect ratio)
+                const placeholderFrame = figma.createFrame();
+                placeholderFrame.name = 'video-placeholder';
+                placeholderFrame.resize(1200, 675); // 16:9 ratio
+                placeholderFrame.fills = [{ type: 'SOLID', color: { r: 0.08, g: 0.08, b: 0.1 } }];
+                placeholderFrame.strokes = [{ type: 'SOLID', color: COLORS.dimmed }];
+                placeholderFrame.strokeWeight = 2;
+                placeholderFrame.cornerRadius = 8;
+                videoContainer.appendChild(placeholderFrame);
+                // Play button icon (triangle in circle)
+                const playCircle = figma.createEllipse();
+                playCircle.name = 'play-circle';
+                playCircle.resize(100, 100);
+                playCircle.x = 550; // center in placeholder
+                playCircle.y = 287;
+                playCircle.fills = [{ type: 'SOLID', color: COLORS.white, opacity: 0.9 }];
+                placeholderFrame.appendChild(playCircle);
+                // Play triangle
+                const playTriangle = figma.createPolygon();
+                playTriangle.name = 'play-triangle';
+                playTriangle.pointCount = 3;
+                playTriangle.resize(40, 40);
+                playTriangle.x = 582; // center-ish in circle
+                playTriangle.y = 317;
+                playTriangle.rotation = 90; // point right
+                playTriangle.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.15 } }];
+                placeholderFrame.appendChild(playTriangle);
+                // URL text below placeholder
+                if (c.video_url) {
+                    await addAutoLayoutText(videoContainer, c.video_url, 20, false, COLORS.blue, 1520, 'video-url');
+                }
+                // Optional caption
+                if (c.caption) {
+                    await addAutoLayoutText(videoContainer, c.caption, 24, false, COLORS.muted, 1520, 'caption');
+                }
+            }
             break;
         case 'timeline':
             if (c.headline)
@@ -1013,6 +1106,11 @@ async function updateContentInPlace(parent, slide) {
             await updateNamed('headline', c.headline);
             await updateNamed('takeaway', c.takeaway);
             break;
+        case 'video':
+            await updateNamed('headline', c.headline);
+            await updateNamed('video-url', c.video_url);
+            await updateNamed('caption', c.caption);
+            break;
         case 'timeline':
             await updateNamed('headline', c.headline);
             if (c.stages) {
@@ -1048,12 +1146,15 @@ function detectExistingArchetype(parent) {
     const frameNodes = children.filter((n) => n.type === 'FRAME');
     const names = new Set(textNodes.map(t => t.name));
     const frameNames = new Set(frameNodes.map(f => f.name));
-    // Check for Auto Layout container (new style)
+    // Check for Auto Layout containers (new style)
     if (frameNames.has('bullets-container'))
         return 'bullets';
+    if (frameNames.has('two-column-container'))
+        return 'two-column';
     // Check for archetype-specific node names
     if (names.has('quote') && names.has('attribution'))
         return 'quote';
+    // Legacy two-column detection (old style without container)
     if (names.has('left-title') || names.has('right-title'))
         return 'two-column';
     // Legacy bullets detection (old style without container)
@@ -1137,13 +1238,35 @@ function captureNodeTree(node) {
             captured.letterSpacing = textNode.letterSpacing;
         }
     }
+    // TABLE properties (Figma Slides tables)
+    if (node.type === 'TABLE') {
+        const tableNode = node;
+        captured.numRows = tableNode.numRows;
+        captured.numColumns = tableNode.numColumns;
+        // Extract cell contents as 2D array
+        const cells = [];
+        for (let row = 0; row < tableNode.numRows; row++) {
+            for (let col = 0; col < tableNode.numColumns; col++) {
+                const cell = tableNode.cellAt(row, col);
+                if (cell && cell.text) {
+                    cells.push({
+                        row,
+                        col,
+                        text: cell.text.characters || '',
+                    });
+                }
+            }
+        }
+        captured.tableCells = cells;
+        console.log(`[TABLE] Captured ${tableNode.numRows}x${tableNode.numColumns} table with ${cells.length} cells`);
+    }
     // Recursively capture children
     if ('children' in node) {
         captured.children = node.children.map((child) => captureNodeTree(child));
     }
     return captured;
 }
-// Recursively find ALL text nodes in a node tree
+// Recursively find ALL text nodes in a node tree (including TABLE cells)
 function getAllTextNodes(node, results = [], depth = 0, parentName = '', offsetX = 0, offsetY = 0) {
     if (node.type === 'TEXT') {
         results.push({
@@ -1153,6 +1276,32 @@ function getAllTextNodes(node, results = [], depth = 0, parentName = '', offsetX
             absoluteX: node.x + offsetX,
             absoluteY: node.y + offsetY,
         });
+    }
+    else if (node.type === 'TABLE') {
+        // Handle Figma Slides TABLE nodes
+        const tableNode = node;
+        const tableX = node.x + offsetX;
+        const tableY = node.y + offsetY;
+        console.log(`[TABLE] Found ${tableNode.numRows}x${tableNode.numColumns} table "${node.name}"`);
+        for (let row = 0; row < tableNode.numRows; row++) {
+            for (let col = 0; col < tableNode.numColumns; col++) {
+                const cell = tableNode.cellAt(row, col);
+                if (cell && cell.text && cell.text.characters) {
+                    // TextSublayerNode is similar to TextNode - cast it for our purposes
+                    // We add table metadata so downstream code knows this came from a table
+                    results.push({
+                        node: cell.text,
+                        depth: depth + 1,
+                        parentName: `${node.name || 'Table'}[${row},${col}]`,
+                        absoluteX: tableX, // Approximate - cells don't expose individual positions easily
+                        absoluteY: tableY + (row * 40), // Rough estimate based on row
+                        isTableCell: true,
+                        tableRow: row,
+                        tableCol: col,
+                    });
+                }
+            }
+        }
     }
     else if ('children' in node) {
         const container = node;
@@ -1209,12 +1358,16 @@ function classifyElement(text, fontSize, isBold, x, y, depth, parentName) {
 // Convert collected text info to ElementInfo array
 function buildElementInfos(textInfos) {
     return textInfos.map(info => {
-        const { node, depth, parentName, absoluteX, absoluteY } = info;
+        const { node, depth, parentName, absoluteX, absoluteY, isTableCell, tableRow, tableCol } = info;
         const fontSize = typeof node.fontSize === 'number' ? node.fontSize : 24;
         const isBold = node.fontName !== figma.mixed && node.fontName.style.includes('Bold');
-        return {
+        // Table cells get special type classification
+        const elementType = isTableCell
+            ? 'table_cell'
+            : classifyElement(node.characters, fontSize, isBold, absoluteX, absoluteY, depth, parentName);
+        const result = {
             id: node.id,
-            type: classifyElement(node.characters, fontSize, isBold, absoluteX, absoluteY, depth, parentName),
+            type: elementType,
             text: node.characters,
             x: absoluteX,
             y: absoluteY,
@@ -1226,6 +1379,13 @@ function buildElementInfos(textInfos) {
             depth,
             isInDiagram: depth >= 3 || parentName.toLowerCase().includes('diagram'),
         };
+        // Add table cell metadata if present
+        if (isTableCell) {
+            result.isTableCell = true;
+            result.tableRow = tableRow;
+            result.tableCol = tableCol;
+        }
+        return result;
     });
 }
 // Helper to get all text nodes recursively from a parent (for bullets in containers)
@@ -1276,10 +1436,12 @@ function analyzeSlideContent(directTextNodes, parent) {
                 }
             };
         }
-        // TITLE: Has gradient background and headline + optional subline
-        if (frameNames.has('title-gradient-bg') || children.some((n) => n.name === 'title-gradient-bg')) {
-            const headline = directTextNodes.find(t => t.name === 'headline');
-            const subline = directTextNodes.find(t => t.name === 'subline');
+        // TITLE: Has title-container or gradient background
+        if (frameNames.has('title-container') || frameNames.has('title-gradient-bg') || children.some((n) => n.name === 'title-gradient-bg')) {
+            const container = frameNodes.find(f => f.name === 'title-container');
+            const containerTexts = container ? getRecursiveTextNodes(container) : directTextNodes;
+            const headline = containerTexts.find(t => t.name === 'headline');
+            const subline = containerTexts.find(t => t.name === 'subline');
             return {
                 archetype: 'title',
                 content: {
@@ -1288,7 +1450,86 @@ function analyzeSlideContent(directTextNodes, parent) {
                 }
             };
         }
-        // TWO-COLUMN: Has left-title or right-title
+        // SECTION: Has section-container frame
+        if (frameNames.has('section-container')) {
+            const container = frameNodes.find(f => f.name === 'section-container');
+            const containerTexts = container ? getRecursiveTextNodes(container) : [];
+            const headline = containerTexts.find(t => t.name === 'headline');
+            return {
+                archetype: 'section',
+                content: {
+                    headline: (headline === null || headline === void 0 ? void 0 : headline.characters) || '',
+                }
+            };
+        }
+        // QUOTE: Has quote-container frame
+        if (frameNames.has('quote-container')) {
+            const container = frameNodes.find(f => f.name === 'quote-container');
+            const containerTexts = container ? getRecursiveTextNodes(container) : [];
+            const quote = containerTexts.find(t => t.name === 'quote');
+            const attribution = containerTexts.find(t => t.name === 'attribution');
+            return {
+                archetype: 'quote',
+                content: {
+                    quote: (quote === null || quote === void 0 ? void 0 : quote.characters.replace(/^[""]|[""]$/g, '')) || '',
+                    attribution: (attribution === null || attribution === void 0 ? void 0 : attribution.characters.replace(/^[—-]\s*/, '')) || '',
+                }
+            };
+        }
+        // SUMMARY: Has summary-container frame
+        if (frameNames.has('summary-container')) {
+            const container = frameNodes.find(f => f.name === 'summary-container');
+            const containerTexts = container ? getRecursiveTextNodes(container) : [];
+            const headline = containerTexts.find(t => t.name === 'headline');
+            const items = containerTexts.filter(t => t.name.startsWith('item-'));
+            items.sort((a, b) => {
+                const aNum = parseInt(a.name.replace('item-', '')) || 0;
+                const bNum = parseInt(b.name.replace('item-', '')) || 0;
+                return aNum - bNum;
+            });
+            return {
+                archetype: 'summary',
+                content: {
+                    headline: (headline === null || headline === void 0 ? void 0 : headline.characters) || '',
+                    items: items.map(t => t.characters),
+                }
+            };
+        }
+        // VIDEO: Has video-container frame
+        if (frameNames.has('video-container')) {
+            const container = frameNodes.find(f => f.name === 'video-container');
+            const containerTexts = container ? getRecursiveTextNodes(container) : [];
+            const headline = containerTexts.find(t => t.name === 'headline');
+            const videoUrl = containerTexts.find(t => t.name === 'video-url');
+            const caption = containerTexts.find(t => t.name === 'caption');
+            return {
+                archetype: 'video',
+                content: {
+                    headline: (headline === null || headline === void 0 ? void 0 : headline.characters) || '',
+                    video_url: (videoUrl === null || videoUrl === void 0 ? void 0 : videoUrl.characters) || '',
+                    caption: caption === null || caption === void 0 ? void 0 : caption.characters,
+                }
+            };
+        }
+        // TWO-COLUMN: Check for two-column-container frame (new Auto Layout style)
+        if (frameNames.has('two-column-container')) {
+            const container = frameNodes.find(f => f.name === 'two-column-container');
+            const allTexts = container ? getRecursiveTextNodes(container) : [];
+            const headline = allTexts.find(t => t.name === 'headline');
+            const leftTitle = allTexts.find(t => t.name === 'left-title');
+            const leftBody = allTexts.find(t => t.name === 'left-body');
+            const rightTitle = allTexts.find(t => t.name === 'right-title');
+            const rightBody = allTexts.find(t => t.name === 'right-body');
+            return {
+                archetype: 'two-column',
+                content: {
+                    headline: (headline === null || headline === void 0 ? void 0 : headline.characters) || '',
+                    left: { title: (leftTitle === null || leftTitle === void 0 ? void 0 : leftTitle.characters) || '', body: (leftBody === null || leftBody === void 0 ? void 0 : leftBody.characters) || '' },
+                    right: { title: (rightTitle === null || rightTitle === void 0 ? void 0 : rightTitle.characters) || '', body: (rightBody === null || rightBody === void 0 ? void 0 : rightBody.characters) || '' },
+                }
+            };
+        }
+        // TWO-COLUMN (legacy): Has left-title or right-title as direct children
         if (textNames.has('left-title') || textNames.has('right-title')) {
             const headline = directTextNodes.find(t => t.name === 'headline');
             const leftTitle = directTextNodes.find(t => t.name === 'left-title');
@@ -2593,6 +2834,79 @@ figma.ui.onmessage = async (msg) => {
                 console.error('Reorder error:', errorMsg);
                 figma.notify(`Error: ${errorMsg}`, { error: true });
                 figma.ui.postMessage({ type: 'slides-reordered', success: false, error: errorMsg });
+            }
+        }
+        // =======================================================================
+        // SCREENSHOT: Export slide as PNG for visual feedback
+        // =======================================================================
+        if (msg.type === 'export-screenshot') {
+            const requestedSlideId = msg.slideId;
+            const scale = msg.scale || 0.5; // Default 0.5x for smaller images
+            let targetNode = null;
+            if (requestedSlideId) {
+                // Export specific slide by ID
+                targetNode = await figma.getNodeByIdAsync(requestedSlideId);
+                if (!targetNode) {
+                    figma.notify(`Slide not found: ${requestedSlideId}`, { error: true });
+                    figma.ui.postMessage({ type: 'screenshot-exported', error: `Slide not found: ${requestedSlideId}` });
+                    return;
+                }
+            }
+            else if (figma.currentPage.selection.length > 0) {
+                // Use current selection
+                targetNode = figma.currentPage.selection[0];
+            }
+            else {
+                // Find first slide as fallback
+                if (isInSlides()) {
+                    function findFirstSlide(node) {
+                        if (node.type === 'SLIDE')
+                            return node;
+                        if ('children' in node) {
+                            for (const child of node.children) {
+                                const found = findFirstSlide(child);
+                                if (found)
+                                    return found;
+                            }
+                        }
+                        return null;
+                    }
+                    for (const node of figma.currentPage.children) {
+                        targetNode = findFirstSlide(node);
+                        if (targetNode)
+                            break;
+                    }
+                }
+            }
+            if (!targetNode) {
+                figma.notify('No slide found to screenshot', { error: true });
+                figma.ui.postMessage({ type: 'screenshot-exported', error: 'No slide found' });
+                return;
+            }
+            try {
+                // Export as PNG
+                const pngData = await targetNode.exportAsync({
+                    format: 'PNG',
+                    constraint: { type: 'SCALE', value: scale }
+                });
+                // Convert to base64
+                const base64 = figma.base64Encode(pngData);
+                figma.ui.postMessage({
+                    type: 'screenshot-exported',
+                    success: true,
+                    slideId: targetNode.id,
+                    slideName: targetNode.name,
+                    base64,
+                    width: Math.round(targetNode.width * scale),
+                    height: Math.round(targetNode.height * scale)
+                });
+                figma.notify(`📷 Exported "${targetNode.name}" (${Math.round(scale * 100)}%)`);
+            }
+            catch (err) {
+                const errorMsg = err instanceof Error ? err.message : String(err);
+                console.error('Screenshot export error:', errorMsg);
+                figma.notify(`Export failed: ${errorMsg}`, { error: true });
+                figma.ui.postMessage({ type: 'screenshot-exported', success: false, error: errorMsg });
             }
         }
         if (msg.type === 'close') {

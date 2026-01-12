@@ -83,4 +83,8 @@ Both are minor compared to the benefits.
 
 ## Status
 
-**Planned** — To be implemented as Priority 1 item.
+**Implemented** — Session 23 (2026-01-12). All archetypes now use Auto Layout containers:
+- `title-container`
+- `section-container`
+- `quote-container`
+- `summary-container` (with nested `items-container`)
