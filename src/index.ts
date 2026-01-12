@@ -40,6 +40,20 @@ interface SlideContent {
     badge_color?: 'green' | 'cyan' | 'orange';
   }>;
   features?: Array<{ label: string; description: string }>;
+  // Visual element (diagram, icon, etc.)
+  visual?: {
+    type: 'svg' | 'cycle';
+    // For SVG type
+    content?: string;  // Raw SVG string
+    // For cycle type (native Figma rendering)
+    nodes?: string[];  // Labels for each node in the cycle
+    colors?: Array<'cyan' | 'green' | 'orange' | 'pink' | 'purple' | 'blue' | 'white'>;  // Color for each node
+    icons?: Array<'presence' | 'lightbulb' | 'refresh' | 'chart' | 'magnet' | 'rocket' | 'target' | 'users' | 'check' | 'star'>;  // Icon for each node
+    // Common options
+    position?: 'right' | 'below' | 'center';  // Where to place relative to text content
+    width?: number;   // Optional width in pixels
+    height?: number;  // Optional height in pixels
+  };
 }
 
 interface Slide {

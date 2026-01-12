@@ -4,7 +4,7 @@
 
 An MCP server that gives Claude the power to build presentation decks with you in Figma Slides. Not generate and export—actually collaborate.
 
-**v0 is complete. The loop works. 🎉**
+**Full round-trip loop working. Visual diagrams supported. 🎉**
 
 ## The Problem
 
@@ -19,11 +19,14 @@ Monorail treats a deck as an argument with a shape. Claude and you work in Figma
 ```
 Claude                              Figma Plugin
    │                                      │
-   ├──── monorail_push_ir ───────────────►│ (auto-applies)
+   ├──── monorail_push ─────────────────►│ (creates slides)
    │                                      │
-   │◄──── monorail_pull_ir ───────────────┤ (exports & returns IR)
+   │◄──── monorail_pull ─────────────────┤ (returns deck state)
    │                                      │
    │                                Human edits in Figma
+   │                                      │
+   ├──── monorail_patch ────────────────►│ (surgical text updates)
+   │                                      │
    └──────────── repeat ──────────────────┘
 ```
 
@@ -79,6 +82,28 @@ Figma → Plugins → Development → Import plugin from manifest → select `fi
 - **Deletion Test**: Can you cut this slide without breaking the argument? If yes, it's filler.
 - **Archetypes**: 10 constrained templates. Word limits force clarity.
 
+## Visual Diagrams
+
+Monorail can render native Figma diagrams, not just text. Add a `visual` field to any slide:
+
+```json
+{
+  "archetype": "big-idea",
+  "content": {
+    "headline": "The Flywheel",
+    "subline": "Each cycle makes the next one faster",
+    "visual": {
+      "type": "cycle",
+      "nodes": ["Show up", "Learn", "Iterate", "Compound", "Gravity"],
+      "colors": ["cyan", "green", "orange", "pink", "purple"],
+      "position": "right"
+    }
+  }
+}
+```
+
+Renders as native Figma shapes — editable circles, arrows, text. Not an image.
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) — System design and components
@@ -102,15 +127,20 @@ npm run build        # Build once
 npm run watch        # Watch mode
 ```
 
-## MCP Tools
+## MCP Tools (8 total)
 
 | Tool | Purpose |
 |------|---------|
-| `monorail_connection_status` | Check if plugin is connected |
-| `monorail_push_ir` | Send IR to plugin (auto-apply) |
-| `monorail_pull_ir` | Request export, returns IR |
-| `monorail_create_deck` | Create deck from IR (in-memory) |
-| `monorail_preview` | Generate HTML preview |
+| `monorail_status` | Check if Figma plugin is connected |
+| `monorail_pull` | Get deck state from Figma (slides, elements, IDs) |
+| `monorail_push` | Create/replace slides from IR (with validation, positioning) |
+| `monorail_patch` | Update specific text elements by Figma node ID |
+| `monorail_capture` | Full node tree + design system + slots |
+| `monorail_clone` | Clone slide + update content |
+| `monorail_delete` | Delete slides by Figma node ID |
+| `monorail_reorder` | Reorder slides to match specified order |
+
+See [docs/references/mcp-tools.md](docs/references/mcp-tools.md) for full documentation.
 
 ## Project Structure
 
@@ -135,22 +165,20 @@ monorail-mcp/
 
 ## Status
 
-**v0 — Complete! ✅**
+**Full collaboration loop complete! ✅**
 
-- [x] Architecture spec
-- [x] Narrative toolkit
-- [x] IR format spec
-- [x] MCP server (with WebSocket)
-- [x] Figma plugin (Apply + Export)
-- [x] WebSocket bridge (no copy/paste!)
-- [x] All 10 archetypes
-- [x] Freeform edit handling (extras capture)
-- [x] Update-in-place (preserves formatting)
+- [x] WebSocket bridge — live sync, no copy/paste
+- [x] Rich export — all elements with Figma node IDs
+- [x] Targeted patches — update specific elements, preserve layouts
+- [x] Template capture + clone — design in Figma, clone with new content
+- [x] All 10 archetypes with Auto Layout
+- [x] Visual diagrams — native Figma rendering (`visual: { type: "cycle", nodes: [...] }`)
+- [x] Slide operations — delete, reorder, insert at position
+- [x] IR validation on push
 
-**v1 — Next up:**
-- [ ] Delete slide capability
-- [ ] IR validation
-- [ ] Figma Slides best practices (Auto Layout, Components)
+**In progress:**
+- [ ] More diagram types (funnel, timeline, matrix)
+- [ ] Shape round-tripping (preserve manual diagram edits)
 - [ ] Visual feedback (Claude seeing rendered output)
 
 ## License

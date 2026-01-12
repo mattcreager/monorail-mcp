@@ -104,6 +104,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ### Priority 2: Figma Best Practices
 - [ ] Auto Layout for remaining archetypes (title, quote, summary, section) — see `docs/decisions/auto-layout-consistency.md`
+- [ ] **Fix two-column archetype** — layout is broken (overlapping positions, content off-screen). Needs Auto Layout like bullets/big-idea.
 - [x] ~~Archetype detection~~ — Frame-based detection (Session 17)
 - [x] ~~Font fallback chain~~ — Inter → SF Pro → Helvetica → Arial (Session 17)
 
@@ -118,9 +119,20 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [ ] Shared types — extract `SlideContent` to avoid duplication between plugin/server
 - [ ] Auto-generate MCP resources — derive from ARCHETYPES object
 
+### Priority 5: Visual Richness
+- [x] **SVG support in IR** — `visual: { type: "svg", content: "..." }` with `createNodeFromSvg()`. Works but quality is poor — text wrapping unpredictable, positioning blind. (Session 21)
+- [x] **Native diagram DSL** — `visual: { type: "cycle", nodes: [...], colors: [...] }`. Plugin renders with native Figma shapes. **Works well** — proper text, clean circles, correct colors. (Session 21)
+- [x] **Smart sizing defaults** — Right=65%, Center=70%, Below=40%×35% of slide dimensions. (Session 21)
+- [ ] **Placeholder frames** — Mark "visual goes here" in IR, renders as labeled placeholder in Figma. User fills in manually.
+- [ ] **More diagram types** — funnel, timeline, 2x2 matrix, org chart. Same DSL approach as cycle.
+- [ ] **Icon component library** — Ship Monorail icon library, reference via `importComponentByKeyAsync()`. Programmatic shapes don't look good. (Session 21 discovery)
+
+**Key insight (Session 21):** Diagrams need a **dedicated mode**. Mixing diagram design into deck iteration breaks flow. Build deck structure first (fast), design diagrams later (focused).
+
 ### Discovery Needed
 - [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
 - [ ] **Visual feedback / screenshot** — Export slide as PNG/SVG and return to LLM so it can "see" what was rendered. Figma's `exportAsync()` supports this. Would help with debugging, iteration, and QA.
+- [ ] **Shape round-tripping** — Pull only captures text nodes, not shapes (ellipses, vectors, arrows). Manual diagram edits are lost on re-push. Need to detect/extract shapes during pull, store in IR, recreate on push. Would enable true round-trip of user-customized diagrams.
 
 ### Future Work (defer)
 - Inline styling (mixed colors/weights in text) — use capture/clone instead
@@ -132,6 +144,108 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 21 (2026-01-12)
+**Visual Richness: SVG → Native Figma Diagrams**
+
+Spiked adding visual diagrams to slides. Explored multiple approaches.
+
+**Approach 1: Raw SVG (poor quality)**
+- Added `visual: { type: "svg", content: "..." }` to IR schema
+- Plugin uses `figma.createNodeFromSvg()` to render
+- **Result:** Technically works, but quality is poor — text wraps unpredictably, font rendering differs from Figma native
+
+**Approach 2: Diagram DSL with native Figma rendering (success)**
+- Added `visual: { type: "cycle", nodes: [...], colors: [...] }` 
+- Plugin renders using native Figma APIs: `createEllipse()`, `createText()`, `createVector()`
+- **Result:** Clean circles, proper text rendering, correct colors, editable after placement
+- Smart sizing defaults: right=65% of height, center=70%, below=40%×35%
+
+**Approach 3: Icons inside nodes (partial success)**
+- Added `icons` field to visual schema
+- First attempt: SVG paths → failed (`vectorPaths` requires different syntax than standard SVG)
+- Second attempt: Native Figma shapes (`createEllipse`, `createRectangle`, `createPolygon`, `createStar`)
+- **Result:** Icons render but quality is poor — hand-drawing icons from primitives isn't great
+- **Learning:** Icons need proper design (component library) not programmatic shape-mashing
+
+**Icon discovery:**
+Figma icons are typically managed via:
+1. Component libraries (publish, reference by key)
+2. Icon plugins (Iconify, Material Icons)
+3. Team libraries
+Best path for Monorail: Ship a small icon component library, reference via `importComponentByKeyAsync()`
+**Decision:** Defer icons to future polish. Cycle diagram without icons is already a win.
+
+**Key insight:**
+Diagrams need a **dedicated mode**. Mixing diagram design into deck iteration breaks flow:
+- **Deck building mode**: Fast iteration on structure, headlines, bullets
+- **Visualization mode**: Focused, deliberate design of specific diagrams
+
+**Shipped:**
+- ✅ `visual: { type: "cycle" }` with native Figma rendering
+- ✅ Smart sizing defaults based on position
+- ✅ Color-coded nodes with labels below
+- ✅ Curved connectors between nodes
+- ✅ Directional arrowheads on connectors
+- ✅ Bold 32px labels (user-validated default)
+- ⏸️ Icons deferred (needs component library approach)
+
+**Late discovery (same session):**
+User manually tweaked diagram in Figma (better layout, sizing). On re-push, manual edits lost.
+- **Root cause:** Pull only captures text nodes, not shapes (circles, arrows, vectors)
+- **Impact:** Can't round-trip user-customized diagrams
+- **Future work:** Shape extraction during pull → store in IR → recreate on push
+- Added to Discovery Needed
+
+**Files changed:**
+- `src/index.ts` — visual field with cycle/svg/icons schema
+- `figma-plugin/code.ts` — cycle renderer, icon renderer (experimental), smart sizing
+- `PLAN.md` — session log, priority updates
+
+**GTM deck now has:** Working flywheel diagram with 5 colored nodes (Show up → Learn → Iterate → Compound → Gravity)
+
+### Session 20 (2026-01-12)
+**Deep Dogfood: Building a GTM Deck Live**
+
+Extended dogfood session — built a real GTM kick-off deck collaboratively, iterating through multiple strategic frames.
+
+**What we built:**
+- Started with context deck (40+ slides of company strategy)
+- Built GTM kick-off deck from scratch
+- Iterated through 4+ structural rewrites as strategy evolved:
+  1. Generic kick-off structure
+  2. "First meeting" frame (team initialization)
+  3. "Learning velocity" frame (optimize for learning, not speed)
+  4. "Compounding returns" frame (learning → credibility → gravity)
+- Final deck: 14 slides with narrative arc
+
+**What worked beautifully:**
+- ✅ **Pull-as-context** — Grabbed strategy deck, used it to inform new deck. No export, no copy-paste. Just `monorail_pull` and suddenly 40+ slides of context available.
+- ✅ **Iterative structure** — Rebuilt deck 4+ times as thinking evolved. Each `monorail_push` with `mode: "replace"` just works.
+- ✅ **Bidirectional edits** — User edited in Figma (line breaks, text tweaks), pull showed the changes, loop closed.
+- ✅ **Fast narrative iteration** — Strategic reframing ("we're optimizing for learning, not speed") → new deck structure in minutes.
+
+**Friction points confirmed:**
+- ⚠️ **Multi-deck session bug** — Had to re-run plugin when switching Figma files. Known issue, workaround works.
+- ⚠️ **Two-column archetype broken** — Layout bug (overlapping, off-screen). Deleted slide rather than fight it. Already in plan.
+- ⚠️ **LLM is blind** — Can read content but can't see design. Trusting user for visual QA.
+
+**Major gap identified: Visual poverty**
+- Decks are text-only: headlines, sublines, bullets
+- No images, illustrations, icons, diagrams, charts
+- "The flywheel" should *look* like a flywheel
+- Even placeholder frames ("visual goes here") would help
+
+**SVG opportunity:**
+- Figma API has `createNodeFromSvg()` — can render SVG strings as vector nodes
+- Claude can generate simple SVGs: flowcharts, cycles, boxes with arrows
+- Would transform decks from "text walls" to visual storytelling
+- Added to plan as Priority 5: Visual Richness
+
+**Key insight:** The pull-as-context pattern is more powerful than expected. "Grab any deck, use it as source material for new work" is a workflow that didn't exist before. Not exporting, not copy-pasting — just reading a deck with an LLM and riffing on it.
+
+**Files changed:**
+- `PLAN.md` — this session log, Priority 5 added
 
 ### Session 19 (2026-01-11)
 **Capture → Clone Workflow Validated + Plugin Enhancements**
@@ -444,32 +558,49 @@ Copy this to start:
 ```
 I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
-**Read first:** PLAN.md (current state, priorities)
+**Read first:** PLAN.md (current state, priorities, session 21 learnings)
 
-**This session:** Developer experience — reduce friction for humans AND the AI
+**Context from Session 21:**
+- Added visual diagram support via two approaches
+- SVG rendering works but quality is poor (text wrapping, blind iteration)
+- **Native Figma diagram DSL works well** — `visual: { type: "cycle", nodes: [...] }`
+- Key insight: Diagrams need **dedicated mode**, separate from rapid deck iteration
 
-**Pain points for humans (adding archetypes):**
-1. Type duplication — `SlideContent` in both plugin and server
-2. Hardcoded MCP resources — easy to forget updates  
-3. ARCHETYPES not DRY — constraints, docs, resources all separate
+**Current capabilities:**
+- `visual: { type: "svg", content: "..." }` — raw SVG, poor quality
+- `visual: { type: "cycle", nodes: [...], colors: [...] }` — native Figma, works well
 
-**Pain point for AI:**
-4. No visual feedback — LLM can't "see" what was rendered, has to trust structure
+**This session options:**
 
-**Key files:**
-- `src/index.ts` — search for `ARCHETYPES`, `monorail://archetypes`
-- `figma-plugin/code.ts` — search for `SlideContent`, `exportAsync`
-- `docs/ADDING-ARCHETYPES.md` — guide that surfaces the friction
+**Option A: More diagram types (Priority 5)**
+Extend the diagram DSL with more types:
+- `funnel` — top-to-bottom narrowing stages
+- `timeline` — horizontal stages with markers
+- `matrix` — 2x2 grid with labels
+- File: `figma-plugin/code.ts`, search for `renderCycleDiagram`
 
-**Potential improvements:**
-- Shared types file between plugin/server
-- Auto-generate MCP resources from ARCHETYPES object
-- `monorail_screenshot` tool — export slide as PNG, return to LLM
+**Option B: Fix two-column archetype (Priority 2)**
+Layout is broken — overlapping positions, content off-screen.
+- Add Auto Layout like bullets/big-idea
+- File: `figma-plugin/code.ts`, search for `two-column`
 
-**Questions:**
-- Can plugin and server share types? (different build targets)
-- How well do MCP clients handle image responses?
-- How much abstraction is worth it for 11 archetypes?
+**Option C: Visual feedback / screenshot (Discovery)**
+Let LLM "see" what was rendered.
+- Use `figma.exportAsync()` to get PNG
+- Return image in MCP response
+- Would help with diagram iteration
 
-**Key insight:** The pull → patch loop IS the product. Push is just bootstrapping.
+**Option E: Shape round-tripping (Discovery)**
+Enable true round-trip of manual diagram edits.
+- Extend pull to detect shapes (ellipses, vectors, rectangles)
+- Store positions/sizes/colors in IR
+- Recreate exactly on push
+- Would preserve user's manual tweaks
+
+**Option D: Placeholder visual type**
+Quick win: `visual: { type: "placeholder", label: "Diagram here" }`
+- Renders labeled box in Figma
+- User fills in manually or comes back in "visualization mode"
+
+**Key insight:** The pull → patch loop IS the product. Diagrams are a separate focused activity.
 ```
