@@ -120,6 +120,9 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [ ] Shared types — extract `SlideContent` to avoid duplication between plugin/server
 - [ ] Auto-generate MCP resources — derive from ARCHETYPES object
 
+### Discovery Needed
+- [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md` (to be created)
+
 ### Future Work (defer)
 - Inline styling (mixed colors/weights in text) — use capture/clone instead
 - Nested components (cards with sub-elements) — use capture/clone instead
