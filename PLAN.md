@@ -39,7 +39,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 **v0 complete.** Full round-trip loop working.
 
-**Session 15 complete.** Tool Consolidation: 14 → 6 tools!
+**Session 19 complete.** Capture → Clone workflow validated.
 
 ### What Works ✅
 - WebSocket bridge — no copy/paste, live sync
@@ -51,28 +51,26 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Consolidated tool surface** — 8 tools total
 - **Complex archetypes** — `position-cards` renders 3-column cards with badges
 - **Collaborative editing** — pull → patch works on complex slides (24 elements)
+- **Capture → Clone workflow** — design in Figma, capture structure, clone with new content
+- **Capture by slide ID** — no selection required
+- **Configurable capture depth** — `max_depth` param for complex nested slides
+- **Font fallback everywhere** — patches and clones both use fallback chain
 
 ### The Gap 🔨
-- **Limited archetypes** — no three-column, no video/embed — hit during dogfood
+- **No video/embed archetype** — even just a URL placeholder would help
 - **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
 - **Auto Layout consistency** — title/quote/summary/section use fixed Y positions (see `docs/decisions/auto-layout-consistency.md`)
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
 - **No inline styling** — can't do mixed colors in text (e.g., "ACP is north." in cyan) — use capture/clone instead
+- **Clone preserves exact colors** — need design system remap (see `docs/discovery/design-system-remap.md`)
 - **Limited diagrams** — timeline is linear only, no loop arrows or callouts (FUTURE)
-
-### Recently Fixed ✅
-- ~~Push always appends~~ — Now has `mode: "replace"` option (Session 17)
-- ~~Replace mode positioning~~ — Auto Layout frames now position correctly after delete (Session 17)
-- ~~Font handling~~ — Now has fallback chain (Session 17)
-- ~~Archetype detection~~ — Frame-based detection, bullets now work (Session 17)
-- ~~Pending request state~~ — Consolidated into generic manager (Session 17)
 
 ### Key Files
 | File | Purpose |
 |------|---------|
 | `figma-plugin/code.ts` | Plugin: export, apply, patch, capture, instantiate |
 | `figma-plugin/ui.html` | Plugin UI + WebSocket bridge |
-| `src/index.ts` | MCP server: 6 consolidated tools |
+| `src/index.ts` | MCP server: 8 tools |
 | `docs/decisions/dynamic-templates.md` | Template design + full spike results |
 
 ### MCP Tools (8 total)
@@ -121,7 +119,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [ ] Auto-generate MCP resources — derive from ARCHETYPES object
 
 ### Discovery Needed
-- [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md` (to be created)
+- [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
 
 ### Future Work (defer)
 - Inline styling (mixed colors/weights in text) — use capture/clone instead
