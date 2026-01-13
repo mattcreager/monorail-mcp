@@ -168,6 +168,16 @@
       node.fills = [{ type: "SOLID", color: COLORS.bg }];
     }
   }
+  function addBackgroundRect(parent) {
+    const bg = figma.createRectangle();
+    bg.name = "Background";
+    bg.x = 0;
+    bg.y = 0;
+    bg.resize(SLIDE_WIDTH, SLIDE_HEIGHT);
+    bg.fills = [{ type: "SOLID", color: COLORS.bg }];
+    bg.locked = true;
+    parent.appendChild(bg);
+  }
   async function createSlideWithContent(slide, index) {
     let container;
     if (isInSlides()) {
@@ -1744,12 +1754,14 @@
     };
   }
   async function applyPatches(patches) {
-    var _a, _b;
+    var _a, _b, _c;
     let updated = 0;
     let added = 0;
+    let deleted = 0;
     const failed = [];
     const fontSubstitutions = [];
     const newElements = [];
+    const deletedElements = [];
     await loadFontWithFallback();
     for (const patch of patches.changes) {
       const action = patch.action || "edit";
@@ -1761,6 +1773,11 @@
           continue;
         }
         if (action === "add") {
+          if (!patch.text) {
+            console.warn(`Add action requires text for ${patch.target}`);
+            failed.push(patch.target);
+            continue;
+          }
           if (node.type !== "FRAME") {
             console.warn(`Add target ${patch.target} is not a frame (type: ${node.type})`);
             failed.push(patch.target);
@@ -1804,7 +1821,7 @@
           newText.fontName = fontName2;
           newText.fontSize = typeof sibling.fontSize === "number" ? sibling.fontSize : 36;
           newText.fills = sibling.fills !== figma.mixed ? sibling.fills : [{ type: "SOLID", color: COLORS.body }];
-          newText.characters = patch.text;
+          newText.characters = patch.text || "";
           if (sibling.textAutoResize) {
             newText.textAutoResize = sibling.textAutoResize;
           }
@@ -1829,7 +1846,29 @@
           }
           newElements.push({ id: newText.id, name: newText.name, container: frame.name });
           added++;
-          console.log(`Added ${newText.name} to ${frame.name}: "${patch.text.substring(0, 30)}..."`);
+          console.log(`Added ${newText.name} to ${frame.name}: "${(_c = patch.text) == null ? void 0 : _c.substring(0, 30)}..."`);
+          continue;
+        }
+        if (action === "delete") {
+          const parent = node.parent;
+          const containerName = parent && "name" in parent ? parent.name : "unknown";
+          const nodeName = "name" in node ? node.name : patch.target;
+          const nodeId = node.id;
+          if (parent && "children" in parent) {
+            const siblings = parent.children;
+            if (siblings.length === 1) {
+              console.warn(`Warning: Deleting last element from ${containerName}`);
+            }
+          }
+          node.remove();
+          deletedElements.push({ id: nodeId, name: nodeName, container: containerName });
+          deleted++;
+          console.log(`Deleted ${nodeName} (${nodeId}) from ${containerName}`);
+          continue;
+        }
+        if (!patch.text) {
+          console.warn(`Edit action requires text for ${patch.target}`);
+          failed.push(patch.target);
           continue;
         }
         if (node.type !== "TEXT") {
@@ -1881,10 +1920,10 @@
         failed.push(patch.target);
       }
     }
-    return { updated, added, failed, fontSubstitutions, newElements };
+    return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
   }
   figma.ui.onmessage = async (msg) => {
-    var _a, _b;
+    var _a, _b, _c;
     try {
       if (msg.type === "apply-ir") {
         if (!msg.ir) {
@@ -2147,6 +2186,7 @@
         const parts = [];
         if (result.updated > 0) parts.push(`${result.updated} edited`);
         if (result.added > 0) parts.push(`${result.added} added`);
+        if (result.deleted > 0) parts.push(`${result.deleted} deleted`);
         let notifyMsg = result.failed.length > 0 ? `Patched: ${parts.join(", ")} (${result.failed.length} failed)` : `\u2713 Patched: ${parts.join(", ") || "no changes"}`;
         if (result.fontSubstitutions.length > 0) {
           const uniqueSubs = [...new Set(result.fontSubstitutions)];
@@ -2710,6 +2750,186 @@
           console.error("Screenshot export error:", errorMsg);
           figma.notify(`Export failed: ${errorMsg}`, { error: true });
           figma.ui.postMessage({ type: "screenshot-exported", success: false, error: errorMsg });
+        }
+      }
+      if (msg.type === "apply-primitives") {
+        const slideId = msg.slideId;
+        const operations = msg.operations;
+        if (!operations || operations.length === 0) {
+          figma.notify("No operations provided", { error: true });
+          figma.ui.postMessage({ type: "primitives-applied", success: false, error: "No operations provided" });
+          return;
+        }
+        try {
+          let resolveParent2 = function(parentRef) {
+            if (!parentRef) return targetSlide;
+            if (nodesByName[parentRef]) {
+              return nodesByName[parentRef];
+            }
+            throw new Error(`Parent not found: ${parentRef}. Must be a name from an earlier operation.`);
+          }, resolveColor2 = function(colorRef) {
+            if (!colorRef) return COLORS.white;
+            if (typeof colorRef === "object") {
+              return colorRef;
+            }
+            const namedColor = COLORS[colorRef];
+            if (namedColor) return namedColor;
+            console.warn(`Unknown color: ${colorRef}, defaulting to white`);
+            return COLORS.white;
+          };
+          var resolveParent = resolveParent2, resolveColor = resolveColor2;
+          let targetSlide;
+          if (slideId) {
+            const node = await figma.getNodeByIdAsync(slideId);
+            if (!node) {
+              throw new Error(`Slide not found: ${slideId}`);
+            }
+            targetSlide = node;
+          } else {
+            if (isInSlides()) {
+              targetSlide = figma.createSlide();
+              setSlideBackground(targetSlide);
+            } else {
+              targetSlide = figma.createFrame();
+              targetSlide.resize(SLIDE_WIDTH, SLIDE_HEIGHT);
+              addBackgroundRect(targetSlide);
+            }
+            targetSlide.name = "Primitives Slide";
+          }
+          await loadFontWithFallback();
+          const nodesByName = {};
+          const createdNodes = [];
+          for (const op of operations) {
+            try {
+              if (op.op === "frame") {
+                const frame = figma.createFrame();
+                frame.name = op.name;
+                frame.x = op.x;
+                frame.y = op.y;
+                if (op.width) frame.resize(op.width, op.height || 100);
+                frame.fills = [];
+                resolveParent2(op.parent).appendChild(frame);
+                nodesByName[op.name] = frame;
+                createdNodes.push({ name: op.name, id: frame.id, type: "FRAME" });
+              } else if (op.op === "auto_layout_frame") {
+                const frame = figma.createFrame();
+                frame.name = op.name;
+                frame.layoutMode = op.direction || "VERTICAL";
+                frame.primaryAxisSizingMode = "AUTO";
+                frame.counterAxisSizingMode = "AUTO";
+                frame.itemSpacing = (_c = op.spacing) != null ? _c : 24;
+                if (op.padding) {
+                  frame.paddingTop = op.padding;
+                  frame.paddingBottom = op.padding;
+                  frame.paddingLeft = op.padding;
+                  frame.paddingRight = op.padding;
+                }
+                if (op.fill) {
+                  frame.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
+                } else {
+                  frame.fills = [];
+                }
+                if (op.cornerRadius) {
+                  frame.cornerRadius = op.cornerRadius;
+                }
+                frame.clipsContent = false;
+                const parent = resolveParent2(op.parent);
+                parent.appendChild(frame);
+                if (op.x !== void 0) frame.x = op.x;
+                if (op.y !== void 0) frame.y = op.y;
+                nodesByName[op.name] = frame;
+                createdNodes.push({ name: op.name, id: frame.id, type: "AUTO_LAYOUT" });
+              } else if (op.op === "text") {
+                const textNode = figma.createText();
+                if (op.name) textNode.name = op.name;
+                const fontName = await getFontName(op.bold || false);
+                textNode.fontName = fontName;
+                textNode.fontSize = op.fontSize;
+                textNode.fills = [{ type: "SOLID", color: resolveColor2(op.color) }];
+                textNode.characters = op.text;
+                if (op.maxWidth) {
+                  textNode.resize(op.maxWidth, textNode.height);
+                  textNode.textAutoResize = "HEIGHT";
+                }
+                const parent = resolveParent2(op.parent);
+                parent.appendChild(textNode);
+                if (op.x !== void 0) textNode.x = op.x;
+                if (op.y !== void 0) textNode.y = op.y;
+                if (op.name) {
+                  nodesByName[op.name] = textNode;
+                  createdNodes.push({ name: op.name, id: textNode.id, type: "TEXT" });
+                }
+              } else if (op.op === "rect") {
+                const rect = figma.createRectangle();
+                if (op.name) rect.name = op.name;
+                rect.x = op.x;
+                rect.y = op.y;
+                rect.resize(op.width, op.height);
+                rect.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
+                if (op.stroke) {
+                  rect.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
+                  rect.strokeWeight = 2;
+                }
+                if (op.cornerRadius) {
+                  rect.cornerRadius = op.cornerRadius;
+                }
+                resolveParent2(op.parent).appendChild(rect);
+                if (op.name) {
+                  nodesByName[op.name] = rect;
+                  createdNodes.push({ name: op.name, id: rect.id, type: "RECTANGLE" });
+                }
+              } else if (op.op === "ellipse") {
+                const ellipse = figma.createEllipse();
+                if (op.name) ellipse.name = op.name;
+                ellipse.x = op.x;
+                ellipse.y = op.y;
+                ellipse.resize(op.width, op.height);
+                ellipse.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
+                if (op.stroke) {
+                  ellipse.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
+                  ellipse.strokeWeight = 2;
+                }
+                resolveParent2(op.parent).appendChild(ellipse);
+                if (op.name) {
+                  nodesByName[op.name] = ellipse;
+                  createdNodes.push({ name: op.name, id: ellipse.id, type: "ELLIPSE" });
+                }
+              } else if (op.op === "line") {
+                const line = figma.createLine();
+                if (op.name) line.name = op.name;
+                line.x = op.x;
+                line.y = op.y;
+                line.resize(op.length, 0);
+                line.rotation = op.rotation || 0;
+                line.strokes = [{ type: "SOLID", color: resolveColor2(op.color) }];
+                line.strokeWeight = op.strokeWeight || 2;
+                resolveParent2(op.parent).appendChild(line);
+                if (op.name) {
+                  nodesByName[op.name] = line;
+                  createdNodes.push({ name: op.name, id: line.id, type: "LINE" });
+                }
+              }
+            } catch (opErr) {
+              console.error(`Operation failed:`, op, opErr);
+              throw new Error(`Operation "${op.op}" failed: ${opErr instanceof Error ? opErr.message : String(opErr)}`);
+            }
+          }
+          figma.currentPage.selection = [targetSlide];
+          figma.viewport.scrollAndZoomIntoView([targetSlide]);
+          const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"`;
+          figma.notify(summary);
+          figma.ui.postMessage({
+            type: "primitives-applied",
+            success: true,
+            slideId: targetSlide.id,
+            slideName: targetSlide.name,
+            created: createdNodes
+          });
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error("Primitives error:", errorMsg);
+          figma.notify(`Failed: ${errorMsg}`, { error: true });
+          figma.ui.postMessage({ type: "primitives-applied", success: false, error: errorMsg });
         }
       }
       if (msg.type === "close") {

@@ -490,6 +490,11 @@
               const slideId = msg.slideId ? ` (${msg.slideId})` : '';
               addActivity('📷', `Claude requesting screenshot${slideId}`);
               parent.postMessage({ pluginMessage: { type: 'export-screenshot', slideId: msg.slideId, scale: msg.scale } }, '*');
+            } else if (msg.type === 'apply-primitives') {
+              const count = msg.operations?.length || 0;
+              const target = msg.slideId ? ` on ${msg.slideId}` : ' (new slide)';
+              addActivity('🔧', `Claude applying ${count} primitives${target}`);
+              parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations } }, '*');
             }
           } catch (e) {
             console.error('[WS] Failed to parse message:', e);
@@ -631,12 +636,14 @@
       if (msg.type === 'patched') {
         const edited = msg.updated || 0;
         const added = msg.added || 0;
+        const deleted = msg.deleted || 0;
         const failed = msg.failed?.length || 0;
         
         // Build activity message
         const parts = [];
         if (edited > 0) parts.push(`${edited} edited`);
         if (added > 0) parts.push(`${added} added`);
+        if (deleted > 0) parts.push(`${deleted} deleted`);
         const summary = parts.join(', ') || 'no changes';
         
         if (failed > 0) {
@@ -652,8 +659,10 @@
             type: 'patched', 
             updated: msg.updated, 
             added: msg.added,
+            deleted: msg.deleted,
             failed: msg.failed,
-            newElements: msg.newElements
+            newElements: msg.newElements,
+            deletedElements: msg.deletedElements
           }));
         }
       }
@@ -816,6 +825,30 @@
             base64: msg.base64,
             width: msg.width,
             height: msg.height,
+            error: msg.error
+          }));
+        }
+      }
+      
+      // Primitives result
+      if (msg.type === 'primitives-applied') {
+        if (msg.success) {
+          const count = msg.created?.length || 0;
+          addActivity('✓', `Created ${count} elements on "${msg.slideName}"`);
+          showToast(`Created ${count} elements!`);
+        } else {
+          addActivity('✗', `Primitives failed: ${msg.error}`);
+          showToast(`Failed: ${msg.error}`, true);
+        }
+        
+        // Send through WebSocket if connected
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'primitives-applied',
+            success: msg.success,
+            slideId: msg.slideId,
+            slideName: msg.slideName,
+            created: msg.created,
             error: msg.error
           }));
         }

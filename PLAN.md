@@ -48,7 +48,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - Template capture with design system extraction + slot identification
 - **Full deck rendering** — 10 slides from IR in one push
 - **Auto Layout for ALL archetypes** — title, section, quote, summary, big-idea, bullets, two-column all use containers
-- **Consolidated tool surface** — 9 tools total, 11 archetypes
+- **Consolidated tool surface** — 10 tools total, 11 archetypes
 - **Visual feedback** — `monorail_screenshot` exports slides as PNG so AI can "see" what it rendered
 - **Complex archetypes** — `position-cards` renders 3-column cards with badges
 - **Video archetype** — placeholder with play icon + URL for video embeds
@@ -60,6 +60,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Table extraction** — pull captures Figma Slides tables with cell content and row/col metadata
 - **Add elements to containers** — `monorail_patch` with `action: "add"` appends text to Auto Layout containers (bullets, items). Inherits sibling styling. No delete/recreate needed!
 - **Container discovery** — `monorail_pull` surfaces addable containers so AI can discover where to use `action: "add"`
+- **Primitives for design** — `monorail_primitives` creates slides from scratch (frames, text, shapes) — enables Claude to design without archetypes
 
 ### The Gap 🔨
 - **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
@@ -71,7 +72,6 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Limited diagrams** — timeline is linear only, no loop arrows or callouts (FUTURE)
 - **Simpler three-column** — position-cards is complex; basic 3-col would be useful
 - **Add compound elements** — `action: "add"` only works for simple text nodes (bullets, items). Can't add cards, columns, or nested structures. Future: clone sibling subtree + content map.
-- **Delete elements** — can't remove individual elements (bullets, items) from a slide. See design notes below.
 
 ### Key Files
 | File | Purpose |
@@ -82,36 +82,70 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 | `shared/types.ts` | Shared TypeScript types (DeckIR, Slide, etc.) |
 | `docs/decisions/dynamic-templates.md` | Template design + full spike results |
 
-### MCP Tools (9 total)
+### MCP Tools (10 total)
 | Tool | Purpose |
 |------|---------|
 | `monorail_status` | Check if Figma plugin is connected |
 | `monorail_pull` | Get deck state from Figma (slides, elements, IDs) |
 | `monorail_push` | Create/replace slides from IR (with inline validation, optional `start_index`) |
-| `monorail_patch` | Edit text elements OR add new elements to Auto Layout containers (`action: "add"`) |
+| `monorail_patch` | Edit text elements OR add/delete elements in Auto Layout containers |
 | `monorail_capture` | Full node tree + design system + slots (all-in-one) |
 | `monorail_clone` | Clone slide + update content |
 | `monorail_delete` | Delete slides by Figma node ID |
 | `monorail_reorder` | Reorder slides to match specified order |
 | `monorail_screenshot` | Export slide as PNG image — gives AI "eyes" to see what was rendered |
+| `monorail_primitives` | Low-level design: create frames, text, shapes from scratch |
 
 ---
 
 ## What's Next
 
-**Slide operations complete.** 8 tools total, full deck manipulation.  
-**Claude Desktop dogfood complete.** Core loop validated. See `docs/discovery/dogfood-claude-desktop.md`
+**Session 29 validated:** Claude can design with primitives (75-95% quality). Design principles added to skill doc. Template-first architecture confirmed as direction.
 
-### Priority 1: Dogfood Fixes (HIGH)
-- [x] **Push modes** — Add `mode: "replace" | "append"` parameter (Session 17)
-- [x] **Three-column archetype** — `position-cards` archetype handles this (Session 18)
-- [x] **Capture → Clone workflow** — Design slide in Figma → capture → clone with new content (Session 19)
-- [x] **Configurable capture depth** — `max_depth` param for complex nested slides (Session 19)
-- [x] **Capture by slide ID** — No selection required, capture any slide by ID (Session 19)
-- [x] **Font fallback for patches** — Deep nodes now use fallback chain (Session 19)
-- [x] **Video/embed archetype** — `video` archetype with URL placeholder + play icon (Session 23)
-- [ ] **Simpler three-column** — Basic 3-col without badges (lower complexity than position-cards)
-- [x] **Add elements to existing slides** — `monorail_patch` with `action: "add"` appends text to containers (Session 27). Works for bullets/items. Compound elements (cards, columns) still need delete/recreate.
+### Immediate (Next Session)
+
+- [ ] **Template Library Resource** — `monorail://templates` listing available templates with metadata
+  - Open: Where do templates live? (Dedicated Figma page? Plugin storage?)
+  - Open: How is metadata stored? (File naming? Figma plugin data?)
+  - Open: How does Claude browse/search?
+
+- [ ] **Primitives Rev 2** — Fill gaps discovered in Session 29:
+  - [ ] Text alignment (center, right) — quick win
+  - [ ] Arrow heads on lines — enables connectors
+  - [ ] Gradients — nice-to-have
+  - [ ] Image placeholder — "image goes here" frame
+  - DEFER: Icons (needs component library integration, bigger lift)
+
+### Foundational Work (Circle Back Soon)
+
+These are infrastructure improvements that compound but aren't blocking current work:
+
+- [ ] **Multi-deck awareness** — show which Figma file is active (Priority 3)
+- [ ] **AI Guardrails** — lock modes to prevent accidental damage (Priority 3)
+- [ ] **Shape round-tripping** — preserve manual diagram edits on re-push
+- [ ] **Clone workflow docs** — document "design once, clone many" pattern
+
+**When to do foundational work:** After template library ships. The library will drive more usage, which will expose which foundational issues actually matter.
+
+### Completed (Archive)
+
+<details>
+<summary>Dogfood Fixes (all done)</summary>
+
+- [x] **Push modes** — `mode: "replace" | "append"` (Session 17)
+- [x] **Three-column archetype** — `position-cards` (Session 18)
+- [x] **Capture → Clone workflow** — (Session 19)
+- [x] **Configurable capture depth** — `max_depth` param (Session 19)
+- [x] **Capture by slide ID** — (Session 19)
+- [x] **Font fallback for patches** — (Session 19)
+- [x] **Video/embed archetype** — (Session 23)
+- [x] **Add elements to slides** — `action: "add"` (Session 27)
+- [x] **Delete elements** — `action: "delete"` (Session 28)
+- [x] **Primitives tool** — `monorail_primitives` (Session 29)
+- [x] **Design principles** — Added to skill doc (Session 29)
+- [~] **Simpler three-column** — SKIP, primitives can do it (Session 29 learning)
+
+</details>
 
 ### Priority 2: Figma Best Practices
 - [x] **Auto Layout for all archetypes** — title, quote, summary, section now use containers (Session 23)
@@ -141,9 +175,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [x] Shared types — extract to `shared/types.ts`, import in both plugin/server (Session 26)
 - [ ] Auto-generate MCP resources — derive from ARCHETYPES object
 - [x] **esbuild for plugin** — bundler set up, targets ES2017 for Figma compatibility (Session 26)
-- [ ] **Split plugin into modules** — modules extracted to `src/`, wiring pending (Session 26)
-  - Created: constants, fonts, primitives, archetypes, diagrams, update
-  - Next: write tests against `code.ts`, then refactor to use modules
+- [ ] **Split plugin into modules** — SKEPTICAL. Modules extracted to `src/` but not wired up. The 3,400-line `code.ts` works fine and AI can grep/read sections. If you hit friction caused by file size, flag it here and reconsider. Otherwise, leave it.
 
 ### Priority 5: Visual Richness
 - [x] **SVG support in IR** — `visual: { type: "svg", content: "..." }` with `createNodeFromSvg()`. Works but quality is poor — text wrapping unpredictable, positioning blind. (Session 21)
@@ -156,7 +188,10 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 **Key insight (Session 21):** Diagrams need a **dedicated mode**. Mixing diagram design into deck iteration breaks flow. Build deck structure first (fast), design diagrams later (focused).
 
 ### Discovery Needed
-- [ ] **AI Developer Experience (AI DX)** — How do we make Monorail easy for Claude to use? Tool descriptions, workflow hints, error recovery, proactive suggestions. See `docs/discovery/ai-dx.md`
+- [x] **Can Claude design?** — YES. 75-95% quality with primitives. Screenshot feedback loop essential. (Session 29)
+- [x] **Design principles** — Added to `monorail://skill` resource. Spatial guidelines, typography, self-critique checklist. (Session 29)
+- [ ] **Template Library** — Where do templates live? How is metadata stored? How does Claude browse? (Next session)
+- [ ] **AI Developer Experience (AI DX)** — Tool descriptions, workflow hints, error recovery. See `docs/discovery/ai-dx.md`
 - [ ] **Clone with design system remap** — When cloning, preserve layout + color *distribution* (accent vs muted vs bg) but apply a different palette. Currently clone copies exact colors from source. See `docs/discovery/design-system-remap.md`
 - [x] **Visual feedback / screenshot** — `monorail_screenshot` exports slides as PNG (Session 24)
 - [ ] **Shape round-tripping** — Pull only captures text nodes, not shapes (ellipses, vectors, arrows). Manual diagram edits are lost on re-push. Need to detect/extract shapes during pull, store in IR, recreate on push. Would enable true round-trip of user-customized diagrams.
@@ -174,6 +209,124 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 29 (2026-01-13)
+**Discovery: Can Claude Design? + Primitives Tool**
+
+Answered the open question from Session 28: **Yes, Claude can design slides from primitives.**
+
+**Part 1: Built `monorail_primitives` Tool**
+
+New MCP tool (#10) for low-level slide design:
+
+| Operation | Creates |
+|-----------|---------|
+| `frame` | Basic frame with position/size |
+| `auto_layout_frame` | Auto Layout container |
+| `text` | Text node with font, size, color, maxWidth |
+| `rect` | Rectangle with fill, stroke, cornerRadius |
+| `ellipse` | Circle/ellipse with fill, stroke |
+| `line` | Line with length, rotation, strokeWeight |
+
+Colors can be named (`headline`, `cyan`, `orange`, etc.) or RGB objects.
+
+**Files changed:**
+- `figma-plugin/code.ts` — `apply-primitives` handler, `PrimitiveOperation` type
+- `figma-plugin/ui.html` — WebSocket relay for primitives
+- `src/index.ts` — `monorail_primitives` tool definition + handler
+
+**Part 2: Design Quality Testing**
+
+Created 5 slides from scratch to test Claude's design capability:
+
+| Slide | Complexity | Quality |
+|-------|------------|---------|
+| Quote | Simple | 95% (needed vertical centering fix) |
+| 3-column pillars | Medium | 85% |
+| Stats/metrics | Medium | 90% |
+| Editorial hero | Medium | 85% |
+| Agenda (split) | Complex | 80% |
+| Security 3-col | Very Complex | 75% |
+
+**Key learnings about Claude's design intuition:**
+- Default to top-left positioning (wrong for quotes, need center)
+- Good at hierarchy (headline > title > body sizing)
+- Good at color coding (accent colors for emphasis)
+- Struggles with: icons, connectors, patterns/textures, pixel-perfect spacing
+
+**Part 3: Strategic Implications**
+
+The primitives spike answered the architecture question:
+
+| Approach | When to Use |
+|----------|-------------|
+| **Primitives** | Quick drafts, 80% quality, rapid iteration |
+| **Capture/Clone** | Production quality, 100% fidelity, preserve details |
+| **Archetypes** | Constrained content, fast rendering, no design decisions |
+
+**Primitives ceiling:** ~75-80% on complex slides. The last 20% needs:
+- Icons (component library)
+- Connectors/arrows (arrow heads)
+- Patterns/textures (fills)
+- Iteration via screenshot feedback loop
+
+**Improving over time — options discussed:**
+1. Template library (MCP resource) — low effort, high leverage
+2. Design principles in skill doc — soft guidance for spacing/positioning
+3. Self-critique loop — screenshot → evaluate → fix
+4. Few-shot references — pull similar templates before designing
+5. Vector DB — semantic search for templates (overkill for now)
+
+**Tool count:** 9 → 10
+
+### Session 28 (2026-01-13)
+**Delete Elements + Template-First Architecture Direction**
+
+Two parts this session:
+
+**Part 1: Delete Elements**
+Extended `monorail_patch` with `action: "delete"` to complete the add/edit/delete trifecta.
+
+- Added `'delete'` to action enum in `ElementPatch`
+- Delete logic in `applyPatches()`: get parent info, call `node.remove()`, Auto Layout reflows automatically
+- Returns `deleted` count and `deletedElements` array with id/name/container
+- Safety: warns if deleting the last child in a container (but allows it — Figma has undo)
+
+**Example:**
+```
+monorail_patch({ changes: [{ target: "4:601", action: "delete" }] })
+→ "✓ Patched: 1 deleted"
+→ Deleted elements: bullet-2 (4:601) from bullets-container
+```
+
+**Part 2: Architecture Discussion → Template-First Direction**
+
+Questioned whether current architecture is optimal. Key insights:
+
+1. **Archetypes as constraints may limit creativity** — word limits help clarity but constrain expression
+2. **Templates should be first-class** — not just "captured slides" but intentional, documented designs
+3. **Primitives could enable Claude to design** — if Claude can create good-looking slides from scratch, archetypes become guidance not constraints
+4. **Same tools, different mindset** — template definition vs content rendering don't need separate workflows
+
+**Direction documented:** `docs/decisions/template-first-architecture.md`
+
+Key shifts proposed:
+- Archetypes → soft guidance in skill doc (not hardcoded layouts)
+- Templates → primary workflow (capture/clone, not push)
+- Primitives → exposed as tools (for design from scratch)
+- IR → reduced role (Figma designs are source of truth)
+
+**Open question:** Can Claude design well? Need to spike and test before committing.
+
+**Files changed:**
+- `shared/types.ts` — `DeletedElement` type, `deleted`/`deletedElements` in `PatchResult`
+- `figma-plugin/code.ts` — delete logic in `applyPatches()`
+- `figma-plugin/ui.html` — relay `deleted`/`deletedElements` fields
+- `src/index.ts` — tool schema (3 actions), handler response
+- `docs/decisions/template-first-architecture.md` — NEW: direction document
+- `PLAN.md` — skepticism note on plugin refactor
+
+**Ready to test:** Delete feature builds. Restart Cursor, reconnect Figma plugin.
 
 ### Session 27 (2026-01-13)
 **Add Elements to Auto Layout Containers + AI DX**
@@ -873,79 +1026,50 @@ Copy this to start:
 ```
 I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
-**Read first:** PLAN.md (current state, priorities, session 27 learnings)
+**Read first:** PLAN.md (current state, priorities, session 29 learnings)
 
 **What works now:**
-- Full round-trip: pull → patch → push
-- 9 MCP tools, 11 archetypes
-- **Auto Layout for ALL archetypes** — title, section, quote, summary, big-idea, bullets, two-column
-- **Add elements to containers** — `monorail_patch` with `action: "add"` for bullets/items
-- **Container discovery** — `monorail_pull` lists addable containers for AI discoverability
-- **Video archetype** — placeholder with play icon + URL
-- **Cycle diagrams** with native Figma rendering
-- **Table extraction** — pull captures Figma tables with cell content + row/col metadata
-- **Screenshot export** — `monorail_screenshot` gives AI "eyes" to see rendered slides
-- **Shared types** — `shared/types.ts` for plugin + server
-- **esbuild bundler** — proper Figma plugin build pipeline
+- 10 MCP tools, 11 archetypes
+- **Primitives tool** — `monorail_primitives` creates slides from scratch (frames, text, shapes)
+- **Design principles** — spatial guidelines, typography scale, self-critique checklist in skill doc
+- **Screenshot feedback** — `monorail_screenshot` gives AI "eyes" to see and iterate
+- Full CRUD: pull/push/patch (add/edit/delete)/clone/capture
 
-**Gaps:**
-- **Add compound elements** — `action: "add"` only handles text. Can't add cards/columns/stages. Need: clone sibling subtree + content map.
-- **Shape round-tripping** — Pull only gets text, not shapes. Manual diagram edits lost on re-push.
-- **Table creation** — Can read tables, but can't create/update via IR yet.
-- **Icons** — Hand-drawn shapes look bad. Figma has Heroicons library we could use.
-- **Simpler three-column** — Basic 3-col without badges (position-cards is complex)
-- **Plugin module wiring** — modules extracted to `src/`, need tests then wiring
-- **code.ts is 3,400 lines** — impacts AI-assisted dev velocity (can't read whole file)
+**Architecture direction (Session 29):**
+- Primitives = drafts (75-95% quality)
+- Archetypes = speed (constrained content)
+- Clone = production (100% fidelity)
+- Design principles compound — every primitives call benefits
 
-**This session options:**
+**Immediate priorities:**
 
-**Option A: Wire up plugin modules (test-driven refactor) — HIGH VALUE**
-Modules extracted to `figma-plugin/src/` but not connected yet:
-- Write tests against current `code.ts` behavior
-- Refactor `code.ts` to import from modules
-- Verify tests still pass
-- Would make codebase much more maintainable
-- Improves AI-assisted development (smaller files to reason about)
+**Option A: Template Library Resource**
+Create `monorail://templates` listing captured templates with metadata.
+- Open: Where do templates live? Dedicated Figma page?
+- Open: How is metadata stored? Plugin data? File naming?
+- Open: How does Claude browse/search?
 
-**Option B: Delete elements (action: "delete")**
-Remove individual elements from Auto Layout containers. Design considerations from our `action: "add"` experience:
+**Option B: Primitives Rev 2**
+Fill gaps discovered in Session 29:
+- Text alignment (center, right) — quick win
+- Arrow heads on lines — enables connectors
+- Image placeholder frames
+- DEFER: Icons (needs component library, bigger lift)
 
-- **AI DX (discoverability):** Element IDs already in pull output ✓ — no extra work needed
-- **Return value:** Report what was deleted: `{ deleted: 1, element: "bullet-3", container: "bullets-container" }`
-- **Batch support:** Allow `changes: [{ target: "28:93", action: "delete" }, ...]` for multi-delete
-- **Error handling:** If ID not found, add to `failed[]` array (consistent with edit/add)
-- **Safety:** No confirmation needed — Figma has undo. But maybe warn if deleting from a container with only 1 child?
-- **Auto Layout bonus:** Container auto-reflows after delete — no manual repositioning
+**Option C: Foundational Work**
+Circle back to infrastructure:
+- Multi-deck awareness (which file is active?)
+- AI Guardrails (lock modes to prevent damage)
+- Shape round-tripping (preserve manual edits)
 
-Implementation: ~30 min. Extend `applyPatches()` in `code.ts`, similar pattern to add.
+**When to do foundational:** After template library. More usage will reveal which issues actually matter.
 
-**Option C: Add compound elements (extend action: "add")**
-Generalize add to handle nested structures:
-- `clone_sibling: true` — clone last child (entire subtree)
-- `content_map: { "title": "...", "body": "..." }` — update text in clone
-- Would enable adding cards, columns, timeline stages
-
-**Option C: More diagram types (Priority 5)**
-Extend the diagram DSL:
-- `funnel` — top-to-bottom narrowing stages
-- `timeline` — horizontal stages with markers  
-- `matrix` — 2x2 grid with labels
-
-**Option D: Shape round-tripping (Discovery)**
-Enable true round-trip of manual diagram edits.
-- Extend pull to detect shapes (ellipses, vectors, rectangles)
-- Store positions/sizes/colors in IR
-- Recreate exactly on push
-
-**Option E: Simpler three-column archetype**
-Basic 3-col layout without badges/complexity of position-cards.
-- Just headline + 3 titled body sections
-- Use Auto Layout pattern from two-column
+**Key insight (Session 29):**
+Design principles > more archetypes. Principles compound, archetypes are O(n) work for O(1) benefit.
 
 **Key files:**
-- `figma-plugin/code.ts` — rendering logic (3,400 lines, ready to split)
-- `figma-plugin/src/` — extracted modules (not wired up yet)
-- `src/index.ts` — MCP tools + IR schema
+- `figma-plugin/code.ts` — plugin (3,500 lines)
+- `src/index.ts` — MCP tools + skill/archetypes resources
 - `shared/types.ts` — shared TypeScript types
-- `PLAN.md` — session logs, priorities
+- `docs/decisions/template-first-architecture.md` — architecture direction
 ```

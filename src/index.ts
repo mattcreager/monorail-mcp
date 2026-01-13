@@ -653,7 +653,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_patch",
         description:
-          "Edit or add text elements. Two modes: (1) EDIT: target a TEXT node ID to update its content. (2) ADD: target a FRAME container ID (like 'bullets-container') with action:'add' to create a new element inside it — inherits styling from siblings, Auto Layout handles positioning. Get IDs from monorail_pull. This is how you add a 4th bullet without deleting the slide.",
+          "Edit, add, or delete elements. Three modes: (1) EDIT: target a TEXT node ID to update its content. (2) ADD: target a FRAME container ID (like 'bullets-container') with action:'add' to create a new element — inherits styling from siblings. (3) DELETE: target any element ID with action:'delete' to remove it. Get IDs from monorail_pull. Auto Layout reflows automatically after add/delete.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -673,23 +673,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     properties: {
                       target: {
                         type: "string",
-                        description: "Figma node ID — TEXT node for edit, FRAME container for add",
+                        description: "Figma node ID — TEXT node for edit/delete, FRAME container for add",
                       },
                       text: {
                         type: "string",
-                        description: "New text content (for edit or add)",
+                        description: "New text content (required for edit/add, ignored for delete)",
                       },
                       action: {
                         type: "string",
-                        enum: ["edit", "add"],
-                        description: "Action type: 'edit' (default) updates existing text, 'add' creates new element in a container",
+                        enum: ["edit", "add", "delete"],
+                        description: "Action type: 'edit' (default) updates text, 'add' creates new element, 'delete' removes element",
                       },
                       position: {
                         type: "number",
                         description: "For 'add' only: insert position (0=first, -1 or omit=append at end)",
                       },
                     },
-                    required: ["target", "text"],
+                    required: ["target"],
                   },
                 },
               },
@@ -795,11 +795,73 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "monorail_primitives",
+        description:
+          "Low-level design tool for creating slide content from scratch. Use this when you want to design a slide layout without using archetypes. Provide an array of operations (frames, text, shapes) that will be applied in sequence. Each operation can reference earlier operations by name for nesting.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            slide_id: {
+              type: "string",
+              description:
+                "Optional Figma node ID of an existing slide to add elements to. If omitted, creates a new slide.",
+            },
+            operations: {
+              type: "array",
+              description: "Array of primitive operations to apply in sequence",
+              items: {
+                type: "object",
+                properties: {
+                  op: {
+                    type: "string",
+                    enum: ["frame", "auto_layout_frame", "text", "rect", "ellipse", "line"],
+                    description: "Operation type",
+                  },
+                  name: {
+                    type: "string",
+                    description: "Name for this element (can be referenced as parent by later operations)",
+                  },
+                  parent: {
+                    type: "string",
+                    description: "Parent element name (from earlier operation) or Figma ID. If omitted, adds to slide root.",
+                  },
+                  // Position
+                  x: { type: "number", description: "X position (ignored for Auto Layout children)" },
+                  y: { type: "number", description: "Y position (ignored for Auto Layout children)" },
+                  // Dimensions
+                  width: { type: "number", description: "Width (for rect, ellipse, frame)" },
+                  height: { type: "number", description: "Height (for rect, ellipse, frame)" },
+                  length: { type: "number", description: "Length (for line)" },
+                  rotation: { type: "number", description: "Rotation in degrees (for line)" },
+                  // Text properties
+                  text: { type: "string", description: "Text content (for text op)" },
+                  fontSize: { type: "number", description: "Font size in pixels (for text op)" },
+                  bold: { type: "boolean", description: "Bold font (for text op)" },
+                  maxWidth: { type: "number", description: "Maximum width before wrapping (for text op)" },
+                  // Colors (can be named: 'headline', 'body', 'muted', 'cyan', 'orange', etc. or {r,g,b})
+                  color: { type: "string", description: "Color for text or line" },
+                  fill: { type: "string", description: "Fill color for shapes" },
+                  stroke: { type: "string", description: "Stroke color for shapes" },
+                  strokeWeight: { type: "number", description: "Stroke width (for line)" },
+                  cornerRadius: { type: "number", description: "Corner radius (for rect)" },
+                  // Auto Layout properties
+                  direction: { type: "string", enum: ["VERTICAL", "HORIZONTAL"], description: "Auto Layout direction" },
+                  spacing: { type: "number", description: "Item spacing in Auto Layout (default: 24)" },
+                  padding: { type: "number", description: "Uniform padding in Auto Layout" },
+                },
+                required: ["op"],
+              },
+            },
+          },
+          required: ["operations"],
+        },
+      },
     ],
   };
 });
 
-// Handle tool calls (9 total)
+// Handle tool calls (10 total)
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
@@ -1058,6 +1120,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const parts: string[] = [];
         if (result.updated > 0) parts.push(`${result.updated} edited`);
         if (result.added > 0) parts.push(`${result.added} added`);
+        if (result.deleted > 0) parts.push(`${result.deleted} deleted`);
         
         const failedText = result.failed.length > 0
           ? `\n\nFailed: ${result.failed.join(", ")}`
@@ -1067,11 +1130,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? `\n\nNew elements:\n${result.newElements.map((e: {id: string; name: string; container: string}) => `- ${e.name} (${e.id}) in ${e.container}`).join("\n")}`
           : "";
 
+        const deletedElementsText = result.deletedElements && result.deletedElements.length > 0
+          ? `\n\nDeleted elements:\n${result.deletedElements.map((e: {id: string; name: string; container: string}) => `- ${e.name} (${e.id}) from ${e.container}`).join("\n")}`
+          : "";
+
         return {
           content: [
             {
               type: "text" as const,
-              text: `✓ Patched: ${parts.join(", ") || "no changes"}${newElementsText}${failedText}`,
+              text: `✓ Patched: ${parts.join(", ") || "no changes"}${newElementsText}${deletedElementsText}${failedText}`,
             },
           ],
         };
@@ -1535,6 +1602,113 @@ The new slide has been selected in Figma.`,
       }
     }
 
+    // =========================================================================
+    // monorail_primitives - Low-level design operations
+    // =========================================================================
+    case "monorail_primitives": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const slideId = args?.slide_id as string | undefined;
+      const operations = args?.operations as any[];
+
+      if (!operations || operations.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No operations provided. The 'operations' array is required.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Check if there's already a pending primitives request
+      if (hasPendingRequest('primitives')) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another primitives request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        // Create promise for response
+        const resultPromise = createPendingRequest<{
+          success: boolean;
+          slideId?: string;
+          slideName?: string;
+          created?: Array<{ name: string; id: string; type: string }>;
+          error?: string;
+        }>('primitives', 'Primitives request timed out');
+
+        // Send to plugin
+        connectedPlugin!.send(JSON.stringify({
+          type: 'apply-primitives',
+          slideId,
+          operations,
+        }));
+
+        // Wait for response
+        const result = await resultPromise;
+
+        if (!result.success) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: ${result.error || "Unknown error"}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Build success response
+        const createdList = result.created?.map(n => `  - ${n.name} (${n.type}): ${n.id}`).join('\n') || '';
+        
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ Created ${result.created?.length || 0} elements on "${result.slideName}" (${result.slideId})
+
+**Created nodes:**
+${createdList}
+
+**Tip:** Use \`monorail_screenshot\` to see the result, or \`monorail_patch\` to edit text nodes by ID.`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error applying primitives: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -1610,6 +1784,113 @@ You have "eyes" now! Use \`monorail_screenshot\` to see what Figma actually rend
 - Before presenting work to user (QA check)
 
 **Tip:** Use \`scale: 0.5\` (default) for quick checks, \`scale: 1\` for full resolution.
+
+## Design Principles (for \`monorail_primitives\`)
+
+When designing slides from scratch, follow these spatial and visual guidelines.
+
+### Canvas Dimensions
+- Slide: 1920 × 1080 pixels
+- Safe margins: 80-160px from edges
+- Visual center: approximately (960, 500) — slightly above geometric center
+
+### Positioning Patterns
+
+**Centered content (quotes, big ideas):**
+\`\`\`
+x = 120-160 (left margin)
+y = 400-450 (vertical center, not 1/3 down!)
+\`\`\`
+
+**Top-anchored content (bullets, columns):**
+\`\`\`
+Headline: y = 100-140
+Content start: y = 220-280
+\`\`\`
+
+**Split layouts (agenda, two-panel):**
+\`\`\`
+Left panel: x = 40-80, width = 500-600
+Right content: x = 680-720
+\`\`\`
+
+### Typography Scale
+
+| Role | Size | Weight | Color |
+|------|------|--------|-------|
+| Hero number | 96-180px | Bold | accent (cyan/orange) |
+| Headline | 56-72px | Bold | \`headline\` |
+| Title | 32-40px | Bold | \`white\` |
+| Body | 20-28px | Regular | \`body\` |
+| Caption/Label | 16-18px | Bold | \`muted\` or accent |
+| Eyebrow | 14-18px | Bold | accent (cyan) |
+
+### Spacing Rules
+
+| Context | Spacing |
+|---------|---------|
+| Between sections | 80-120px |
+| Between cards/columns | 40-60px |
+| Within text stack | 16-24px (use Auto Layout \`spacing\`) |
+| Card padding | 24-40px |
+| Accent bar height | 6-8px (4px is too subtle) |
+
+### Color Usage
+
+| Purpose | Color |
+|---------|-------|
+| Headlines, emphasis | \`headline\` (warm cream) |
+| Body text | \`body\` (light gray) |
+| Secondary text | \`muted\` (gray) |
+| Accent/highlight | \`cyan\`, \`orange\`, \`green\` |
+| Borders | \`cyan\` or \`blue\` |
+| Backgrounds | \`bg\`, \`cardBg\`, or RGB |
+
+### Common Patterns
+
+**Stats slide:**
+\`\`\`
+- Big numbers: 96px, colored (cyan/orange/green)
+- Labels below: 24px muted
+- Horizontal layout with 80-120px gaps
+\`\`\`
+
+**Three-column:**
+\`\`\`
+- Columns: ~480px wide each
+- Gap: 40px
+- Accent bar at top of each: 6-8px height
+- Auto Layout: VERTICAL per column, HORIZONTAL for row
+\`\`\`
+
+**Quote:**
+\`\`\`
+- Quote: 48px, headline color, centered vertically (y ≈ 400-450)
+- Attribution: 28px muted, below quote
+- Use Auto Layout with 40px spacing
+\`\`\`
+
+### Self-Critique Checklist
+
+After \`monorail_screenshot\`, ask yourself:
+
+- [ ] **Centering:** Is it optically balanced, not top-heavy?
+- [ ] **Breathing room:** Are there comfortable margins (80-160px)?
+- [ ] **Hierarchy:** Is it clear what to read first?
+- [ ] **Empty space:** Is there awkward emptiness anywhere?
+- [ ] **Edge safety:** Is anything too close to being clipped?
+
+If any answer is "no", use \`monorail_primitives\` with the same \`slide_id\` to add fixes, or \`monorail_patch\` to adjust text.
+
+### When to Use What
+
+| Need | Tool | Quality |
+|------|------|---------|
+| Quick draft, exploration | \`monorail_primitives\` | 80% |
+| Standard layouts | \`monorail_push\` (archetypes) | 90% |
+| Production fidelity | \`monorail_clone\` | 100% |
+
+Primitives = creative freedom. Archetypes = speed. Clone = perfection.
 `,
 
     "monorail://archetypes": `# Slide Archetypes
@@ -1835,7 +2116,7 @@ interface InstantiateResult { success: boolean; newSlideId?: string; updated?: n
 interface CreateResult { success: boolean; slideId?: string; error?: string; }
 
 // Type-safe request type keys
-type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot';
+type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot' | 'primitives';
 
 // Map of pending requests by type
 const pendingRequests = new Map<RequestType, PendingRequest<any>>();
@@ -1934,12 +2215,15 @@ function startWebSocketServer() {
           // Plugin sent patch result
           const edited = parsed.updated || 0;
           const added = parsed.added || 0;
-          console.error(`[WebSocket] Patched: ${edited} edited, ${added} added, ${parsed.failed?.length || 0} failed`);
+          const deleted = parsed.deleted || 0;
+          console.error(`[WebSocket] Patched: ${edited} edited, ${added} added, ${deleted} deleted, ${parsed.failed?.length || 0} failed`);
           resolvePendingRequest<PatchResult>('patch', {
             updated: edited,
             added: added,
+            deleted: deleted,
             failed: parsed.failed || [],
             newElements: parsed.newElements || [],
+            deletedElements: parsed.deletedElements || [],
           });
         } else if (parsed.type === "template-captured") {
           // Plugin sent captured template
@@ -1993,6 +2277,23 @@ function startWebSocketServer() {
             base64: parsed.base64,
             width: parsed.width,
             height: parsed.height,
+            error: parsed.error,
+          });
+        } else if (parsed.type === "primitives-applied") {
+          // Plugin sent primitives result
+          const count = parsed.created?.length || 0;
+          console.error(`[WebSocket] Primitives result: success=${parsed.success}, created=${count}`);
+          resolvePendingRequest<{
+            success: boolean;
+            slideId?: string;
+            slideName?: string;
+            created?: Array<{ name: string; id: string; type: string }>;
+            error?: string;
+          }>('primitives', {
+            success: parsed.success,
+            slideId: parsed.slideId,
+            slideName: parsed.slideName,
+            created: parsed.created,
             error: parsed.error,
           });
         } else {

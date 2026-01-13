@@ -2370,9 +2370,9 @@ function analyzeSlideContent(directTextNodes: TextNode[], parent?: SceneNode & C
 // =============================================================================
 
 interface ElementPatch {
-  target: string;      // Figma node ID (TEXT for edit, FRAME for add)
-  text: string;        // New text content
-  action?: 'edit' | 'add';  // 'edit' (default) = update existing, 'add' = create new in container
+  target: string;      // Figma node ID (TEXT for edit/delete, FRAME for add)
+  text?: string;       // New text content (required for edit/add, ignored for delete)
+  action?: 'edit' | 'add' | 'delete';  // 'edit' (default) = update existing, 'add' = create new, 'delete' = remove
   position?: number;   // For 'add': insert position (-1 or omit = append)
 }
 
@@ -2384,17 +2384,30 @@ interface PatchRequest {
 interface PatchResult {
   updated: number;
   added: number;
+  deleted: number;
   failed: string[];
   fontSubstitutions: string[];
   newElements: { id: string; name: string; container: string }[];
+  deletedElements: { id: string; name: string; container: string }[];
 }
+
+// Primitive operations for low-level slide design
+type PrimitiveOperation =
+  | { op: 'frame'; name: string; parent?: string; x: number; y: number; width?: number; height?: number }
+  | { op: 'auto_layout_frame'; name: string; parent?: string; x?: number; y?: number; direction?: 'VERTICAL' | 'HORIZONTAL'; spacing?: number; padding?: number; fill?: string | { r: number; g: number; b: number }; cornerRadius?: number }
+  | { op: 'text'; name?: string; parent?: string; text: string; x?: number; y?: number; fontSize: number; bold?: boolean; color?: string | { r: number; g: number; b: number }; maxWidth?: number }
+  | { op: 'rect'; name?: string; parent?: string; x: number; y: number; width: number; height: number; fill: string | { r: number; g: number; b: number }; stroke?: string | { r: number; g: number; b: number }; cornerRadius?: number }
+  | { op: 'ellipse'; name?: string; parent?: string; x: number; y: number; width: number; height: number; fill: string | { r: number; g: number; b: number }; stroke?: string | { r: number; g: number; b: number } }
+  | { op: 'line'; name?: string; parent?: string; x: number; y: number; length: number; rotation?: number; color?: string | { r: number; g: number; b: number }; strokeWeight?: number };
 
 async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
   let updated = 0;
   let added = 0;
+  let deleted = 0;
   const failed: string[] = [];
   const fontSubstitutions: string[] = [];
   const newElements: { id: string; name: string; container: string }[] = [];
+  const deletedElements: { id: string; name: string; container: string }[] = [];
   
   // Load fallback font upfront (we might need it for new text)
   await loadFontWithFallback();
@@ -2413,6 +2426,12 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
 
       // === ADD ACTION: Create new element in a container ===
       if (action === 'add') {
+        if (!patch.text) {
+          console.warn(`Add action requires text for ${patch.target}`);
+          failed.push(patch.target);
+          continue;
+        }
+
         if (node.type !== 'FRAME') {
           console.warn(`Add target ${patch.target} is not a frame (type: ${node.type})`);
           failed.push(patch.target);
@@ -2468,7 +2487,7 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
         newText.fontName = fontName as FontName;
         newText.fontSize = typeof sibling.fontSize === 'number' ? sibling.fontSize : 36;
         newText.fills = sibling.fills !== figma.mixed ? sibling.fills : [{ type: 'SOLID', color: COLORS.body }];
-        newText.characters = patch.text;
+        newText.characters = patch.text || '';
 
         // Match sibling's text behavior
         if (sibling.textAutoResize) {
@@ -2500,11 +2519,43 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
 
         newElements.push({ id: newText.id, name: newText.name, container: frame.name });
         added++;
-        console.log(`Added ${newText.name} to ${frame.name}: "${patch.text.substring(0, 30)}..."`);
+        console.log(`Added ${newText.name} to ${frame.name}: "${patch.text?.substring(0, 30)}..."`);
+        continue;
+      }
+
+      // === DELETE ACTION: Remove element from its parent container ===
+      if (action === 'delete') {
+        // Get parent container info before deletion
+        const parent = node.parent;
+        const containerName = parent && 'name' in parent ? parent.name : 'unknown';
+        const nodeName = 'name' in node ? node.name : patch.target;
+        const nodeId = node.id;
+
+        // Safety check: warn if deleting from a container with only 1 child
+        if (parent && 'children' in parent) {
+          const siblings = (parent as FrameNode).children;
+          if (siblings.length === 1) {
+            console.warn(`Warning: Deleting last element from ${containerName}`);
+          }
+        }
+
+        // Remove the node
+        node.remove();
+        
+        deletedElements.push({ id: nodeId, name: nodeName, container: containerName });
+        deleted++;
+        console.log(`Deleted ${nodeName} (${nodeId}) from ${containerName}`);
         continue;
       }
 
       // === EDIT ACTION (default): Update existing text node ===
+      // Requires text content
+      if (!patch.text) {
+        console.warn(`Edit action requires text for ${patch.target}`);
+        failed.push(patch.target);
+        continue;
+      }
+
       if (node.type !== 'TEXT') {
         console.warn(`Node ${patch.target} is not a text node (type: ${node.type})`);
         failed.push(patch.target);
@@ -2566,7 +2617,7 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
     }
   }
   
-  return { updated, added, failed, fontSubstitutions, newElements };
+  return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
 }
 
 // Main message handler
@@ -2933,6 +2984,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       const parts: string[] = [];
       if (result.updated > 0) parts.push(`${result.updated} edited`);
       if (result.added > 0) parts.push(`${result.added} added`);
+      if (result.deleted > 0) parts.push(`${result.deleted} deleted`);
       
       let notifyMsg = result.failed.length > 0
         ? `Patched: ${parts.join(', ')} (${result.failed.length} failed)`
@@ -3659,6 +3711,256 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
     }
     
+    // =======================================================================
+    // PRIMITIVES: Low-level design operations for Claude to design slides
+    // =======================================================================
+    if (msg.type === 'apply-primitives') {
+      const slideId = (msg as any).slideId as string | undefined;
+      const operations = (msg as any).operations as PrimitiveOperation[];
+      
+      if (!operations || operations.length === 0) {
+        figma.notify('No operations provided', { error: true });
+        figma.ui.postMessage({ type: 'primitives-applied', success: false, error: 'No operations provided' });
+        return;
+      }
+      
+      try {
+        // Find or create target slide
+        let targetSlide: SceneNode & ChildrenMixin;
+        
+        if (slideId) {
+          // Use specified slide
+          const node = await (figma as any).getNodeByIdAsync(slideId);
+          if (!node) {
+            throw new Error(`Slide not found: ${slideId}`);
+          }
+          targetSlide = node as SceneNode & ChildrenMixin;
+        } else {
+          // Create new slide
+          if (isInSlides()) {
+            targetSlide = (figma as any).createSlide() as SceneNode & ChildrenMixin;
+            setSlideBackground(targetSlide);
+          } else {
+            targetSlide = figma.createFrame();
+            targetSlide.resize(SLIDE_WIDTH, SLIDE_HEIGHT);
+            addBackgroundRect(targetSlide);
+          }
+          targetSlide.name = 'Primitives Slide';
+        }
+        
+        // Load fonts upfront
+        await loadFontWithFallback();
+        
+        // Track created nodes by name for referencing
+        const nodesByName: Record<string, SceneNode> = {};
+        const createdNodes: Array<{ name: string; id: string; type: string }> = [];
+        
+        // Helper to resolve parent reference
+        function resolveParent(parentRef?: string): SceneNode & ChildrenMixin {
+          if (!parentRef) return targetSlide;
+          
+          // Check if it's a name from this batch
+          if (nodesByName[parentRef]) {
+            return nodesByName[parentRef] as SceneNode & ChildrenMixin;
+          }
+          
+          // Check if it's a Figma ID (will need async lookup, but for now assume batch refs)
+          throw new Error(`Parent not found: ${parentRef}. Must be a name from an earlier operation.`);
+        }
+        
+        // Helper to resolve color
+        function resolveColor(colorRef?: string | { r: number; g: number; b: number }): RGB {
+          if (!colorRef) return COLORS.white;
+          
+          // If it's an object, use directly
+          if (typeof colorRef === 'object') {
+            return colorRef;
+          }
+          
+          // Look up in COLORS
+          const namedColor = COLORS[colorRef as keyof typeof COLORS];
+          if (namedColor) return namedColor;
+          
+          // Default to white if not found
+          console.warn(`Unknown color: ${colorRef}, defaulting to white`);
+          return COLORS.white;
+        }
+        
+        // Process each operation
+        for (const op of operations) {
+          try {
+            if (op.op === 'frame') {
+              // Create a basic frame
+              const frame = figma.createFrame();
+              frame.name = op.name;
+              frame.x = op.x;
+              frame.y = op.y;
+              if (op.width) frame.resize(op.width, op.height || 100);
+              frame.fills = []; // Transparent
+              
+              resolveParent(op.parent).appendChild(frame);
+              nodesByName[op.name] = frame;
+              createdNodes.push({ name: op.name, id: frame.id, type: 'FRAME' });
+              
+            } else if (op.op === 'auto_layout_frame') {
+              // Create Auto Layout container
+              const frame = figma.createFrame();
+              frame.name = op.name;
+              
+              // Enable Auto Layout
+              frame.layoutMode = op.direction || 'VERTICAL';
+              frame.primaryAxisSizingMode = 'AUTO';
+              frame.counterAxisSizingMode = 'AUTO';
+              frame.itemSpacing = op.spacing ?? 24;
+              
+              if (op.padding) {
+                frame.paddingTop = op.padding;
+                frame.paddingBottom = op.padding;
+                frame.paddingLeft = op.padding;
+                frame.paddingRight = op.padding;
+              }
+              
+              // Set fill (background color) or transparent
+              if (op.fill) {
+                frame.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              } else {
+                frame.fills = []; // Transparent
+              }
+              
+              // Set corner radius if specified
+              if (op.cornerRadius) {
+                frame.cornerRadius = op.cornerRadius;
+              }
+              
+              frame.clipsContent = false;
+              
+              const parent = resolveParent(op.parent);
+              parent.appendChild(frame);
+              
+              // Set position after appending
+              if (op.x !== undefined) frame.x = op.x;
+              if (op.y !== undefined) frame.y = op.y;
+              
+              nodesByName[op.name] = frame;
+              createdNodes.push({ name: op.name, id: frame.id, type: 'AUTO_LAYOUT' });
+              
+            } else if (op.op === 'text') {
+              const textNode = figma.createText();
+              if (op.name) textNode.name = op.name;
+              
+              const fontName = await getFontName(op.bold || false);
+              textNode.fontName = fontName;
+              textNode.fontSize = op.fontSize;
+              textNode.fills = [{ type: 'SOLID', color: resolveColor(op.color) }];
+              textNode.characters = op.text;
+              
+              if (op.maxWidth) {
+                textNode.resize(op.maxWidth, textNode.height);
+                textNode.textAutoResize = 'HEIGHT';
+              }
+              
+              const parent = resolveParent(op.parent);
+              parent.appendChild(textNode);
+              
+              // Set position if not in Auto Layout
+              if (op.x !== undefined) textNode.x = op.x;
+              if (op.y !== undefined) textNode.y = op.y;
+              
+              if (op.name) {
+                nodesByName[op.name] = textNode;
+                createdNodes.push({ name: op.name, id: textNode.id, type: 'TEXT' });
+              }
+              
+            } else if (op.op === 'rect') {
+              const rect = figma.createRectangle();
+              if (op.name) rect.name = op.name;
+              rect.x = op.x;
+              rect.y = op.y;
+              rect.resize(op.width, op.height);
+              rect.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              
+              if (op.stroke) {
+                rect.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
+                rect.strokeWeight = 2;
+              }
+              
+              if (op.cornerRadius) {
+                rect.cornerRadius = op.cornerRadius;
+              }
+              
+              resolveParent(op.parent).appendChild(rect);
+              
+              if (op.name) {
+                nodesByName[op.name] = rect;
+                createdNodes.push({ name: op.name, id: rect.id, type: 'RECTANGLE' });
+              }
+              
+            } else if (op.op === 'ellipse') {
+              const ellipse = figma.createEllipse();
+              if (op.name) ellipse.name = op.name;
+              ellipse.x = op.x;
+              ellipse.y = op.y;
+              ellipse.resize(op.width, op.height);
+              ellipse.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              
+              if (op.stroke) {
+                ellipse.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
+                ellipse.strokeWeight = 2;
+              }
+              
+              resolveParent(op.parent).appendChild(ellipse);
+              
+              if (op.name) {
+                nodesByName[op.name] = ellipse;
+                createdNodes.push({ name: op.name, id: ellipse.id, type: 'ELLIPSE' });
+              }
+              
+            } else if (op.op === 'line') {
+              const line = figma.createLine();
+              if (op.name) line.name = op.name;
+              line.x = op.x;
+              line.y = op.y;
+              line.resize(op.length, 0);
+              line.rotation = op.rotation || 0;
+              line.strokes = [{ type: 'SOLID', color: resolveColor(op.color) }];
+              line.strokeWeight = op.strokeWeight || 2;
+              
+              resolveParent(op.parent).appendChild(line);
+              
+              if (op.name) {
+                nodesByName[op.name] = line;
+                createdNodes.push({ name: op.name, id: line.id, type: 'LINE' });
+              }
+            }
+          } catch (opErr) {
+            console.error(`Operation failed:`, op, opErr);
+            throw new Error(`Operation "${op.op}" failed: ${opErr instanceof Error ? opErr.message : String(opErr)}`);
+          }
+        }
+        
+        // Select the created slide
+        figma.currentPage.selection = [targetSlide];
+        figma.viewport.scrollAndZoomIntoView([targetSlide]);
+        
+        const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"`;
+        figma.notify(summary);
+        
+        figma.ui.postMessage({
+          type: 'primitives-applied',
+          success: true,
+          slideId: targetSlide.id,
+          slideName: targetSlide.name,
+          created: createdNodes
+        });
+        
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Primitives error:', errorMsg);
+        figma.notify(`Failed: ${errorMsg}`, { error: true });
+        figma.ui.postMessage({ type: 'primitives-applied', success: false, error: errorMsg });
+      }
+    }
+
     if (msg.type === 'close') {
       figma.closePlugin();
     }

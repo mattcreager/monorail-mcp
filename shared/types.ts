@@ -375,12 +375,12 @@ export interface DesignSystem {
 // =============================================================================
 
 export interface PatchChange {
-  /** Figma node ID — TEXT node for edit, FRAME container for add */
+  /** Figma node ID — TEXT node for edit/delete, FRAME container for add */
   target: string;
-  /** New text content */
-  text: string;
-  /** Action: 'edit' (default) updates existing, 'add' creates new in container */
-  action?: 'edit' | 'add';
+  /** New text content (required for edit/add, ignored for delete) */
+  text?: string;
+  /** Action: 'edit' (default) updates existing, 'add' creates new in container, 'delete' removes element */
+  action?: 'edit' | 'add' | 'delete';
   /** For 'add' only: insert position (0=first, -1 or omit=append) */
   position?: number;
 }
@@ -396,17 +396,27 @@ export interface NewElement {
   container: string;
 }
 
+export interface DeletedElement {
+  id: string;
+  name: string;
+  container: string;
+}
+
 export interface PatchResult {
   /** Number of existing elements edited */
   updated: number;
   /** Number of new elements added */
   added: number;
+  /** Number of elements deleted */
+  deleted: number;
   /** IDs that failed */
   failed: string[];
   /** Font substitutions made */
   fontSubstitutions?: string[];
   /** New elements created (for 'add' actions) */
   newElements?: NewElement[];
+  /** Elements removed (for 'delete' actions) */
+  deletedElements?: DeletedElement[];
 }
 
 export interface DeleteResult {
