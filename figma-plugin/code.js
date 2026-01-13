@@ -1289,6 +1289,47 @@
       return result;
     });
   }
+  var ADDABLE_CONTAINER_PATTERNS = [
+    { pattern: "bullets-container", element_type: "bullet", hint: 'Add bullet points with action:"add"' },
+    { pattern: "items-container", element_type: "item", hint: 'Add summary items with action:"add"' },
+    { pattern: "columns-container", element_type: "column", hint: "Add columns (complex - may need clone instead)" }
+  ];
+  function findAddableContainers(slideNode, slideName) {
+    const containers = [];
+    function traverse(node) {
+      if (node.type === "FRAME") {
+        const frame = node;
+        if (frame.layoutMode && frame.layoutMode !== "NONE") {
+          for (const pattern of ADDABLE_CONTAINER_PATTERNS) {
+            if (frame.name === pattern.pattern || frame.name.includes(pattern.pattern)) {
+              const textChildren = frame.children.filter((c) => c.type === "TEXT");
+              if (textChildren.length > 0) {
+                containers.push({
+                  id: frame.id,
+                  name: frame.name,
+                  slide_id: slideNode.id,
+                  slide_name: slideName,
+                  child_count: textChildren.length,
+                  element_type: pattern.element_type,
+                  hint: pattern.hint
+                });
+              }
+              break;
+            }
+          }
+        }
+        for (const child of frame.children) {
+          traverse(child);
+        }
+      } else if ("children" in node) {
+        for (const child of node.children) {
+          traverse(child);
+        }
+      }
+    }
+    traverse(slideNode);
+    return containers;
+  }
   function getRecursiveTextNodes(node) {
     if (node.type === "TEXT") return [node];
     if ("children" in node) {
@@ -1703,16 +1744,92 @@
     };
   }
   async function applyPatches(patches) {
+    var _a, _b;
     let updated = 0;
+    let added = 0;
     const failed = [];
     const fontSubstitutions = [];
+    const newElements = [];
     await loadFontWithFallback();
     for (const patch of patches.changes) {
+      const action = patch.action || "edit";
       try {
         const node = await figma.getNodeByIdAsync(patch.target);
         if (!node) {
           console.warn(`Node not found: ${patch.target}`);
           failed.push(patch.target);
+          continue;
+        }
+        if (action === "add") {
+          if (node.type !== "FRAME") {
+            console.warn(`Add target ${patch.target} is not a frame (type: ${node.type})`);
+            failed.push(patch.target);
+            continue;
+          }
+          const frame = node;
+          const textSiblings = frame.children.filter((c) => c.type === "TEXT");
+          if (textSiblings.length === 0) {
+            console.warn(`No text siblings found in ${patch.target} to copy styles from`);
+            failed.push(patch.target);
+            continue;
+          }
+          const sibling = textSiblings[textSiblings.length - 1];
+          let fontName2 = sibling.fontName;
+          let fontLoaded2 = false;
+          if (fontName2 !== figma.mixed) {
+            try {
+              await figma.loadFontAsync(fontName2);
+              fontLoaded2 = true;
+            } catch (e) {
+              const wasBold = fontName2.style.includes("Bold");
+              const originalFontInfo = `${fontName2.family} ${fontName2.style}`;
+              for (const fallbackFamily of FONT_FALLBACKS) {
+                try {
+                  const fallbackFont = { family: fallbackFamily, style: wasBold ? "Bold" : "Regular" };
+                  await figma.loadFontAsync(fallbackFont);
+                  fontName2 = fallbackFont;
+                  fontLoaded2 = true;
+                  fontSubstitutions.push(`${originalFontInfo} \u2192 ${fallbackFamily}`);
+                  break;
+                } catch (e2) {
+                  continue;
+                }
+              }
+            }
+          }
+          if (!fontLoaded2) {
+            fontName2 = await getFontName(false);
+          }
+          const newText = figma.createText();
+          newText.fontName = fontName2;
+          newText.fontSize = typeof sibling.fontSize === "number" ? sibling.fontSize : 36;
+          newText.fills = sibling.fills !== figma.mixed ? sibling.fills : [{ type: "SOLID", color: COLORS.body }];
+          newText.characters = patch.text;
+          if (sibling.textAutoResize) {
+            newText.textAutoResize = sibling.textAutoResize;
+          }
+          if (sibling.width > 0) {
+            newText.resize(sibling.width, newText.height);
+            newText.textAutoResize = "HEIGHT";
+          }
+          const bulletMatch = (_a = textSiblings[0]) == null ? void 0 : _a.name.match(/^bullet-(\d+)$/);
+          const itemMatch = (_b = textSiblings[0]) == null ? void 0 : _b.name.match(/^item-(\d+)$/);
+          if (bulletMatch) {
+            newText.name = `bullet-${textSiblings.length}`;
+          } else if (itemMatch) {
+            newText.name = `item-${textSiblings.length}`;
+          } else {
+            newText.name = `text-${textSiblings.length}`;
+          }
+          const pos = patch.position;
+          if (pos !== void 0 && pos >= 0 && pos < frame.children.length) {
+            frame.insertChild(pos, newText);
+          } else {
+            frame.appendChild(newText);
+          }
+          newElements.push({ id: newText.id, name: newText.name, container: frame.name });
+          added++;
+          console.log(`Added ${newText.name} to ${frame.name}: "${patch.text.substring(0, 30)}..."`);
           continue;
         }
         if (node.type !== "TEXT") {
@@ -1764,7 +1881,7 @@
         failed.push(patch.target);
       }
     }
-    return { updated, failed, fontSubstitutions };
+    return { updated, added, failed, fontSubstitutions, newElements };
   }
   figma.ui.onmessage = async (msg) => {
     var _a, _b;
@@ -1968,6 +2085,7 @@
             }
           }
         }
+        const allContainers = [];
         for (const node of slideNodes) {
           try {
             const allTextInfos = getAllTextNodes(node);
@@ -1996,21 +2114,28 @@
               elements,
               has_diagram: hasDiagram
             });
+            const slideContainers = findAddableContainers(node, node.name || slideId);
+            allContainers.push(...slideContainers);
           } catch (err) {
             console.error(`Error processing slide "${node.name}":`, err);
           }
         }
         const ir = {
           deck: { title: "Pulled Deck" },
-          slides
+          slides,
+          containers: allContainers.length > 0 ? allContainers : void 0
         };
         const richSlides = slides.filter((s) => {
           var _a2;
           return (((_a2 = s.elements) == null ? void 0 : _a2.length) || 0) > 0;
         }).length;
         const diagramSlides = slides.filter((s) => s.has_diagram).length;
+        const containerCount = allContainers.length;
         figma.ui.postMessage({ type: "exported", ir: JSON.stringify(ir, null, 2) });
-        figma.notify(`Pulled ${slides.length} slides (${richSlides} with elements, ${diagramSlides} with diagrams)`);
+        const stats = [`${slides.length} slides`, `${richSlides} with elements`];
+        if (diagramSlides > 0) stats.push(`${diagramSlides} with diagrams`);
+        if (containerCount > 0) stats.push(`${containerCount} addable containers`);
+        figma.notify(`Pulled ${stats.join(", ")}`);
       }
       if (msg.type === "patch-elements") {
         if (!msg.patches || !msg.patches.changes || msg.patches.changes.length === 0) {
@@ -2019,7 +2144,10 @@
           return;
         }
         const result = await applyPatches(msg.patches);
-        let notifyMsg = result.failed.length > 0 ? `Patched ${result.updated} elements (${result.failed.length} failed)` : `\u2713 Patched ${result.updated} elements`;
+        const parts = [];
+        if (result.updated > 0) parts.push(`${result.updated} edited`);
+        if (result.added > 0) parts.push(`${result.added} added`);
+        let notifyMsg = result.failed.length > 0 ? `Patched: ${parts.join(", ")} (${result.failed.length} failed)` : `\u2713 Patched: ${parts.join(", ") || "no changes"}`;
         if (result.fontSubstitutions.length > 0) {
           const uniqueSubs = [...new Set(result.fontSubstitutions)];
           notifyMsg += ` (${uniqueSubs.length} font sub${uniqueSubs.length > 1 ? "s" : ""})`;

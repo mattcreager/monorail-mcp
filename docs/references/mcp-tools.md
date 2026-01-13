@@ -28,17 +28,36 @@ Returns: Connection state, plugin name/version, timestamp
 ---
 
 ### `monorail_pull`
-Get current deck state from Figma.
+Get current deck state from Figma, including addable containers.
 
 ```
 Returns:
-- slides[].elements[] — ALL text elements with Figma node IDs
+- slides[].elements[] — ALL text elements with Figma node IDs (for editing)
 - slides[].has_diagram — true if complex nested content
 - slides[].figma_id — Figma node ID for the slide
 - slides[].archetype — detected archetype (may be "unknown")
+- containers[] — Auto Layout frames that support action:"add"
+  - id: Figma node ID (use as target for action:"add")
+  - name: Container name (e.g., "bullets-container")
+  - slide_id, slide_name: Which slide contains it
+  - child_count: Current number of elements
+  - element_type: "bullet" | "item" | "column"
+  - hint: Usage guidance
 ```
 
-**Use when:** Need to see what's on the slides before making changes.
+**Use when:** Need to see what's on the slides before making changes. The `containers` array tells you where you can ADD new elements.
+
+**Example output:**
+```
+✓ Pulled deck from Figma
+  3 slides, 2 addable containers
+
+## Addable Containers (use with action: "add")
+  • bullets-container (4:599) - 3 bullets in "Key Benefits"
+    Add bullet points with action:"add"
+  • items-container (4:721) - 4 items in "Summary"
+    Add summary items with action:"add"
+```
 
 ---
 
@@ -66,16 +85,26 @@ Returns: Success message or validation errors
 ---
 
 ### `monorail_patch`
-Update specific text elements by Figma node ID.
+Edit existing text OR add new elements to Auto Layout containers.
 
 ```
 Parameters:
-- patches.changes[]: Array of { target: "node-id", text: "new text" }
+- patches.changes[]: Array of changes, each with:
+  - target: string — Figma node ID (TEXT for edit, FRAME for add)
+  - text: string — New text content
+  - action?: "edit" | "add" — Default is "edit"
+  - position?: number — For "add" only: insert position (-1 or omit = append)
 ```
 
-**Use when:** Modifying existing slides without destroying layout/styling. This is the core editing tool.
+**Two modes:**
+1. **Edit (default):** Target a TEXT node ID → update its content
+2. **Add:** Target a FRAME container ID (like `bullets-container`) → create new element inside
 
-**Example:**
+**Use when:** 
+- Modifying existing slides without destroying layout/styling (edit)
+- Adding bullets/items without deleting the slide (add)
+
+**Edit example:**
 ```json
 {
   "patches": {
@@ -86,6 +115,21 @@ Parameters:
   }
 }
 ```
+
+**Add example:**
+```json
+{
+  "patches": {
+    "changes": [
+      { "target": "4:599", "text": "• New bullet point", "action": "add" }
+    ]
+  }
+}
+// Returns: ✓ Patched: 1 added
+//          New elements: bullet-3 (28:95) in bullets-container
+```
+
+**Limitations:** `action: "add"` only works for simple text elements (bullets, items). For compound elements (cards, columns), use delete + push or clone.
 
 ---
 
@@ -235,6 +279,13 @@ Returns: PNG image (base64-encoded) with dimensions
 1. monorail_push          — create/update slides
 2. monorail_screenshot    — see the result as an image
 3. (iterate if needed)
+```
+
+### Add bullet/item to existing slide
+```
+1. monorail_capture       — get container ID (e.g., "bullets-container")
+2. monorail_patch with action: "add" — append new element
+   { target: "container-id", text: "• New bullet", action: "add" }
 ```
 
 ---

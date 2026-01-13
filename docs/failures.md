@@ -412,6 +412,37 @@ Three utility functions handle all request lifecycle:
 
 ---
 
+### 2026-01-13 - Stale MCP server process: Hard to diagnose connection failures
+
+**What we found:** When restarting development, an old MCP server process was still running from a previous session. The new Cursor-managed MCP server couldn't bind to port 9876 (or did bind but plugin was connected to the stale one). This caused:
+
+1. `monorail_status` returned "No plugin connected" 
+2. Plugin UI showed "Connected" (green) — to the WRONG server
+3. No obvious error message indicating the real problem
+
+**Diagnostic friction:**
+- The MCP server doesn't log "port already in use" errors clearly
+- Plugin shows "connected" even when connected to a zombie server
+- Had to manually run `lsof -i :9876` to discover the stale process
+- Then `kill <PID>` and reload Cursor
+
+**Root cause:** MCP servers persist beyond Cursor sessions. If you quit Cursor without cleanly terminating them, they linger.
+
+**What would help:**
+1. **Server instance ID** — Plugin UI should show which server instance it's connected to (timestamp, PID, or UUID)
+2. **Port conflict detection** — MCP server should warn loudly if port 9876 is already in use
+3. **Startup logging** — "WebSocket server started on :9876" should be visible, not just stderr
+4. **Connection health check** — `monorail_status` could ping the plugin and verify round-trip
+
+**Impact:** 10+ minutes of debugging what looked like a code bug but was actually a stale process.
+
+**Path forward:** 
+- Added to PLAN.md Gap: "Multi-instance debugging"
+- Consider adding server UUID to hello handshake so plugin can detect server restart
+- Consider binding to random port and advertising it (avoids conflicts entirely)
+
+---
+
 ### 2026-01-12 - Figma plugin hot reloads on code.js change
 
 **What we found:** When you run `npm run build` (which compiles `code.ts` → `code.js`), the Figma plugin automatically hot reloads. No need to manually close and reopen the plugin.

@@ -612,7 +612,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_pull",
         description:
-          "Pull the current deck state from Figma. Returns slides with all elements, their Figma node IDs, text content, positions, and styling. Use this to see what's in the deck before making changes. The 'elements' array contains node IDs you can target with monorail_patch.",
+          "Pull the current deck state from Figma. Returns slides with all elements AND addable containers. The 'elements' array has TEXT node IDs for editing. The 'containers' array lists Auto Layout frames where you can ADD new elements (e.g., bullets-container). Use containers with monorail_patch action:'add' to append items without deleting the slide.",
         inputSchema: {
           type: "object" as const,
           properties: {},
@@ -653,7 +653,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_patch",
         description:
-          "Patch specific text elements by Figma node ID. This is the core editing tool — modify individual elements without re-rendering slides. Get element IDs from monorail_pull (the 'elements' array). Preserves all styling, positioning, and surrounding content.",
+          "Edit or add text elements. Two modes: (1) EDIT: target a TEXT node ID to update its content. (2) ADD: target a FRAME container ID (like 'bullets-container') with action:'add' to create a new element inside it — inherits styling from siblings, Auto Layout handles positioning. Get IDs from monorail_pull. This is how you add a 4th bullet without deleting the slide.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -673,11 +673,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     properties: {
                       target: {
                         type: "string",
-                        description: "Figma node ID (from elements array)",
+                        description: "Figma node ID — TEXT node for edit, FRAME container for add",
                       },
                       text: {
                         type: "string",
-                        description: "New text content for this element",
+                        description: "New text content (for edit or add)",
+                      },
+                      action: {
+                        type: "string",
+                        enum: ["edit", "add"],
+                        description: "Action type: 'edit' (default) updates existing text, 'add' creates new element in a container",
+                      },
+                      position: {
+                        type: "number",
+                        description: "For 'add' only: insert position (0=first, -1 or omit=append at end)",
                       },
                     },
                     required: ["target", "text"],
@@ -863,11 +872,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Update currentIR in server state
         currentIR = ir;
 
+        // Build a helpful summary (AI DX)
+        const slideCount = ir.slides?.length || 0;
+        const containerCount = ir.containers?.length || 0;
+        
+        let summary = `✓ Pulled deck from Figma\n`;
+        summary += `  ${slideCount} slides`;
+        
+        // Highlight containers if present (key for action: "add")
+        if (containerCount > 0) {
+          summary += `, ${containerCount} addable containers\n\n`;
+          summary += `## Addable Containers (use with action: "add")\n`;
+          for (const c of ir.containers!) {
+            summary += `  • ${c.name} (${c.id}) - ${c.child_count} ${c.element_type}s in "${c.slide_name}"\n`;
+            summary += `    ${c.hint}\n`;
+          }
+          summary += `\n`;
+        } else {
+          summary += `\n\n`;
+        }
+
         return {
           content: [
             {
               type: "text" as const,
-              text: `✓ Pulled deck from Figma\n\n${JSON.stringify(ir, null, 2)}`,
+              text: `${summary}${JSON.stringify(ir, null, 2)}`,
             },
           ],
         };
@@ -1024,16 +1053,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const result = await patchPromise;
+
+        // Build summary
+        const parts: string[] = [];
+        if (result.updated > 0) parts.push(`${result.updated} edited`);
+        if (result.added > 0) parts.push(`${result.added} added`);
         
-        const failedText = result.failed.length > 0 
-          ? `\n\nFailed to patch: ${result.failed.join(", ")}`
+        const failedText = result.failed.length > 0
+          ? `\n\nFailed: ${result.failed.join(", ")}`
+          : "";
+        
+        const newElementsText = result.newElements && result.newElements.length > 0
+          ? `\n\nNew elements:\n${result.newElements.map((e: {id: string; name: string; container: string}) => `- ${e.name} (${e.id}) in ${e.container}`).join("\n")}`
           : "";
 
         return {
           content: [
             {
               type: "text" as const,
-              text: `✓ Patched ${result.updated} elements${failedText}`,
+              text: `✓ Patched: ${parts.join(", ") || "no changes"}${newElementsText}${failedText}`,
             },
           ],
         };
@@ -1894,10 +1932,14 @@ function startWebSocketServer() {
           console.error(`[WebSocket] Plugin applied ${parsed.count} slides`);
         } else if (parsed.type === "patched") {
           // Plugin sent patch result
-          console.error(`[WebSocket] Patched ${parsed.updated} elements, ${parsed.failed?.length || 0} failed`);
+          const edited = parsed.updated || 0;
+          const added = parsed.added || 0;
+          console.error(`[WebSocket] Patched: ${edited} edited, ${added} added, ${parsed.failed?.length || 0} failed`);
           resolvePendingRequest<PatchResult>('patch', {
-            updated: parsed.updated || 0,
+            updated: edited,
+            added: added,
             failed: parsed.failed || [],
+            newElements: parsed.newElements || [],
           });
         } else if (parsed.type === "template-captured") {
           // Plugin sent captured template

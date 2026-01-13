@@ -629,18 +629,32 @@
       }
       
       if (msg.type === 'patched') {
-        const success = msg.updated || 0;
+        const edited = msg.updated || 0;
+        const added = msg.added || 0;
         const failed = msg.failed?.length || 0;
+        
+        // Build activity message
+        const parts = [];
+        if (edited > 0) parts.push(`${edited} edited`);
+        if (added > 0) parts.push(`${added} added`);
+        const summary = parts.join(', ') || 'no changes';
+        
         if (failed > 0) {
-          addActivity('⚠', `Patched ${success} elements (${failed} failed)`);
-          showToast(`Patched ${success}, failed ${failed}`, true);
+          addActivity('⚠', `Patched: ${summary} (${failed} failed)`);
+          showToast(`Patched: ${summary}, ${failed} failed`, true);
         } else {
-          addActivity('✓', `Patched ${success} elements`);
-          showToast(`Patched ${success} elements!`);
+          addActivity('✓', `Patched: ${summary}`);
+          showToast(`Patched: ${summary}!`);
         }
         
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'patched', updated: msg.updated, failed: msg.failed }));
+          ws.send(JSON.stringify({ 
+            type: 'patched', 
+            updated: msg.updated, 
+            added: msg.added,
+            failed: msg.failed,
+            newElements: msg.newElements
+          }));
         }
       }
       

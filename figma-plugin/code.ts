@@ -2,7 +2,7 @@
 // Converts IR (deck spec) into Figma Slides
 
 // Import shared types (type-only imports are erased at compile time by esbuild)
-import type { SlideContent, Slide, DeckIR, ElementInfo } from '../shared/types';
+import type { SlideContent, Slide, DeckIR, ElementInfo, AddableContainer } from '../shared/types';
 
 // Show the UI
 figma.showUI(__html__, { width: 320, height: 280 });
@@ -1770,6 +1770,70 @@ function buildElementInfos(
 }
 
 // =============================================================================
+// ADDABLE CONTAINER DISCOVERY (AI DX: help AI find targets for action: "add")
+// =============================================================================
+
+// Container names we recognize as "addable" (Auto Layout containers for list items)
+const ADDABLE_CONTAINER_PATTERNS: { pattern: string; element_type: AddableContainer['element_type']; hint: string }[] = [
+  { pattern: 'bullets-container', element_type: 'bullet', hint: 'Add bullet points with action:"add"' },
+  { pattern: 'items-container', element_type: 'item', hint: 'Add summary items with action:"add"' },
+  { pattern: 'columns-container', element_type: 'column', hint: 'Add columns (complex - may need clone instead)' },
+];
+
+/**
+ * Find Auto Layout containers in a slide that support adding new elements.
+ * Returns containers that the AI can target with `action: "add"` in monorail_patch.
+ */
+function findAddableContainers(slideNode: SceneNode, slideName: string): AddableContainer[] {
+  const containers: AddableContainer[] = [];
+  
+  function traverse(node: SceneNode) {
+    // Check if this is a Frame with Auto Layout
+    if (node.type === 'FRAME') {
+      const frame = node as FrameNode;
+      
+      // Only consider Auto Layout frames (VERTICAL or HORIZONTAL)
+      if (frame.layoutMode && frame.layoutMode !== 'NONE') {
+        // Check if name matches our addable patterns
+        for (const pattern of ADDABLE_CONTAINER_PATTERNS) {
+          if (frame.name === pattern.pattern || frame.name.includes(pattern.pattern)) {
+            // Count text children (what we can add to)
+            const textChildren = frame.children.filter(c => c.type === 'TEXT');
+            
+            // Only include if it has existing children to copy style from
+            if (textChildren.length > 0) {
+              containers.push({
+                id: frame.id,
+                name: frame.name,
+                slide_id: slideNode.id,
+                slide_name: slideName,
+                child_count: textChildren.length,
+                element_type: pattern.element_type,
+                hint: pattern.hint,
+              });
+            }
+            break; // Don't match multiple patterns for same container
+          }
+        }
+      }
+      
+      // Continue traversing children
+      for (const child of frame.children) {
+        traverse(child);
+      }
+    } else if ('children' in node) {
+      // Traverse other container types (like groups)
+      for (const child of (node as any).children) {
+        traverse(child);
+      }
+    }
+  }
+  
+  traverse(slideNode);
+  return containers;
+}
+
+// =============================================================================
 // LEGACY EXPORT: Pattern-matching for backward compatibility
 // =============================================================================
 
@@ -2306,8 +2370,10 @@ function analyzeSlideContent(directTextNodes: TextNode[], parent?: SceneNode & C
 // =============================================================================
 
 interface ElementPatch {
-  target: string;      // Figma node ID (from rich read)
+  target: string;      // Figma node ID (TEXT for edit, FRAME for add)
   text: string;        // New text content
+  action?: 'edit' | 'add';  // 'edit' (default) = update existing, 'add' = create new in container
+  position?: number;   // For 'add': insert position (-1 or omit = append)
 }
 
 interface PatchRequest {
@@ -2315,15 +2381,27 @@ interface PatchRequest {
   changes: ElementPatch[];
 }
 
-async function applyPatches(patches: PatchRequest): Promise<{ updated: number; failed: string[]; fontSubstitutions: string[] }> {
+interface PatchResult {
+  updated: number;
+  added: number;
+  failed: string[];
+  fontSubstitutions: string[];
+  newElements: { id: string; name: string; container: string }[];
+}
+
+async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
   let updated = 0;
+  let added = 0;
   const failed: string[] = [];
   const fontSubstitutions: string[] = [];
+  const newElements: { id: string; name: string; container: string }[] = [];
   
   // Load fallback font upfront (we might need it for new text)
   await loadFontWithFallback();
   
   for (const patch of patches.changes) {
+    const action = patch.action || 'edit';
+    
     try {
       const node = await (figma as any).getNodeByIdAsync(patch.target);
       
@@ -2332,7 +2410,101 @@ async function applyPatches(patches: PatchRequest): Promise<{ updated: number; f
         failed.push(patch.target);
         continue;
       }
-      
+
+      // === ADD ACTION: Create new element in a container ===
+      if (action === 'add') {
+        if (node.type !== 'FRAME') {
+          console.warn(`Add target ${patch.target} is not a frame (type: ${node.type})`);
+          failed.push(patch.target);
+          continue;
+        }
+
+        const frame = node as FrameNode;
+
+        // Find existing text siblings to copy styles from
+        const textSiblings = frame.children.filter((c: SceneNode) => c.type === 'TEXT') as TextNode[];
+        if (textSiblings.length === 0) {
+          console.warn(`No text siblings found in ${patch.target} to copy styles from`);
+          failed.push(patch.target);
+          continue;
+        }
+
+        // Use the last sibling as style reference
+        const sibling = textSiblings[textSiblings.length - 1];
+
+        // Load font with fallback
+        let fontName = sibling.fontName;
+        let fontLoaded = false;
+
+        if (fontName !== figma.mixed) {
+          try {
+            await figma.loadFontAsync(fontName as FontName);
+            fontLoaded = true;
+          } catch {
+            const wasBold = (fontName as FontName).style.includes('Bold');
+            const originalFontInfo = `${(fontName as FontName).family} ${(fontName as FontName).style}`;
+            for (const fallbackFamily of FONT_FALLBACKS) {
+              try {
+                const fallbackFont = { family: fallbackFamily, style: wasBold ? 'Bold' : 'Regular' };
+                await figma.loadFontAsync(fallbackFont);
+                fontName = fallbackFont;
+                fontLoaded = true;
+                fontSubstitutions.push(`${originalFontInfo} → ${fallbackFamily}`);
+                break;
+              } catch {
+                continue;
+              }
+            }
+          }
+        }
+
+        if (!fontLoaded) {
+          // Last resort: use our default fallback
+          fontName = await getFontName(false);
+        }
+
+        // Create new text node with sibling's styles
+        const newText = figma.createText();
+        newText.fontName = fontName as FontName;
+        newText.fontSize = typeof sibling.fontSize === 'number' ? sibling.fontSize : 36;
+        newText.fills = sibling.fills !== figma.mixed ? sibling.fills : [{ type: 'SOLID', color: COLORS.body }];
+        newText.characters = patch.text;
+
+        // Match sibling's text behavior
+        if (sibling.textAutoResize) {
+          newText.textAutoResize = sibling.textAutoResize;
+        }
+        if (sibling.width > 0) {
+          newText.resize(sibling.width, newText.height);
+          newText.textAutoResize = 'HEIGHT';
+        }
+
+        // Generate name based on siblings
+        const bulletMatch = textSiblings[0]?.name.match(/^bullet-(\d+)$/);
+        const itemMatch = textSiblings[0]?.name.match(/^item-(\d+)$/);
+        if (bulletMatch) {
+          newText.name = `bullet-${textSiblings.length}`;
+        } else if (itemMatch) {
+          newText.name = `item-${textSiblings.length}`;
+        } else {
+          newText.name = `text-${textSiblings.length}`;
+        }
+
+        // Insert at position or append
+        const pos = patch.position;
+        if (pos !== undefined && pos >= 0 && pos < frame.children.length) {
+          frame.insertChild(pos, newText);
+        } else {
+          frame.appendChild(newText);
+        }
+
+        newElements.push({ id: newText.id, name: newText.name, container: frame.name });
+        added++;
+        console.log(`Added ${newText.name} to ${frame.name}: "${patch.text.substring(0, 30)}..."`);
+        continue;
+      }
+
+      // === EDIT ACTION (default): Update existing text node ===
       if (node.type !== 'TEXT') {
         console.warn(`Node ${patch.target} is not a text node (type: ${node.type})`);
         failed.push(patch.target);
@@ -2394,7 +2566,7 @@ async function applyPatches(patches: PatchRequest): Promise<{ updated: number; f
     }
   }
   
-  return { updated, failed, fontSubstitutions };
+  return { updated, added, failed, fontSubstitutions, newElements };
 }
 
 // Main message handler
@@ -2673,6 +2845,9 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         }
       }
       
+      // Collect all addable containers across all slides (AI DX)
+      const allContainers: AddableContainer[] = [];
+      
       for (const node of slideNodes) {
         try {
           // =====================================================
@@ -2716,6 +2891,12 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
             elements,
             has_diagram: hasDiagram,
           });
+          
+          // =====================================================
+          // CONTAINER DISCOVERY: Find addable Auto Layout containers
+          // =====================================================
+          const slideContainers = findAddableContainers(node, node.name || slideId);
+          allContainers.push(...slideContainers);
         } catch (err) {
           console.error(`Error processing slide "${node.name}":`, err);
         }
@@ -2723,15 +2904,20 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       const ir: DeckIR = {
         deck: { title: 'Pulled Deck' },
-        slides
+        slides,
+        containers: allContainers.length > 0 ? allContainers : undefined,
       };
       
       // Count slides with rich content
       const richSlides = slides.filter(s => (s.elements?.length || 0) > 0).length;
       const diagramSlides = slides.filter(s => s.has_diagram).length;
+      const containerCount = allContainers.length;
       
       figma.ui.postMessage({ type: 'exported', ir: JSON.stringify(ir, null, 2) });
-      figma.notify(`Pulled ${slides.length} slides (${richSlides} with elements, ${diagramSlides} with diagrams)`);
+      const stats = [`${slides.length} slides`, `${richSlides} with elements`];
+      if (diagramSlides > 0) stats.push(`${diagramSlides} with diagrams`);
+      if (containerCount > 0) stats.push(`${containerCount} addable containers`);
+      figma.notify(`Pulled ${stats.join(', ')}`);
     }
     
     if (msg.type === 'patch-elements') {
@@ -2742,17 +2928,21 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
       
       const result = await applyPatches(msg.patches);
-      
+
       // Build notification message
-      let notifyMsg = result.failed.length > 0
-        ? `Patched ${result.updated} elements (${result.failed.length} failed)`
-        : `✓ Patched ${result.updated} elements`;
+      const parts: string[] = [];
+      if (result.updated > 0) parts.push(`${result.updated} edited`);
+      if (result.added > 0) parts.push(`${result.added} added`);
       
+      let notifyMsg = result.failed.length > 0
+        ? `Patched: ${parts.join(', ')} (${result.failed.length} failed)`
+        : `✓ Patched: ${parts.join(', ') || 'no changes'}`;
+
       if (result.fontSubstitutions.length > 0) {
         const uniqueSubs = [...new Set(result.fontSubstitutions)];
         notifyMsg += ` (${uniqueSubs.length} font sub${uniqueSubs.length > 1 ? 's' : ''})`;
       }
-      
+
       figma.notify(notifyMsg, { error: result.failed.length > 0 });
       figma.ui.postMessage({ type: 'patched', ...result });
     }

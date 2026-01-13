@@ -58,14 +58,20 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Configurable capture depth** — `max_depth` param for complex nested slides
 - **Font fallback everywhere** — patches and clones both use fallback chain
 - **Table extraction** — pull captures Figma Slides tables with cell content and row/col metadata
+- **Add elements to containers** — `monorail_patch` with `action: "add"` appends text to Auto Layout containers (bullets, items). Inherits sibling styling. No delete/recreate needed!
+- **Container discovery** — `monorail_pull` surfaces addable containers so AI can discover where to use `action: "add"`
 
 ### The Gap 🔨
 - **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
+- **Pull output too large** — big decks (40+ slides) dump 10K+ lines; need summary mode or slide filtering
+- **Deck name not in pull response** — response says "Pulled Deck" not actual Figma filename; hard to know what you pulled
 - **No inline styling** — can't do mixed colors in text (e.g., "ACP is north." in cyan) — use capture/clone instead
 - **Clone preserves exact colors** — need design system remap (see `docs/discovery/design-system-remap.md`)
 - **Limited diagrams** — timeline is linear only, no loop arrows or callouts (FUTURE)
 - **Simpler three-column** — position-cards is complex; basic 3-col would be useful
+- **Add compound elements** — `action: "add"` only works for simple text nodes (bullets, items). Can't add cards, columns, or nested structures. Future: clone sibling subtree + content map.
+- **Delete elements** — can't remove individual elements (bullets, items) from a slide. See design notes below.
 
 ### Key Files
 | File | Purpose |
@@ -82,7 +88,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 | `monorail_status` | Check if Figma plugin is connected |
 | `monorail_pull` | Get deck state from Figma (slides, elements, IDs) |
 | `monorail_push` | Create/replace slides from IR (with inline validation, optional `start_index`) |
-| `monorail_patch` | Update specific text elements by Figma node ID |
+| `monorail_patch` | Edit text elements OR add new elements to Auto Layout containers (`action: "add"`) |
 | `monorail_capture` | Full node tree + design system + slots (all-in-one) |
 | `monorail_clone` | Clone slide + update content |
 | `monorail_delete` | Delete slides by Figma node ID |
@@ -105,6 +111,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - [x] **Font fallback for patches** — Deep nodes now use fallback chain (Session 19)
 - [x] **Video/embed archetype** — `video` archetype with URL placeholder + play icon (Session 23)
 - [ ] **Simpler three-column** — Basic 3-col without badges (lower complexity than position-cards)
+- [x] **Add elements to existing slides** — `monorail_patch` with `action: "add"` appends text to containers (Session 27). Works for bullets/items. Compound elements (cards, columns) still need delete/recreate.
 
 ### Priority 2: Figma Best Practices
 - [x] **Auto Layout for all archetypes** — title, quote, summary, section now use containers (Session 23)
@@ -115,6 +122,17 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ### Priority 3: Trust & Transparency
 - [ ] Multi-deck awareness — show which file is active, or warn if ambiguous
 - [ ] Better push error messages — which slide, which field failed
+- [ ] **AI Guardrails** — protection modes to prevent accidental damage:
+  - `lock: "structure"` — AI can edit text, but can't add/delete/reorder slides
+  - `lock: "content"` — AI can't modify this slide at all (read-only)
+  - `lock: "delete"` — prevent slide deletion (but allow edits)
+  - Deck-level protection — prevent `mode: "replace"` from wiping entire deck
+  - Confirmation prompts for destructive operations
+- [ ] **Context-aware plugin** — plugin adapts based on which slide you're viewing:
+  - Show current slide info in plugin UI
+  - Quick actions relevant to selected slide
+  - "Protect this slide" toggle in UI
+  - Visual indicator of slide lock status
 
 ### Priority 4: Polish (LOW)
 - [x] Eyebrow text — implemented in `position-cards` archetype (Session 18)
@@ -156,6 +174,50 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 ---
 
 ## Session Log
+
+### Session 27 (2026-01-13)
+**Add Elements to Auto Layout Containers + AI DX**
+
+Closed the CRITICAL gap: Claude can now add bullets/items without destroying human edits.
+
+**Part 1: Add Elements Feature**
+- Extended `monorail_patch` with `action: "add"` parameter
+- Target a container ID (e.g., `bullets-container`) instead of text node
+- New element inherits styling from existing siblings (font, size, color, width)
+- Auto Layout handles positioning automatically — no Y calculation needed
+- Returns new element ID for subsequent edits
+
+**Part 2: AI DX — Container Discovery**
+After building the feature, we realized Claude couldn't discover which containers support adding! Fixed by:
+- `monorail_pull` now returns a `containers` array listing Auto Layout frames
+- Each container shows: id, name, slide context, child count, element type, and usage hint
+- Pull output now starts with a summary highlighting addable containers
+
+**Example workflow:**
+```
+1. monorail_pull
+   → "bullets-container (4:599) - 3 bullets in 'Key Benefits'"
+   
+2. monorail_patch({ changes: [{ target: "4:599", text: "• New point", action: "add" }] })
+   → "✓ Patched: 1 added"
+```
+
+**Scope (intentionally narrow):**
+- ✅ Works for simple text containers (bullets-container, items-container)
+- ❌ Does NOT work for compound elements (cards, columns, timeline stages)
+- Future: clone sibling subtree + content map for complex structures
+
+**Files changed:**
+- `figma-plugin/code.ts` — `applyPatches()` + `findAddableContainers()`
+- `figma-plugin/ui.html` — relay `added`/`newElements` fields
+- `src/index.ts` — tool schema, pull response with container summary
+- `shared/types.ts` — `AddableContainer` type, `DeckIR.containers`
+
+**Key learning:** Building a feature isn't enough — must ensure AI can discover how to use it. "AI DX" = can Claude figure out the right tool call without human help?
+
+**Tested:** Full workflow validated — pull discovered containers, add bullet worked, screenshot confirmed. 
+
+**Next:** `action: "delete"` planned for future session (design notes in "What's Next").
 
 ### Session 26 (2026-01-12)
 **Technical Debt: Shared Types + esbuild Setup**
@@ -811,12 +873,14 @@ Copy this to start:
 ```
 I'm working on Monorail — Claude + human collaboration on decks via Figma.
 
-**Read first:** PLAN.md (current state, priorities, session 26 learnings)
+**Read first:** PLAN.md (current state, priorities, session 27 learnings)
 
 **What works now:**
 - Full round-trip: pull → patch → push
 - 9 MCP tools, 11 archetypes
 - **Auto Layout for ALL archetypes** — title, section, quote, summary, big-idea, bullets, two-column
+- **Add elements to containers** — `monorail_patch` with `action: "add"` for bullets/items
+- **Container discovery** — `monorail_pull` lists addable containers for AI discoverability
 - **Video archetype** — placeholder with play icon + URL
 - **Cycle diagrams** with native Figma rendering
 - **Table extraction** — pull captures Figma tables with cell content + row/col metadata
@@ -825,54 +889,62 @@ I'm working on Monorail — Claude + human collaboration on decks via Figma.
 - **esbuild bundler** — proper Figma plugin build pipeline
 
 **Gaps:**
+- **Add compound elements** — `action: "add"` only handles text. Can't add cards/columns/stages. Need: clone sibling subtree + content map.
 - **Shape round-tripping** — Pull only gets text, not shapes. Manual diagram edits lost on re-push.
 - **Table creation** — Can read tables, but can't create/update via IR yet.
 - **Icons** — Hand-drawn shapes look bad. Figma has Heroicons library we could use.
 - **Simpler three-column** — Basic 3-col without badges (position-cards is complex)
 - **Plugin module wiring** — modules extracted to `src/`, need tests then wiring
+- **code.ts is 3,400 lines** — impacts AI-assisted dev velocity (can't read whole file)
 
 **This session options:**
 
-**Option A: Wire up plugin modules (test-driven refactor)**
+**Option A: Wire up plugin modules (test-driven refactor) — HIGH VALUE**
 Modules extracted to `figma-plugin/src/` but not connected yet:
 - Write tests against current `code.ts` behavior
 - Refactor `code.ts` to import from modules
 - Verify tests still pass
-- `handlers/` — message handlers (push, pull, patch, etc.)
 - Would make codebase much more maintainable
+- Improves AI-assisted development (smaller files to reason about)
 
-**Option B: More diagram types (Priority 5)**
+**Option B: Delete elements (action: "delete")**
+Remove individual elements from Auto Layout containers. Design considerations from our `action: "add"` experience:
+
+- **AI DX (discoverability):** Element IDs already in pull output ✓ — no extra work needed
+- **Return value:** Report what was deleted: `{ deleted: 1, element: "bullet-3", container: "bullets-container" }`
+- **Batch support:** Allow `changes: [{ target: "28:93", action: "delete" }, ...]` for multi-delete
+- **Error handling:** If ID not found, add to `failed[]` array (consistent with edit/add)
+- **Safety:** No confirmation needed — Figma has undo. But maybe warn if deleting from a container with only 1 child?
+- **Auto Layout bonus:** Container auto-reflows after delete — no manual repositioning
+
+Implementation: ~30 min. Extend `applyPatches()` in `code.ts`, similar pattern to add.
+
+**Option C: Add compound elements (extend action: "add")**
+Generalize add to handle nested structures:
+- `clone_sibling: true` — clone last child (entire subtree)
+- `content_map: { "title": "...", "body": "..." }` — update text in clone
+- Would enable adding cards, columns, timeline stages
+
+**Option C: More diagram types (Priority 5)**
 Extend the diagram DSL:
 - `funnel` — top-to-bottom narrowing stages
 - `timeline` — horizontal stages with markers  
 - `matrix` — 2x2 grid with labels
-- File: `figma-plugin/code.ts`, search for `renderCycleDiagram`
 
-**Option C: Shape round-tripping (Discovery)**
+**Option D: Shape round-tripping (Discovery)**
 Enable true round-trip of manual diagram edits.
 - Extend pull to detect shapes (ellipses, vectors, rectangles)
 - Store positions/sizes/colors in IR
 - Recreate exactly on push
 
-**Option D: Table write support (Discovery)**
-Can read tables, now explore creating/updating them.
-- Investigate `figma.createTable()` API
-- Add `table` archetype or IR field
-- Useful for comparisons, feature matrices
-
-**Option E: Heroicons integration (Discovery)**
-Use Figma's built-in Heroicons library for diagram icons.
-- `importComponentByKeyAsync()` to pull from library
-- Much cleaner than hand-drawing shapes
-- Both outline + solid variants available
-
-**Option F: Simpler three-column archetype**
+**Option E: Simpler three-column archetype**
 Basic 3-col layout without badges/complexity of position-cards.
 - Just headline + 3 titled body sections
 - Use Auto Layout pattern from two-column
 
 **Key files:**
-- `figma-plugin/code.ts` — rendering logic (monolithic, ready to split)
+- `figma-plugin/code.ts` — rendering logic (3,400 lines, ready to split)
+- `figma-plugin/src/` — extracted modules (not wired up yet)
 - `src/index.ts` — MCP tools + IR schema
 - `shared/types.ts` — shared TypeScript types
 - `PLAN.md` — session logs, priorities

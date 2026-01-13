@@ -212,6 +212,8 @@ export interface Slide {
 export interface DeckIR {
   deck?: { title: string };
   slides: Slide[];
+  /** Auto Layout containers that support adding elements (from pull only) */
+  containers?: AddableContainer[];
 }
 
 // =============================================================================
@@ -373,10 +375,14 @@ export interface DesignSystem {
 // =============================================================================
 
 export interface PatchChange {
-  /** Figma node ID to update */
+  /** Figma node ID — TEXT node for edit, FRAME container for add */
   target: string;
   /** New text content */
   text: string;
+  /** Action: 'edit' (default) updates existing, 'add' creates new in container */
+  action?: 'edit' | 'add';
+  /** For 'add' only: insert position (0=first, -1 or omit=append) */
+  position?: number;
 }
 
 export interface PatchRequest {
@@ -384,10 +390,23 @@ export interface PatchRequest {
   changes: PatchChange[];
 }
 
+export interface NewElement {
+  id: string;
+  name: string;
+  container: string;
+}
+
 export interface PatchResult {
+  /** Number of existing elements edited */
   updated: number;
+  /** Number of new elements added */
+  added: number;
+  /** IDs that failed */
   failed: string[];
+  /** Font substitutions made */
   fontSubstitutions?: string[];
+  /** New elements created (for 'add' actions) */
+  newElements?: NewElement[];
 }
 
 export interface DeleteResult {
@@ -423,4 +442,29 @@ export interface CloneResult {
 export interface CaptureResult {
   template: CapturedNode | string;
   nodeCount: number;
+}
+
+// =============================================================================
+// ADDABLE CONTAINER (AI DX: discoverable containers for action: "add")
+// =============================================================================
+
+/**
+ * An Auto Layout container that supports adding new elements.
+ * Surfaced in pull output so AI can discover targets for action: "add".
+ */
+export interface AddableContainer {
+  /** Figma node ID - use this as target for action: "add" */
+  id: string;
+  /** Container name (e.g., "bullets-container", "items-container") */
+  name: string;
+  /** Parent slide's Figma ID */
+  slide_id: string;
+  /** Parent slide's name */
+  slide_name: string;
+  /** Number of children currently in container */
+  child_count: number;
+  /** What kind of elements this container holds */
+  element_type: 'bullet' | 'item' | 'card' | 'column' | 'other';
+  /** Usage hint for AI */
+  hint: string;
 }

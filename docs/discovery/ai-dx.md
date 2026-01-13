@@ -118,8 +118,25 @@ How would we know AI DX is good?
 - Less "can you check if that worked?" from users
 - Claude proactively uses screenshot for QA
 
+## Lessons Learned
+
+### Session 27: Container Discovery
+
+**Problem:** We built `action: "add"` for `monorail_patch` but Claude couldn't discover which containers support adding. The feature required a container ID (like `bullets-container`), but `monorail_pull` only surfaced TEXT node IDs.
+
+**Solution:** Enhanced `monorail_pull` to return a `containers` array listing all Auto Layout frames that accept new elements. Each entry includes:
+- `id` — Figma node ID (target for action:"add")
+- `name` — Container name
+- `slide_id`, `slide_name` — Context
+- `child_count` — How many elements already exist
+- `element_type` — "bullet" | "item" | "column"
+- `hint` — Usage guidance
+
+**Key insight:** Building a feature isn't enough. Ask: "Can Claude discover how to use this without human help?" If not, the feature has an AI DX bug.
+
 ## Next Steps
 
+- [x] Container discovery in pull output (Session 27)
 - [ ] Audit all tool descriptions for "when to use" clarity
 - [ ] Add workflow hints to tool responses
 - [ ] Consider auto-screenshot after push (opt-out?)
