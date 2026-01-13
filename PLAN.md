@@ -211,58 +211,59 @@ These are infrastructure improvements that compound but aren't blocking current 
 ## Session Log
 
 ### Session 29 (2026-01-13)
-**Discovery: Can Claude Design? + Primitives Tool**
+**Discovery: Primitives Tool + Design Principles + Dogfood**
 
-Answered the open question from Session 28: **Yes, Claude can design slides from primitives.**
+Three parts this session:
 
 **Part 1: Built `monorail_primitives` Tool**
 
-New MCP tool (#10) for low-level slide design:
+New MCP tool (#10) for low-level slide design. Operations: frame, auto_layout_frame, text, rect, ellipse, line. Colors can be named or RGB.
 
-| Operation | Creates |
-|-----------|---------|
-| `frame` | Basic frame with position/size |
-| `auto_layout_frame` | Auto Layout container |
-| `text` | Text node with font, size, color, maxWidth |
-| `rect` | Rectangle with fill, stroke, cornerRadius |
-| `ellipse` | Circle/ellipse with fill, stroke |
-| `line` | Line with length, rotation, strokeWeight |
+**Part 2: Design Principles Added to Skill Doc**
 
-Colors can be named (`headline`, `cyan`, `orange`, etc.) or RGB objects.
+Comprehensive spatial guidelines added to `monorail://skill`:
+- Positioning patterns (centered vs top-anchored vs split)
+- Typography scale (96px hero → 16px caption)
+- Spacing rules (section gaps, card padding)
+- Self-critique checklist (verify after screenshot)
+
+**Part 3: Dogfood — GTM Operating Canvas**
+
+Built 13 slides from an HTML operating canvas mockup. Key findings:
+
+| Approach | Slides | Speed | Quality |
+|----------|--------|-------|---------|
+| Archetypes | 9 | ⚡ Fast (batch) | 90% |
+| Primitives | 4 | Slower (1 per call) | 85% |
+
+**Workflow that emerged:**
+- Archetypes for content-first slides (bullets, quotes, two-column)
+- Primitives for layout-first slides (timeline, competitive grid, status cards)
+- Screenshot to verify complex layouts
+- Design principles eliminated need for iteration on most slides
+
+**Template candidates identified:**
+- Timeline row (4 month cards)
+- Competitive grid (3 competitors + edge callout)
+- Status cards (color-coded by state)
+- Split panel (left label + right content)
+
+**Gaps confirmed:**
+- Icons (need component library)
+- Dense grids (9+ items)
+- Textures/patterns
+- Badges/pills
+
+**Key insight:** Primitives + Templates is the right architecture. Primitives for first drafts and exploration, templates (capture/clone) for repeatable production quality.
 
 **Files changed:**
 - `figma-plugin/code.ts` — `apply-primitives` handler, `PrimitiveOperation` type
 - `figma-plugin/ui.html` — WebSocket relay for primitives
-- `src/index.ts` — `monorail_primitives` tool definition + handler
+- `src/index.ts` — `monorail_primitives` tool + design principles in skill resource
+- `docs/decisions/template-first-architecture.md` — marked VALIDATED
+- `PLAN.md` — session log, updated roadmap
 
-**Part 2: Design Quality Testing**
-
-Created 5 slides from scratch to test Claude's design capability:
-
-| Slide | Complexity | Quality |
-|-------|------------|---------|
-| Quote | Simple | 95% (needed vertical centering fix) |
-| 3-column pillars | Medium | 85% |
-| Stats/metrics | Medium | 90% |
-| Editorial hero | Medium | 85% |
-| Agenda (split) | Complex | 80% |
-| Security 3-col | Very Complex | 75% |
-
-**Key learnings about Claude's design intuition:**
-- Default to top-left positioning (wrong for quotes, need center)
-- Good at hierarchy (headline > title > body sizing)
-- Good at color coding (accent colors for emphasis)
-- Struggles with: icons, connectors, patterns/textures, pixel-perfect spacing
-
-**Part 3: Strategic Implications**
-
-The primitives spike answered the architecture question:
-
-| Approach | When to Use |
-|----------|-------------|
-| **Primitives** | Quick drafts, 80% quality, rapid iteration |
-| **Capture/Clone** | Production quality, 100% fidelity, preserve details |
-| **Archetypes** | Constrained content, fast rendering, no design decisions |
+**Tool count:** 9 → 10
 
 **Primitives ceiling:** ~75-80% on complex slides. The last 20% needs:
 - Icons (component library)
