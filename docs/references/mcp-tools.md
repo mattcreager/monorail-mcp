@@ -28,35 +28,67 @@ Returns: Connection state, plugin name/version, timestamp
 ---
 
 ### `monorail_pull`
-Get current deck state from Figma, including addable containers.
+Get current deck state from Figma. Supports three modes for different use cases.
 
 ```
+Parameters:
+- slide_id?: string — Pull only this slide (by Figma node ID). Returns filtered data.
+- mode?: "full" | "summary" — Output mode:
+  - "full" (default): Complete element data for all slides
+  - "summary": Just slide IDs, names, archetypes (compact overview)
+
 Returns:
+- deck.title — Actual Figma filename (not "Pulled Deck" anymore!)
 - slides[].elements[] — ALL text elements with Figma node IDs (for editing)
 - slides[].has_diagram — true if complex nested content
 - slides[].figma_id — Figma node ID for the slide
 - slides[].archetype — detected archetype (may be "unknown")
 - containers[] — Auto Layout frames that support action:"add"
-  - id: Figma node ID (use as target for action:"add")
-  - name: Container name (e.g., "bullets-container")
-  - slide_id, slide_name: Which slide contains it
-  - child_count: Current number of elements
-  - element_type: "bullet" | "item" | "column"
-  - hint: Usage guidance
 ```
 
-**Use when:** Need to see what's on the slides before making changes. The `containers` array tells you where you can ADD new elements.
+**Three modes:**
 
-**Example output:**
+1. **Full deck** (default): All slides with elements. Use before bulk patching.
+2. **Single slide** (`slide_id` param): One slide's full data. Use when you know which slide to edit.
+3. **Summary** (`mode: "summary"`): Just slide IDs, names, archetypes. Use to see deck structure without element noise.
+
+**Example: Summary mode (for large decks)**
 ```
-✓ Pulled deck from Figma
-  3 slides, 2 addable containers
+monorail_pull({ mode: "summary" })
+
+✓ Pulled "GTM Strategy" summary (8 slides)
+
+| #  | Figma ID | Name                    | Archetype     |
+|----|----------|-------------------------|---------------|
+|  1 | 9:666    | GTM Kick-off            | title         |
+|  2 | 9:700    | The Problem             | big-idea      |
+| ...
+
+Tip: Use slide_id param to pull full details for a specific slide.
+```
+
+**Example: Single slide (targeted patching)**
+```
+monorail_pull({ slide_id: "9:700" })
+
+✓ Pulled slide "The Problem" (9:700)
+  12 elements, 1 addable container
+
+{ "deck": {...}, "slides": [/* just this slide */], ... }
+```
+
+**Example: Full deck (default)**
+```
+monorail_pull()
+
+✓ Pulled "GTM Strategy" from Figma
+  8 slides, 3 addable containers
 
 ## Addable Containers (use with action: "add")
   • bullets-container (4:599) - 3 bullets in "Key Benefits"
-    Add bullet points with action:"add"
-  • items-container (4:721) - 4 items in "Summary"
-    Add summary items with action:"add"
+  ...
+
+Tip: For large decks, use mode:'summary' to see structure, then slide_id to pull specific slides.
 ```
 
 ---

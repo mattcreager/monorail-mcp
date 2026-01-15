@@ -612,10 +612,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_pull",
         description:
-          "Pull the current deck state from Figma. Returns slides with all elements AND addable containers. The 'elements' array has TEXT node IDs for editing. The 'containers' array lists Auto Layout frames where you can ADD new elements (e.g., bullets-container). Use containers with monorail_patch action:'add' to append items without deleting the slide.",
+          "Pull deck state from Figma. Three modes:\n\n" +
+          "1. **Full deck** (default): All slides with elements + containers. Use before bulk patching.\n" +
+          "2. **Single slide** (slide_id param): One slide's full data. Use when you know which slide to edit.\n" +
+          "3. **Summary** (mode:'summary'): Just slide IDs, names, archetypes. Use to see deck structure without element noise.\n\n" +
+          "Returns Figma node IDs for patching. The 'containers' array shows where you can ADD new elements with action:'add'.",
         inputSchema: {
           type: "object" as const,
-          properties: {},
+          properties: {
+            slide_id: {
+              type: "string",
+              description: "Optional: Figma node ID of a single slide to pull. Returns only that slide's data. Get IDs from a summary pull first.",
+            },
+            mode: {
+              type: "string",
+              enum: ["full", "summary"],
+              description: "Output mode. 'full' (default) returns complete element data. 'summary' returns just slide IDs, names, and archetypes — fast way to see deck structure.",
+            },
+          },
         },
       },
       {
@@ -815,8 +829,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 properties: {
                   op: {
                     type: "string",
-                    enum: ["frame", "auto_layout_frame", "text", "rect", "ellipse", "line", "arrow"],
-                    description: "Operation type",
+                    enum: ["background", "frame", "auto_layout_frame", "text", "rect", "ellipse", "line", "arrow"],
+                    description: "Operation type. Use 'background' to set the slide's native background color (not a rect layer). Use 'rect' only for visible shapes, NOT for backgrounds.",
                   },
                   name: {
                     type: "string",
@@ -843,10 +857,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   fontSize: { type: "number", description: "Font size in pixels (for text op)" },
                   bold: { type: "boolean", description: "Bold font (for text op)" },
                   maxWidth: { type: "number", description: "Maximum width before wrapping (for text op)" },
-                  // Colors (named: 'headline', 'body', 'muted', 'cyan', 'orange', 'green', 'pink', 'red', 'yellow' or {r,g,b})
+                  // Colors (named: 'headline', 'body', 'muted', 'cyan', 'orange', 'green', 'pink', 'red', 'yellow', hex '#1a1a2e', or {r,g,b})
                   color: { type: "string", description: "Color for text, line, or arrow" },
-                  fill: { type: "string", description: "Fill color for shapes" },
+                  fill: { type: "string", description: "Fill color for solid backgrounds and shapes" },
                   stroke: { type: "string", description: "Stroke color for shapes" },
+                  // Gradient (for background op only)
+                  gradient: {
+                    type: "object",
+                    description: "Gradient fill (for background op). Use instead of 'fill' for gradient backgrounds.",
+                    properties: {
+                      type: { type: "string", enum: ["linear", "radial"], description: "Gradient type (default: linear)" },
+                      angle: { type: "number", description: "Angle in degrees. 0=left-to-right, 90=top-to-bottom (default: 90)" },
+                      stops: {
+                        type: "array",
+                        description: "Color stops. Each has 'position' (0-1) and 'color' (hex or named)",
+                        items: {
+                          type: "object",
+                          properties: {
+                            position: { type: "number", description: "Position from 0 (start) to 1 (end)" },
+                            color: { type: "string", description: "Color at this stop (hex or named)" }
+                          },
+                          required: ["position", "color"]
+                        }
+                      }
+                    },
+                    required: ["stops"]
+                  },
                   strokeWeight: { type: "number", description: "Stroke width (for line)" },
                   cornerRadius: { type: "number", description: "Corner radius (for rect)" },
                   // Auto Layout properties
@@ -901,7 +937,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // =========================================================================
     case "monorail_pull": {
       const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
-      
+
       if (!isConnected) {
         return {
           content: [
@@ -927,6 +963,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      // Parse optional params
+      const slideIdFilter = args?.slide_id as string | undefined;
+      const mode = (args?.mode as string) || "full";
+
       // Create pending request and send to plugin
       const pullPromise = createPendingRequest<DeckIR>('pull', "Timeout waiting for plugin export");
       connectedPlugin!.send(JSON.stringify({ type: "request-export" }));
@@ -937,11 +977,97 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Update currentIR in server state
         currentIR = ir;
 
-        // Build a helpful summary (AI DX)
+        const deckName = ir.deck?.title || "Untitled Deck";
         const slideCount = ir.slides?.length || 0;
+
+        // =================================================================
+        // MODE: SUMMARY — compact deck overview
+        // =================================================================
+        if (mode === "summary") {
+          let summary = `✓ Pulled "${deckName}" summary (${slideCount} slides)\n\n`;
+          summary += `| #  | Figma ID | Name                    | Archetype     |\n`;
+          summary += `|----|----------|-------------------------|---------------|\n`;
+          
+          ir.slides.forEach((slide, idx) => {
+            const name = (slide.content?.headline || slide.id || "Untitled").substring(0, 23).padEnd(23);
+            const arch = slide.archetype.padEnd(13);
+            const num = String(idx + 1).padStart(2);
+            summary += `| ${num} | ${slide.figma_id?.padEnd(8) || "        "} | ${name} | ${arch} |\n`;
+          });
+
+          // Include containers in summary if present
+          const containerCount = ir.containers?.length || 0;
+          if (containerCount > 0) {
+            summary += `\n## Addable Containers (${containerCount})\n`;
+            for (const c of ir.containers!) {
+              summary += `  • ${c.name} (${c.id}) in "${c.slide_name}"\n`;
+            }
+          }
+
+          summary += `\nTip: Use slide_id param to pull full details for a specific slide.`;
+
+          return {
+            content: [{ type: "text" as const, text: summary }],
+          };
+        }
+
+        // =================================================================
+        // MODE: SINGLE SLIDE — filter to one slide
+        // =================================================================
+        if (slideIdFilter) {
+          const slide = ir.slides.find(s => s.figma_id === slideIdFilter);
+          
+          if (!slide) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Error: Slide not found with figma_id "${slideIdFilter}". Use mode:'summary' to see available slide IDs.`,
+              }],
+              isError: true,
+            };
+          }
+
+          const elementCount = slide.elements?.length || 0;
+          const slideName = slide.content?.headline || slide.id || "Untitled";
+          
+          // Find containers for this slide
+          const slideContainers = ir.containers?.filter(c => c.slide_id === slideIdFilter) || [];
+          
+          let summary = `✓ Pulled slide "${slideName}" (${slideIdFilter})\n`;
+          summary += `  ${elementCount} elements`;
+          
+          if (slideContainers.length > 0) {
+            summary += `, ${slideContainers.length} addable container${slideContainers.length > 1 ? 's' : ''}\n\n`;
+            summary += `## Addable Containers (use with action: "add")\n`;
+            for (const c of slideContainers) {
+              summary += `  • ${c.name} (${c.id}) - ${c.child_count} ${c.element_type}s\n`;
+              summary += `    ${c.hint}\n`;
+            }
+          } else {
+            summary += `\n`;
+          }
+
+          // Return filtered IR with just this slide
+          const filteredIr: DeckIR = {
+            deck: ir.deck,
+            slides: [slide],
+            containers: slideContainers.length > 0 ? slideContainers : undefined,
+          };
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: `${summary}\n${JSON.stringify(filteredIr, null, 2)}`,
+            }],
+          };
+        }
+
+        // =================================================================
+        // MODE: FULL — complete deck data (default)
+        // =================================================================
         const containerCount = ir.containers?.length || 0;
         
-        let summary = `✓ Pulled deck from Figma\n`;
+        let summary = `✓ Pulled "${deckName}" from Figma\n`;
         summary += `  ${slideCount} slides`;
         
         // Highlight containers if present (key for action: "add")
@@ -955,6 +1081,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary += `\n`;
         } else {
           summary += `\n\n`;
+        }
+
+        // Tip for large decks
+        if (slideCount > 10) {
+          summary += `Tip: For large decks, use mode:'summary' to see structure, then slide_id to pull specific slides.\n\n`;
         }
 
         return {
@@ -1791,6 +1922,41 @@ You have "eyes" now! Use \`monorail_screenshot\` to see what Figma actually rend
 ## Design Principles (for \`monorail_primitives\`)
 
 When designing slides from scratch, follow these spatial and visual guidelines.
+
+### Background (Solid or Gradient)
+
+**Always use \`op: "background"\` to set the slide's background.** This sets the slide's native background property.
+
+**Solid color:**
+\`\`\`json
+{ "op": "background", "fill": "#0f0f1a" }
+\`\`\`
+
+**Linear gradient (top-to-bottom fade):**
+\`\`\`json
+{ "op": "background", "gradient": {
+    "angle": 90,
+    "stops": [
+      { "position": 0, "color": "#1a1a2e" },
+      { "position": 1, "color": "#0a0a14" }
+    ]
+  }
+}
+\`\`\`
+
+**Radial gradient (spotlight effect):**
+\`\`\`json
+{ "op": "background", "gradient": {
+    "type": "radial",
+    "stops": [
+      { "position": 0, "color": "#2a2a4e" },
+      { "position": 1, "color": "#0f0f1a" }
+    ]
+  }
+}
+\`\`\`
+
+**Never use \`op: "rect"\` for backgrounds.** A rect creates a shape layer that sits ON TOP of the slide's existing background, causing layering issues.
 
 ### Canvas Dimensions
 - Slide: 1920 × 1080 pixels

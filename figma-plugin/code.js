@@ -50,15 +50,8 @@
     // Card background
     cardBgHighlight: { r: 0.12, g: 0.14, b: 0.16 },
     // Highlighted card (middle)
-    featureBg: { r: 0.08, g: 0.08, b: 0.1 },
+    featureBg: { r: 0.08, g: 0.08, b: 0.1 }
     // Feature row background
-    // Attention colors
-    pink: { r: 1, g: 0.2, b: 0.6 },
-    // Hot pink for "look here!" arrows
-    red: { r: 0.95, g: 0.25, b: 0.25 },
-    // Red for warnings/flags
-    yellow: { r: 0.95, g: 0.85, b: 0.2 }
-    // Yellow for highlights
   };
   var SLIDE_WIDTH = 1920;
   var SLIDE_HEIGHT = 1080;
@@ -1930,7 +1923,7 @@
     return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
   }
   figma.ui.onmessage = async (msg) => {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     try {
       if (msg.type === "apply-ir") {
         if (!msg.ir) {
@@ -2167,7 +2160,7 @@
           }
         }
         const ir = {
-          deck: { title: "Pulled Deck" },
+          deck: { title: figma.root.name },
           slides,
           containers: allContainers.length > 0 ? allContainers : void 0
         };
@@ -2779,10 +2772,8 @@
             if (typeof colorRef === "object") {
               return colorRef;
             }
-            // Parse hex colors like "#1a1a2e" or "#fff"
             if (typeof colorRef === "string" && colorRef.startsWith("#")) {
               let hex = colorRef.slice(1);
-              // Expand shorthand (#fff -> #ffffff)
               if (hex.length === 3) {
                 hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
               }
@@ -2799,6 +2790,8 @@
             return COLORS.white;
           };
           var resolveParent = resolveParent2, resolveColor = resolveColor2;
+          const nodesByName = {};
+          const createdNodes = [];
           let targetSlide;
           if (slideId) {
             const node = await figma.getNodeByIdAsync(slideId);
@@ -2818,27 +2811,59 @@
             targetSlide.name = "Primitives Slide";
           }
           await loadFontWithFallback();
-          const nodesByName = {};
-          const createdNodes = [];
           for (const op of operations) {
             try {
-              if (op.op === "frame") {
+              if (op.op === "background") {
+                if ("fills" in targetSlide) {
+                  if (op.gradient) {
+                    const angle = ((_c = op.gradient.angle) != null ? _c : 90) * Math.PI / 180;
+                    const cos = Math.cos(angle);
+                    const sin = Math.sin(angle);
+                    const gradientTransform = [
+                      [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+                      [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+                    ];
+                    const gradientStops = op.gradient.stops.map((stop) => ({
+                      position: stop.position,
+                      color: __spreadProps(__spreadValues({}, resolveColor2(stop.color)), { a: 1 })
+                    }));
+                    if (op.gradient.type === "radial") {
+                      targetSlide.fills = [{
+                        type: "GRADIENT_RADIAL",
+                        gradientTransform,
+                        gradientStops
+                      }];
+                    } else {
+                      targetSlide.fills = [{
+                        type: "GRADIENT_LINEAR",
+                        gradientTransform,
+                        gradientStops
+                      }];
+                    }
+                    createdNodes.push({ name: "background", id: targetSlide.id, type: "GRADIENT" });
+                  } else {
+                    const color = resolveColor2(op.fill || op.color);
+                    targetSlide.fills = [{ type: "SOLID", color }];
+                    createdNodes.push({ name: "background", id: targetSlide.id, type: "BACKGROUND" });
+                  }
+                }
+              } else if (op.op === "frame") {
                 const frame = figma.createFrame();
-                frame.name = op.name;
-                frame.x = op.x;
-                frame.y = op.y;
+                frame.name = op.name || "frame";
+                frame.x = op.x || 0;
+                frame.y = op.y || 0;
                 if (op.width) frame.resize(op.width, op.height || 100);
                 frame.fills = [];
                 resolveParent2(op.parent).appendChild(frame);
-                nodesByName[op.name] = frame;
-                createdNodes.push({ name: op.name, id: frame.id, type: "FRAME" });
+                if (op.name) nodesByName[op.name] = frame;
+                createdNodes.push({ name: op.name || "frame", id: frame.id, type: "FRAME" });
               } else if (op.op === "auto_layout_frame") {
                 const frame = figma.createFrame();
-                frame.name = op.name;
+                frame.name = op.name || "auto-layout";
                 frame.layoutMode = op.direction || "VERTICAL";
                 frame.primaryAxisSizingMode = "AUTO";
                 frame.counterAxisSizingMode = "AUTO";
-                frame.itemSpacing = (_c = op.spacing) != null ? _c : 24;
+                frame.itemSpacing = (_d = op.spacing) != null ? _d : 24;
                 if (op.padding) {
                   frame.paddingTop = op.padding;
                   frame.paddingBottom = op.padding;
@@ -2858,19 +2883,22 @@
                 parent.appendChild(frame);
                 if (op.x !== void 0) frame.x = op.x;
                 if (op.y !== void 0) frame.y = op.y;
-                nodesByName[op.name] = frame;
-                createdNodes.push({ name: op.name, id: frame.id, type: "AUTO_LAYOUT" });
+                if (op.name) nodesByName[op.name] = frame;
+                createdNodes.push({ name: op.name || "auto-layout", id: frame.id, type: "AUTO_LAYOUT" });
               } else if (op.op === "text") {
                 const textNode = figma.createText();
                 if (op.name) textNode.name = op.name;
                 const fontName = await getFontName(op.bold || false);
                 textNode.fontName = fontName;
-                textNode.fontSize = op.fontSize;
+                textNode.fontSize = op.fontSize || 24;
                 textNode.fills = [{ type: "SOLID", color: resolveColor2(op.color) }];
-                textNode.characters = op.text;
+                textNode.characters = op.text || "";
                 if (op.maxWidth) {
                   textNode.resize(op.maxWidth, textNode.height);
                   textNode.textAutoResize = "HEIGHT";
+                }
+                if (op.alignment) {
+                  textNode.textAlignHorizontal = op.alignment;
                 }
                 const parent = resolveParent2(op.parent);
                 parent.appendChild(textNode);
@@ -2883,9 +2911,9 @@
               } else if (op.op === "rect") {
                 const rect = figma.createRectangle();
                 if (op.name) rect.name = op.name;
-                rect.x = op.x;
-                rect.y = op.y;
-                rect.resize(op.width, op.height);
+                rect.x = op.x || 0;
+                rect.y = op.y || 0;
+                rect.resize(op.width || 100, op.height || 100);
                 rect.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
                 if (op.stroke) {
                   rect.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
@@ -2902,9 +2930,9 @@
               } else if (op.op === "ellipse") {
                 const ellipse = figma.createEllipse();
                 if (op.name) ellipse.name = op.name;
-                ellipse.x = op.x;
-                ellipse.y = op.y;
-                ellipse.resize(op.width, op.height);
+                ellipse.x = op.x || 0;
+                ellipse.y = op.y || 0;
+                ellipse.resize(op.width || 100, op.height || 100);
                 ellipse.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
                 if (op.stroke) {
                   ellipse.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
@@ -2918,9 +2946,9 @@
               } else if (op.op === "line") {
                 const line = figma.createLine();
                 if (op.name) line.name = op.name;
-                line.x = op.x;
-                line.y = op.y;
-                line.resize(op.length, 0);
+                line.x = op.x || 0;
+                line.y = op.y || 0;
+                line.resize(op.length || 100, 0);
                 line.rotation = op.rotation || 0;
                 line.strokes = [{ type: "SOLID", color: resolveColor2(op.color) }];
                 line.strokeWeight = op.strokeWeight || 2;
@@ -2932,14 +2960,15 @@
               } else if (op.op === "arrow") {
                 const color = resolveColor2(op.color);
                 const strokeWeight = op.strokeWeight || 4;
-                const length = op.length;
+                const length = op.length || 100;
                 const headLength = op.headSize || strokeWeight * 4;
                 const headWidth = headLength * 0.6;
                 let angle = 0;
-                if (typeof op.direction === "number") {
-                  angle = op.direction;
+                const dir = op.direction;
+                if (typeof dir === "number") {
+                  angle = dir;
                 } else {
-                  switch (op.direction) {
+                  switch (dir) {
                     case "right":
                       angle = 0;
                       break;
@@ -3005,8 +3034,8 @@
                 arrow.strokeCap = "ROUND";
                 arrow.strokeJoin = "ROUND";
                 arrow.fills = [];
-                arrow.x = op.x;
-                arrow.y = op.y;
+                arrow.x = op.x || 0;
+                arrow.y = op.y || 0;
                 arrow.rotation = -angle;
                 parent.appendChild(arrow);
                 if (op.name) {
@@ -3015,7 +3044,7 @@
                 createdNodes.push({ name: op.name || "arrow", id: arrow.id, type: "ARROW" });
               }
             } catch (opErr) {
-              console.error(`Operation failed:`, op, opErr);
+              console.error("Operation failed:", op, opErr);
               throw new Error(`Operation "${op.op}" failed: ${opErr instanceof Error ? opErr.message : String(opErr)}`);
             }
           }

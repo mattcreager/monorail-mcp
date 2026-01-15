@@ -63,13 +63,9 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Primitives for design** — `monorail_primitives` creates slides from scratch (frames, text, shapes) — enables Claude to design without archetypes
 
 ### The Gap 🔨
-- **TECH DEBT: Primitives not in TypeScript** — Handler only in `code.js`, not `code.ts`. Source out of sync. Blocks safe rebuilds.
-- **Primitives: Background layering** — Adding bg rect layers on top of slide's existing background. Should skip or use `setSlideBackground()`.
 - **Primitives: Arrows are vector paths** — Heavy for simple connectors. Add line + strokeCap option.
 - **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
-- **Pull output too large** — big decks (40+ slides) dump 10K+ lines; need summary mode or slide filtering
-- **Deck name not in pull response** — response says "Pulled Deck" not actual Figma filename; hard to know what you pulled
 - **No inline styling** — can't do mixed colors in text (e.g., "ACP is north." in cyan) — use capture/clone instead
 - **Clone preserves exact colors** — need design system remap (see `docs/discovery/design-system-remap.md`)
 - **Limited diagrams** — timeline is linear only, no loop arrows or callouts (FUTURE)
@@ -103,37 +99,30 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 ## What's Next
 
-**Session 29 validated:** Claude can design with primitives (75-95% quality). Design principles added to skill doc. Template-first architecture confirmed as direction.
+**Session 32:** Tech debt resolved (primitives in TypeScript), background layering fixed (`op: "background"`), deck name in pull, text alignment.
 
-**Session 30 (dogfood):** Built 4-slide GTM operating system. Found friction points documented in `docs/failures.md`.
-
-**Session 31 (deep dogfood):** Extended strategy deck session — built 4 interconnected slides (THE MOMENT, GRIDLOCK→UNLOCK, GRAVITY, WHAT WE'RE TESTING). Heavy primitives usage with iterative patches. Key findings:
-- ✅ Primitives + patch loop works great for complex, info-dense slides
-- ✅ Hex colors working (fix from Session 30 holding)
-- ✅ Screenshot essential for rapid iteration
-- ⚠️ Patch delete operations failed (unclear if bug or user error)
-- ⚠️ Pull output massive (8500 lines) — hard to find specific nodes
-- 💡 Text alignment (center/right) would help
-- 💡 Text arrows (→) work fine as workaround for connector arrows
+**Remaining quick wins:**
+- [ ] Simpler arrows (line + strokeCap)
+- [ ] Patch delete debugging
 
 ### Immediate (Next Session)
 
-- [ ] **TECH DEBT: Port primitives to TypeScript** — The `apply-primitives` handler exists ONLY in `code.js`, not `code.ts`. Source is out of sync. Must port before any rebuild.
-  - Hex color parsing fix (already in code.js, needs porting)
-  - Full handler ~250 lines
+- [x] **TECH DEBT: Port primitives to TypeScript** — DONE (Session 32). Handler now in `code.ts`, safe to rebuild.
 
 - [ ] **Primitives Rev 2** — Fill gaps discovered in Session 29 + 30 + 31:
-  - [x] Hex color parsing — DONE in code.js, needs porting to code.ts
-  - [ ] Text alignment (center, right) — quick win, came up in Session 31
+  - [x] Hex color parsing — DONE (Session 32)
+  - [x] Text alignment (center, right) — DONE (Session 32)
+  - [x] Background operation — DONE (Session 32). Use `op: "background"` instead of rect.
+  - [x] Gradient backgrounds — DONE (Session 32). Linear and radial via `gradient` property.
   - [ ] Simpler arrows — line + strokeCap option vs vector paths (note: text arrows `→` work great as workaround)
-  - [ ] Don't layer background rect on existing slides — slide already has bg
-  - [ ] Gradients — nice-to-have
   - [ ] Image placeholder — "image goes here" frame
+  - DEFER: Image backgrounds (see `docs/discovery/background-fills.md`)
   - DEFER: Icons (needs component library integration, bigger lift)
 
-- [ ] **Pull improvements** — Session 31 friction:
-  - [ ] Add `slide_id` filter to `monorail_pull` — get just one slide's elements
-  - [ ] Summary mode — slide IDs + names without full element trees
+- [x] **Pull improvements** — Session 31 friction: (Session 33)
+  - [x] Add `slide_id` filter to `monorail_pull` — get just one slide's elements
+  - [x] Summary mode — slide IDs + names without full element trees
+  - (Deck name already fixed in Session 32)
 
 - [ ] **Patch delete debugging** — Session 31 delete operations failed silently. Investigate handler.
 
@@ -235,6 +224,75 @@ These are infrastructure improvements that compound but aren't blocking current 
 ---
 
 ## Session Log
+
+### Session 33 (2026-01-15)
+**Pull Improvements: slide_id Filter + Summary Mode**
+
+Addressed Session 31 friction where 20-slide decks produced 8,500+ lines of pull output.
+
+**What we built:**
+
+1. **`slide_id` parameter** — Pull just one slide's data. Returns filtered IR with only that slide and its containers.
+   ```
+   monorail_pull({ slide_id: "9:700" })
+   → Just that slide's elements, not the whole deck
+   ```
+
+2. **`mode: "summary"` parameter** — Compact table of slide IDs, names, and archetypes. No element trees.
+   ```
+   monorail_pull({ mode: "summary" })
+   | #  | Figma ID | Name        | Archetype |
+   |  1 | 9:666    | GTM Kickoff | title     |
+   ...
+   ```
+
+3. **Progressive disclosure tips** — Large decks (10+ slides) now show a tip suggesting summary mode first.
+
+**AI DX applied:**
+- Tool description explains "when to use" each mode (not just "what it does")
+- Error messages guide recovery: "Use mode:'summary' to see available slide IDs"
+- Response format self-documenting with tips
+
+**Files changed:**
+- `src/index.ts` — Tool schema (2 new params), handler with filtering logic
+- `docs/references/mcp-tools.md` — Updated with examples for all three modes
+
+**Note:** Deck name fix was already done in Session 32, no additional changes needed.
+
+---
+
+### Session 32 (2026-01-15)
+**Tech Debt: Port Primitives to TypeScript + Background Fix + Deck Name**
+
+Resolved critical tech debt and two dogfood friction points.
+
+**Part 1: Port Primitives to TypeScript**
+- Investigated how source got out of sync (Session 30 patched code.js during dogfood, deleted code.ts stub)
+- Ported full `apply-primitives` handler (~280 lines) from `code.js` to `code.ts`
+- Added `PrimitiveOperation` TypeScript interface with all operation types
+- Included hex color parsing fix (`#1a1a2e` → RGB)
+- Bonus: Added text alignment support (`alignment: 'LEFT' | 'CENTER' | 'RIGHT'`)
+
+**Part 2: Background Operation (Solid + Gradient)**
+- Problem: Using `rect` for backgrounds layered ON TOP of slide's native background
+- Solution: Added `op: "background"` operation that sets slide's native background
+- Supports solid colors: `{ "op": "background", "fill": "#0f0f1a" }`
+- Supports linear gradients: `{ "op": "background", "gradient": { "angle": 90, "stops": [...] } }`
+- Supports radial gradients: `{ "op": "background", "gradient": { "type": "radial", "stops": [...] } }`
+- AI DX: Added clear guidance in tool schema and skill doc ("Never use rect for backgrounds")
+- Discovery: `docs/discovery/background-fills.md` for image backgrounds (future work)
+
+**Part 3: Deck Name in Pull**
+- Fixed: `monorail_pull` now returns actual Figma filename instead of "Pulled Deck"
+
+**Files changed:**
+- `figma-plugin/code.ts` — Primitives handler + `background` operation (solid + gradient) + deck name fix
+- `src/index.ts` — Tool schema with gradient config, skill doc with examples
+- `docs/discovery/background-fills.md` — NEW: Discovery for image backgrounds
+
+**Verified:** Both plugin and server build clean
+
+---
 
 ### Session 30 (2026-01-14)
 **Dogfood: GTM Operating Canvas → 4-Slide System**

@@ -2945,7 +2945,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
       
       const ir: DeckIR = {
-        deck: { title: 'Pulled Deck' },
+        deck: { title: figma.root.name },
         slides,
         containers: allContainers.length > 0 ? allContainers : undefined,
       };
@@ -3702,6 +3702,399 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
     }
     
+    // =======================================================================
+    // PRIMITIVES: Low-level design operations for Claude to design slides
+    // =======================================================================
+    if (msg.type === 'apply-primitives') {
+      interface GradientStop {
+        position: number;  // 0 to 1
+        color: string | RGB;
+      }
+
+      interface GradientConfig {
+        type?: 'linear' | 'radial';  // default: linear
+        angle?: number;  // degrees, 0 = left-to-right, 90 = top-to-bottom
+        stops: GradientStop[];
+      }
+
+      interface PrimitiveOperation {
+        op: 'background' | 'frame' | 'auto_layout_frame' | 'text' | 'rect' | 'ellipse' | 'line' | 'arrow';
+        name?: string;
+        parent?: string;
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        // background (gradient)
+        gradient?: GradientConfig;
+        // frame/auto_layout_frame
+        direction?: 'HORIZONTAL' | 'VERTICAL';
+        spacing?: number;
+        padding?: number;
+        fill?: string | RGB;
+        cornerRadius?: number;
+        // text
+        text?: string;
+        fontSize?: number;
+        color?: string | RGB;
+        bold?: boolean;
+        maxWidth?: number;
+        alignment?: 'LEFT' | 'CENTER' | 'RIGHT';
+        // rect/ellipse
+        stroke?: string | RGB;
+        // line
+        length?: number;
+        rotation?: number;
+        strokeWeight?: number;
+        // arrow
+        headSize?: number;
+        direction_arrow?: 'right' | 'down' | 'left' | 'up' | number;
+        bidirectional?: boolean;
+      }
+
+      const slideId = (msg as any).slideId as string | undefined;
+      const operations = (msg as any).operations as PrimitiveOperation[];
+
+      if (!operations || operations.length === 0) {
+        figma.notify('No operations provided', { error: true });
+        figma.ui.postMessage({ type: 'primitives-applied', success: false, error: 'No operations provided' });
+        return;
+      }
+
+      try {
+        // Track created nodes by name for referencing
+        const nodesByName: Record<string, SceneNode> = {};
+        const createdNodes: Array<{ name: string; id: string; type: string }> = [];
+
+        // Find or create target slide
+        let targetSlide: SceneNode & ChildrenMixin;
+
+        if (slideId) {
+          const node = await (figma as any).getNodeByIdAsync(slideId);
+          if (!node) {
+            throw new Error(`Slide not found: ${slideId}`);
+          }
+          targetSlide = node as SceneNode & ChildrenMixin;
+        } else {
+          if (isInSlides()) {
+            targetSlide = (figma as any).createSlide() as SceneNode & ChildrenMixin;
+            setSlideBackground(targetSlide);
+          } else {
+            targetSlide = figma.createFrame();
+            targetSlide.resize(SLIDE_WIDTH, SLIDE_HEIGHT);
+            addBackgroundRect(targetSlide);
+          }
+          targetSlide.name = 'Primitives Slide';
+        }
+
+        await loadFontWithFallback();
+
+        // Helper to resolve parent reference
+        function resolveParent(parentRef?: string): SceneNode & ChildrenMixin {
+          if (!parentRef) return targetSlide;
+          if (nodesByName[parentRef]) {
+            return nodesByName[parentRef] as SceneNode & ChildrenMixin;
+          }
+          throw new Error(`Parent not found: ${parentRef}. Must be a name from an earlier operation.`);
+        }
+
+        // Helper to resolve color (supports named colors, RGB objects, and hex strings)
+        function resolveColor(colorRef?: string | RGB): RGB {
+          if (!colorRef) return COLORS.white;
+
+          // If it's an RGB object, use directly
+          if (typeof colorRef === 'object') {
+            return colorRef;
+          }
+
+          // Parse hex colors like "#1a1a2e" or "#fff"
+          if (typeof colorRef === 'string' && colorRef.startsWith('#')) {
+            let hex = colorRef.slice(1);
+            // Expand shorthand (#fff -> #ffffff)
+            if (hex.length === 3) {
+              hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+            }
+            if (hex.length === 6) {
+              const r = parseInt(hex.slice(0, 2), 16) / 255;
+              const g = parseInt(hex.slice(2, 4), 16) / 255;
+              const b = parseInt(hex.slice(4, 6), 16) / 255;
+              return { r, g, b };
+            }
+          }
+
+          // Look up named color
+          const namedColor = COLORS[colorRef as keyof typeof COLORS];
+          if (namedColor) return namedColor;
+
+          console.warn(`Unknown color: ${colorRef}, defaulting to white`);
+          return COLORS.white;
+        }
+
+        // Process each operation
+        for (const op of operations) {
+          try {
+            if (op.op === 'background') {
+              // Set the slide's native background (solid color or gradient)
+              if ('fills' in targetSlide) {
+                if (op.gradient) {
+                  // Gradient background
+                  const angle = (op.gradient.angle ?? 90) * Math.PI / 180;  // default: top-to-bottom
+                  const cos = Math.cos(angle);
+                  const sin = Math.sin(angle);
+
+                  // gradientTransform is a 2x3 matrix [[a,b,tx],[c,d,ty]]
+                  // For angle rotation: we map gradient space to node space
+                  const gradientTransform: Transform = [
+                    [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+                    [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+                  ];
+
+                  const gradientStops: ColorStop[] = op.gradient.stops.map(stop => ({
+                    position: stop.position,
+                    color: { ...resolveColor(stop.color), a: 1 }
+                  }));
+
+                  if (op.gradient.type === 'radial') {
+                    (targetSlide as any).fills = [{
+                      type: 'GRADIENT_RADIAL',
+                      gradientTransform,
+                      gradientStops
+                    }];
+                  } else {
+                    (targetSlide as any).fills = [{
+                      type: 'GRADIENT_LINEAR',
+                      gradientTransform,
+                      gradientStops
+                    }];
+                  }
+                  createdNodes.push({ name: 'background', id: targetSlide.id, type: 'GRADIENT' });
+                } else {
+                  // Solid color background
+                  const color = resolveColor(op.fill || op.color);
+                  (targetSlide as any).fills = [{ type: 'SOLID', color }];
+                  createdNodes.push({ name: 'background', id: targetSlide.id, type: 'BACKGROUND' });
+                }
+              }
+
+            } else if (op.op === 'frame') {
+              const frame = figma.createFrame();
+              frame.name = op.name || 'frame';
+              frame.x = op.x || 0;
+              frame.y = op.y || 0;
+              if (op.width) frame.resize(op.width, op.height || 100);
+              frame.fills = [];
+              resolveParent(op.parent).appendChild(frame);
+              if (op.name) nodesByName[op.name] = frame;
+              createdNodes.push({ name: op.name || 'frame', id: frame.id, type: 'FRAME' });
+
+            } else if (op.op === 'auto_layout_frame') {
+              const frame = figma.createFrame();
+              frame.name = op.name || 'auto-layout';
+              frame.layoutMode = op.direction || 'VERTICAL';
+              frame.primaryAxisSizingMode = 'AUTO';
+              frame.counterAxisSizingMode = 'AUTO';
+              frame.itemSpacing = op.spacing ?? 24;
+              if (op.padding) {
+                frame.paddingTop = op.padding;
+                frame.paddingBottom = op.padding;
+                frame.paddingLeft = op.padding;
+                frame.paddingRight = op.padding;
+              }
+              if (op.fill) {
+                frame.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              } else {
+                frame.fills = [];
+              }
+              if (op.cornerRadius) {
+                frame.cornerRadius = op.cornerRadius;
+              }
+              frame.clipsContent = false;
+              const parent = resolveParent(op.parent);
+              parent.appendChild(frame);
+              if (op.x !== undefined) frame.x = op.x;
+              if (op.y !== undefined) frame.y = op.y;
+              if (op.name) nodesByName[op.name] = frame;
+              createdNodes.push({ name: op.name || 'auto-layout', id: frame.id, type: 'AUTO_LAYOUT' });
+
+            } else if (op.op === 'text') {
+              const textNode = figma.createText();
+              if (op.name) textNode.name = op.name;
+              const fontName = await getFontName(op.bold || false);
+              textNode.fontName = fontName;
+              textNode.fontSize = op.fontSize || 24;
+              textNode.fills = [{ type: 'SOLID', color: resolveColor(op.color) }];
+              textNode.characters = op.text || '';
+              if (op.maxWidth) {
+                textNode.resize(op.maxWidth, textNode.height);
+                textNode.textAutoResize = 'HEIGHT';
+              }
+              // Text alignment
+              if (op.alignment) {
+                textNode.textAlignHorizontal = op.alignment;
+              }
+              const parent = resolveParent(op.parent);
+              parent.appendChild(textNode);
+              if (op.x !== undefined) textNode.x = op.x;
+              if (op.y !== undefined) textNode.y = op.y;
+              if (op.name) {
+                nodesByName[op.name] = textNode;
+                createdNodes.push({ name: op.name, id: textNode.id, type: 'TEXT' });
+              }
+
+            } else if (op.op === 'rect') {
+              const rect = figma.createRectangle();
+              if (op.name) rect.name = op.name;
+              rect.x = op.x || 0;
+              rect.y = op.y || 0;
+              rect.resize(op.width || 100, op.height || 100);
+              rect.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              if (op.stroke) {
+                rect.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
+                rect.strokeWeight = 2;
+              }
+              if (op.cornerRadius) {
+                rect.cornerRadius = op.cornerRadius;
+              }
+              resolveParent(op.parent).appendChild(rect);
+              if (op.name) {
+                nodesByName[op.name] = rect;
+                createdNodes.push({ name: op.name, id: rect.id, type: 'RECTANGLE' });
+              }
+
+            } else if (op.op === 'ellipse') {
+              const ellipse = figma.createEllipse();
+              if (op.name) ellipse.name = op.name;
+              ellipse.x = op.x || 0;
+              ellipse.y = op.y || 0;
+              ellipse.resize(op.width || 100, op.height || 100);
+              ellipse.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              if (op.stroke) {
+                ellipse.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
+                ellipse.strokeWeight = 2;
+              }
+              resolveParent(op.parent).appendChild(ellipse);
+              if (op.name) {
+                nodesByName[op.name] = ellipse;
+                createdNodes.push({ name: op.name, id: ellipse.id, type: 'ELLIPSE' });
+              }
+
+            } else if (op.op === 'line') {
+              const line = figma.createLine();
+              if (op.name) line.name = op.name;
+              line.x = op.x || 0;
+              line.y = op.y || 0;
+              line.resize(op.length || 100, 0);
+              line.rotation = op.rotation || 0;
+              line.strokes = [{ type: 'SOLID', color: resolveColor(op.color) }];
+              line.strokeWeight = op.strokeWeight || 2;
+              resolveParent(op.parent).appendChild(line);
+              if (op.name) {
+                nodesByName[op.name] = line;
+                createdNodes.push({ name: op.name, id: line.id, type: 'LINE' });
+              }
+
+            } else if (op.op === 'arrow') {
+              const color = resolveColor(op.color);
+              const strokeWeight = op.strokeWeight || 4;
+              const length = op.length || 100;
+              const headLength = op.headSize || strokeWeight * 4;
+              const headWidth = headLength * 0.6;
+
+              // Resolve direction to angle
+              let angle = 0;
+              const dir = (op as any).direction;
+              if (typeof dir === 'number') {
+                angle = dir;
+              } else {
+                switch (dir) {
+                  case 'right': angle = 0; break;
+                  case 'down': angle = 90; break;
+                  case 'left': angle = 180; break;
+                  case 'up': angle = -90; break;
+                  default: angle = 0;
+                }
+              }
+
+              const parent = resolveParent(op.parent);
+              const arrow = figma.createVector();
+              arrow.name = op.name || 'arrow';
+
+              const shaftEnd = length - headLength;
+              const vertices: VectorVertex[] = [
+                { x: 0, y: 0 },                    // 0: shaft start
+                { x: shaftEnd, y: 0 },             // 1: shaft end / head base center
+                { x: shaftEnd, y: -headWidth / 2 }, // 2: head top
+                { x: length, y: 0 },               // 3: head tip
+                { x: shaftEnd, y: headWidth / 2 }  // 4: head bottom
+              ];
+
+              const segments: VectorSegment[] = [
+                { start: 0, end: 1 },  // shaft
+                { start: 2, end: 3 },  // head top edge
+                { start: 3, end: 4 }   // head bottom edge
+              ];
+
+              if (op.bidirectional) {
+                const tailBaseX = headLength;
+                vertices.push(
+                  { x: tailBaseX, y: -headWidth / 2 },  // 5: tail head top
+                  { x: tailBaseX, y: headWidth / 2 }    // 6: tail head bottom
+                );
+                segments.push(
+                  { start: 5, end: 0 },  // tail top edge to tip
+                  { start: 0, end: 6 }   // tip to tail bottom edge
+                );
+              }
+
+              await arrow.setVectorNetworkAsync({
+                vertices,
+                segments,
+                regions: []
+              });
+
+              arrow.strokes = [{ type: 'SOLID', color }];
+              arrow.strokeWeight = strokeWeight;
+              arrow.strokeCap = 'ROUND';
+              arrow.strokeJoin = 'ROUND';
+              arrow.fills = [];
+              arrow.x = op.x || 0;
+              arrow.y = op.y || 0;
+              arrow.rotation = -angle;
+
+              parent.appendChild(arrow);
+              if (op.name) {
+                nodesByName[op.name] = arrow;
+              }
+              createdNodes.push({ name: op.name || 'arrow', id: arrow.id, type: 'ARROW' });
+            }
+
+          } catch (opErr) {
+            console.error('Operation failed:', op, opErr);
+            throw new Error(`Operation "${op.op}" failed: ${opErr instanceof Error ? opErr.message : String(opErr)}`);
+          }
+        }
+
+        figma.currentPage.selection = [targetSlide];
+        figma.viewport.scrollAndZoomIntoView([targetSlide]);
+
+        const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"`;
+        figma.notify(summary);
+        figma.ui.postMessage({
+          type: 'primitives-applied',
+          success: true,
+          slideId: targetSlide.id,
+          slideName: targetSlide.name,
+          created: createdNodes
+        });
+
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Primitives error:', errorMsg);
+        figma.notify(`Failed: ${errorMsg}`, { error: true });
+        figma.ui.postMessage({ type: 'primitives-applied', success: false, error: errorMsg });
+      }
+    }
+
     if (msg.type === 'close') {
       figma.closePlugin();
     }
