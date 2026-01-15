@@ -63,6 +63,9 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Primitives for design** — `monorail_primitives` creates slides from scratch (frames, text, shapes) — enables Claude to design without archetypes
 
 ### The Gap 🔨
+- **TECH DEBT: Primitives not in TypeScript** — Handler only in `code.js`, not `code.ts`. Source out of sync. Blocks safe rebuilds.
+- **Primitives: Background layering** — Adding bg rect layers on top of slide's existing background. Should skip or use `setSlideBackground()`.
+- **Primitives: Arrows are vector paths** — Heavy for simple connectors. Add line + strokeCap option.
 - **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
 - **Pull output too large** — big decks (40+ slides) dump 10K+ lines; need summary mode or slide filtering
@@ -102,19 +105,42 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 
 **Session 29 validated:** Claude can design with primitives (75-95% quality). Design principles added to skill doc. Template-first architecture confirmed as direction.
 
+**Session 30 (dogfood):** Built 4-slide GTM operating system. Found friction points documented in `docs/failures.md`.
+
+**Session 31 (deep dogfood):** Extended strategy deck session — built 4 interconnected slides (THE MOMENT, GRIDLOCK→UNLOCK, GRAVITY, WHAT WE'RE TESTING). Heavy primitives usage with iterative patches. Key findings:
+- ✅ Primitives + patch loop works great for complex, info-dense slides
+- ✅ Hex colors working (fix from Session 30 holding)
+- ✅ Screenshot essential for rapid iteration
+- ⚠️ Patch delete operations failed (unclear if bug or user error)
+- ⚠️ Pull output massive (8500 lines) — hard to find specific nodes
+- 💡 Text alignment (center/right) would help
+- 💡 Text arrows (→) work fine as workaround for connector arrows
+
 ### Immediate (Next Session)
+
+- [ ] **TECH DEBT: Port primitives to TypeScript** — The `apply-primitives` handler exists ONLY in `code.js`, not `code.ts`. Source is out of sync. Must port before any rebuild.
+  - Hex color parsing fix (already in code.js, needs porting)
+  - Full handler ~250 lines
+
+- [ ] **Primitives Rev 2** — Fill gaps discovered in Session 29 + 30 + 31:
+  - [x] Hex color parsing — DONE in code.js, needs porting to code.ts
+  - [ ] Text alignment (center, right) — quick win, came up in Session 31
+  - [ ] Simpler arrows — line + strokeCap option vs vector paths (note: text arrows `→` work great as workaround)
+  - [ ] Don't layer background rect on existing slides — slide already has bg
+  - [ ] Gradients — nice-to-have
+  - [ ] Image placeholder — "image goes here" frame
+  - DEFER: Icons (needs component library integration, bigger lift)
+
+- [ ] **Pull improvements** — Session 31 friction:
+  - [ ] Add `slide_id` filter to `monorail_pull` — get just one slide's elements
+  - [ ] Summary mode — slide IDs + names without full element trees
+
+- [ ] **Patch delete debugging** — Session 31 delete operations failed silently. Investigate handler.
 
 - [ ] **Template Library Resource** — `monorail://templates` listing available templates with metadata
   - Open: Where do templates live? (Dedicated Figma page? Plugin storage?)
   - Open: How is metadata stored? (File naming? Figma plugin data?)
   - Open: How does Claude browse/search?
-
-- [ ] **Primitives Rev 2** — Fill gaps discovered in Session 29:
-  - [ ] Text alignment (center, right) — quick win
-  - [ ] Arrow heads on lines — enables connectors
-  - [ ] Gradients — nice-to-have
-  - [ ] Image placeholder — "image goes here" frame
-  - DEFER: Icons (needs component library integration, bigger lift)
 
 ### Foundational Work (Circle Back Soon)
 
@@ -209,6 +235,41 @@ These are infrastructure improvements that compound but aren't blocking current 
 ---
 
 ## Session Log
+
+### Session 30 (2026-01-14)
+**Dogfood: GTM Operating Canvas → 4-Slide System**
+
+Deep dogfood session building a real GTM operating system for Keycard.
+
+**What we built:**
+1. **Position slide** — The Window, The Claim, The Engine, Dual Motion
+2. **This Week slide** — ONE question, learning hypotheses, shipping list
+3. **Scoreboard slide** — Critical path status, what moved, blockers
+4. **Plan slide** — Q1 rhythm (Jan/Feb/Mar), ownership table
+
+**Key insight:** "One slide = one conversation." Packing strategy + tactics + plan onto one canvas makes it unusable. Each slide should answer ONE question at ONE cadence.
+
+**Friction discovered:**
+1. **Background layering** — Primitives added bg rect on top of slide's existing background
+2. **Hex colors not parsing** — `#1a1a2e` defaulted to white (fixed in code.js)
+3. **Arrows are vector paths** — More complex than needed for simple connectors
+4. **Tech debt** — Primitives handler only in code.js, not code.ts (out of sync)
+5. **Debug workflow** — Screenshots don't reveal color issues; need capture/pull to verify
+
+**What worked well:**
+- Hex color fix made primitives immediately usable for dark-themed canvases
+- 80 elements rendered correctly once colors worked
+- Screenshot feedback loop caught layout issues
+- Iterating on slide structure (1→4 slides) was fast
+
+**Files changed:**
+- `figma-plugin/code.js` — Added hex color parsing to `resolveColor()`
+- `docs/failures.md` — 5 new entries documenting session friction
+- `PLAN.md` — Updated immediate items, added session log
+
+**Next:** Port primitives handler to code.ts, add simpler arrow option, fix background layering
+
+---
 
 ### Session 29 (2026-01-13)
 **Discovery: Primitives Tool + Design Principles + Dogfood**

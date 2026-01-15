@@ -50,8 +50,15 @@
     // Card background
     cardBgHighlight: { r: 0.12, g: 0.14, b: 0.16 },
     // Highlighted card (middle)
-    featureBg: { r: 0.08, g: 0.08, b: 0.1 }
+    featureBg: { r: 0.08, g: 0.08, b: 0.1 },
     // Feature row background
+    // Attention colors
+    pink: { r: 1, g: 0.2, b: 0.6 },
+    // Hot pink for "look here!" arrows
+    red: { r: 0.95, g: 0.25, b: 0.25 },
+    // Red for warnings/flags
+    yellow: { r: 0.95, g: 0.85, b: 0.2 }
+    // Yellow for highlights
   };
   var SLIDE_WIDTH = 1920;
   var SLIDE_HEIGHT = 1080;
@@ -2772,6 +2779,20 @@
             if (typeof colorRef === "object") {
               return colorRef;
             }
+            // Parse hex colors like "#1a1a2e" or "#fff"
+            if (typeof colorRef === "string" && colorRef.startsWith("#")) {
+              let hex = colorRef.slice(1);
+              // Expand shorthand (#fff -> #ffffff)
+              if (hex.length === 3) {
+                hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+              }
+              if (hex.length === 6) {
+                const r = parseInt(hex.slice(0, 2), 16) / 255;
+                const g = parseInt(hex.slice(2, 4), 16) / 255;
+                const b = parseInt(hex.slice(4, 6), 16) / 255;
+                return { r, g, b };
+              }
+            }
             const namedColor = COLORS[colorRef];
             if (namedColor) return namedColor;
             console.warn(`Unknown color: ${colorRef}, defaulting to white`);
@@ -2908,6 +2929,90 @@
                   nodesByName[op.name] = line;
                   createdNodes.push({ name: op.name, id: line.id, type: "LINE" });
                 }
+              } else if (op.op === "arrow") {
+                const color = resolveColor2(op.color);
+                const strokeWeight = op.strokeWeight || 4;
+                const length = op.length;
+                const headLength = op.headSize || strokeWeight * 4;
+                const headWidth = headLength * 0.6;
+                let angle = 0;
+                if (typeof op.direction === "number") {
+                  angle = op.direction;
+                } else {
+                  switch (op.direction) {
+                    case "right":
+                      angle = 0;
+                      break;
+                    case "down":
+                      angle = 90;
+                      break;
+                    case "left":
+                      angle = 180;
+                      break;
+                    case "up":
+                      angle = -90;
+                      break;
+                    default:
+                      angle = 0;
+                  }
+                }
+                const parent = resolveParent2(op.parent);
+                const arrow = figma.createVector();
+                arrow.name = op.name || "arrow";
+                const shaftEnd = length - headLength;
+                const vertices = [
+                  { x: 0, y: 0 },
+                  // 0: shaft start
+                  { x: shaftEnd, y: 0 },
+                  // 1: shaft end / head base center
+                  { x: shaftEnd, y: -headWidth / 2 },
+                  // 2: head top
+                  { x: length, y: 0 },
+                  // 3: head tip
+                  { x: shaftEnd, y: headWidth / 2 }
+                  // 4: head bottom
+                ];
+                const segments = [
+                  { start: 0, end: 1 },
+                  // shaft
+                  { start: 2, end: 3 },
+                  // head top edge
+                  { start: 3, end: 4 }
+                  // head bottom edge
+                ];
+                if (op.bidirectional) {
+                  const tailBaseX = headLength;
+                  vertices.push(
+                    { x: tailBaseX, y: -headWidth / 2 },
+                    // 5: tail head top
+                    { x: tailBaseX, y: headWidth / 2 }
+                    // 6: tail head bottom
+                  );
+                  segments.push(
+                    { start: 5, end: 0 },
+                    // tail top edge to tip
+                    { start: 0, end: 6 }
+                    // tip to tail bottom edge
+                  );
+                }
+                await arrow.setVectorNetworkAsync({
+                  vertices,
+                  segments,
+                  regions: []
+                });
+                arrow.strokes = [{ type: "SOLID", color }];
+                arrow.strokeWeight = strokeWeight;
+                arrow.strokeCap = "ROUND";
+                arrow.strokeJoin = "ROUND";
+                arrow.fills = [];
+                arrow.x = op.x;
+                arrow.y = op.y;
+                arrow.rotation = -angle;
+                parent.appendChild(arrow);
+                if (op.name) {
+                  nodesByName[op.name] = arrow;
+                }
+                createdNodes.push({ name: op.name || "arrow", id: arrow.id, type: "ARROW" });
               }
             } catch (opErr) {
               console.error(`Operation failed:`, op, opErr);

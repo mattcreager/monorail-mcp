@@ -815,7 +815,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 properties: {
                   op: {
                     type: "string",
-                    enum: ["frame", "auto_layout_frame", "text", "rect", "ellipse", "line"],
+                    enum: ["frame", "auto_layout_frame", "text", "rect", "ellipse", "line", "arrow"],
                     description: "Operation type",
                   },
                   name: {
@@ -832,21 +832,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   // Dimensions
                   width: { type: "number", description: "Width (for rect, ellipse, frame)" },
                   height: { type: "number", description: "Height (for rect, ellipse, frame)" },
-                  length: { type: "number", description: "Length (for line)" },
+                  length: { type: "number", description: "Length (for line, arrow)" },
                   rotation: { type: "number", description: "Rotation in degrees (for line)" },
+                  // Arrow properties
+                  direction: { type: "string", description: "Arrow direction: 'right', 'left', 'up', 'down', or degrees (for arrow). Also used for Auto Layout: 'VERTICAL', 'HORIZONTAL'" },
+                  headSize: { type: "number", description: "Arrowhead size in pixels (default: 12)" },
+                  bidirectional: { type: "boolean", description: "If true, arrow has heads on both ends" },
                   // Text properties
                   text: { type: "string", description: "Text content (for text op)" },
                   fontSize: { type: "number", description: "Font size in pixels (for text op)" },
                   bold: { type: "boolean", description: "Bold font (for text op)" },
                   maxWidth: { type: "number", description: "Maximum width before wrapping (for text op)" },
-                  // Colors (can be named: 'headline', 'body', 'muted', 'cyan', 'orange', etc. or {r,g,b})
-                  color: { type: "string", description: "Color for text or line" },
+                  // Colors (named: 'headline', 'body', 'muted', 'cyan', 'orange', 'green', 'pink', 'red', 'yellow' or {r,g,b})
+                  color: { type: "string", description: "Color for text, line, or arrow" },
                   fill: { type: "string", description: "Fill color for shapes" },
                   stroke: { type: "string", description: "Stroke color for shapes" },
                   strokeWeight: { type: "number", description: "Stroke width (for line)" },
                   cornerRadius: { type: "number", description: "Corner radius (for rect)" },
                   // Auto Layout properties
-                  direction: { type: "string", enum: ["VERTICAL", "HORIZONTAL"], description: "Auto Layout direction" },
                   spacing: { type: "number", description: "Item spacing in Auto Layout (default: 24)" },
                   padding: { type: "number", description: "Uniform padding in Auto Layout" },
                 },

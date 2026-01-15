@@ -454,3 +454,186 @@ Three utility functions handle all request lifecycle:
 **Caveat:** The WebSocket connection may briefly disconnect and reconnect during hot reload. The MCP server handles reconnection gracefully.
 
 **Path forward:** Document this in the development workflow. Use `npm run watch` (which runs `tsc --watch`) for continuous compilation during development.
+
+---
+
+### 2026-01-14 - Primitives: Background layering issue
+
+**What we found:** When using `monorail_primitives` to create a canvas, adding a `rect` for background (e.g., `{"op": "rect", "name": "bg", "fill": "#0f0f1a", ...}`) layers ON TOP of the slide's existing background. In Figma Slides, the slide itself already has a background color. My background rect sat on top, and when colors weren't being applied (see hex color bug below), the result was white-on-white-on-white.
+
+**Impact:** Slide 21 appeared completely blank in screenshots — white background rect, white card rects, white text. Only discovered the issue by running `monorail_capture` and seeing all colors were `#fafafa`.
+
+**Debugging insight:** Screenshots alone don't reveal color issues. A `monorail_pull` or `monorail_capture` would have shown the color values and caught this immediately.
+
+**Path forward:**
+- Primitives tool should NOT add background rect when targeting existing slides (slide already has background)
+- Or: add `setSlideBackground()` option to primitives instead of layering a rect
+- Workflow: after complex primitives push, run `capture` to verify colors before trusting screenshot
+
+---
+
+### 2026-01-14 - Primitives: Hex color parsing not working
+
+**What we found:** The `resolveColor()` function in the primitives handler only supported:
+- Named colors (`"white"`, `"bg"`, etc.)
+- RGB objects (`{r: 0.1, g: 0.1, b: 0.1}`)
+
+Hex strings like `"#1a1a2e"` were falling through to the default case and returning white with a console warning: `Unknown color: #1a1a2e, defaulting to white`.
+
+**Impact:** All 53 elements in the first canvas attempt rendered in white/near-white, making the slide appear blank.
+
+**Fix applied:** Added hex parsing to `resolveColor()` in `code.js`:
+```javascript
+if (typeof colorRef === "string" && colorRef.startsWith("#")) {
+  let hex = colorRef.slice(1);
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  if (hex.length === 6) {
+    return { r: parseInt(hex.slice(0,2),16)/255, g: parseInt(hex.slice(2,4),16)/255, b: parseInt(hex.slice(4,6),16)/255 };
+  }
+}
+```
+
+**Tech debt:** This fix was applied directly to `code.js`. The primitives handler exists ONLY in `code.js`, not in `code.ts`. The TypeScript source is out of sync — needs to be ported.
+
+**Path forward:**
+- Port primitives handler from `code.js` to `code.ts`
+- Rebuild to ensure TypeScript source is the source of truth
+
+---
+
+### 2026-01-14 - Primitives: Arrow rendering is complex vector paths
+
+**What we found:** The `arrow` primitive draws arrows using vector paths (shaft + head geometry via `setVectorNetworkAsync()`). This works but is heavier than necessary for simple connector arrows.
+
+**What user expected:** Simple lines with arrow stroke caps, similar to Figma's native line + arrowhead.
+
+**API context:** Figma has `strokeCap = 'ARROW_LINES'` for lines, but this only adds small chevron-style caps. For larger arrowheads, the vector approach may be necessary. Need to audit options.
+
+**Path forward:**
+- [ ] Add simpler arrow option using line + strokeCap for basic connectors
+- [ ] Keep vector arrows for when larger/custom arrowheads are needed
+- [ ] Document which to use when in primitives tool description
+
+---
+
+### 2026-01-14 - Primitives handler only in code.js (tech debt)
+
+**What we found:** The `apply-primitives` message handler (lines 2762-3024 in `code.js`) was added directly to the compiled JavaScript, not to the TypeScript source (`code.ts`). This means:
+- `code.ts` doesn't have primitives support
+- Running `npm run build` would overwrite the primitives code
+- The TypeScript source is incomplete/out of sync
+
+**Impact:** Can't safely rebuild plugin from TypeScript without losing primitives functionality.
+
+**Path forward:**
+- [ ] Port the entire primitives handler from `code.js` to `code.ts`
+- [ ] Ensure build process compiles TS → JS correctly
+- [ ] Add to PLAN.md as immediate tech debt fix
+
+---
+
+### 2026-01-14 - Patch delete operations failing
+
+**What we found:** When attempting to delete elements from a slide using `monorail_patch` with `action: "delete"`, the operation failed silently:
+```
+✓ Patched: no changes
+Failed: 17:1849, 17:1850
+```
+
+The node IDs appeared valid (from slide creation output), but delete didn't work. Unclear if this is:
+- A bug in the delete handler
+- Wrong node IDs (from a different slide?)
+- Elements that can't be deleted (part of slide structure?)
+
+**Impact:** Had to work around by creating new slides instead of removing elements from existing ones.
+
+**Path forward:**
+- [ ] Investigate delete handler in plugin code
+- [ ] Add better error messages for why delete failed
+- [ ] Document which element types can/can't be deleted
+
+---
+
+### 2026-01-14 - Pull output too large for practical use
+
+**What we found:** Running `monorail_pull` on a deck with ~20 slides produced 8,507 lines of output. Finding specific node IDs required grep/search through a temp file. The output was written to disk because it exceeded reasonable response size.
+
+**Impact:** 
+- Can't quickly find the node ID you need to patch
+- Have to use grep with patterns to locate elements
+- Slows down the patch workflow
+
+**What would help:**
+1. **Slide filtering** — `monorail_pull` with `slide_id` param to get just one slide
+2. **Summary mode** — return just slide IDs + names without full element trees
+3. **Element search** — find nodes by text content or name
+
+**Path forward:** Already in PLAN.md Gap. Consider adding `slide_id` filter as quick win.
+
+---
+
+### 2026-01-14 - Primitives + Patch loop is the winning workflow
+
+**What we found:** In an extended design session (4 complex slides), the most productive workflow was:
+1. Create slide with `monorail_primitives` (full layout + all elements)
+2. Screenshot to see result
+3. Iterate with `monorail_patch` on specific text nodes
+4. Screenshot again
+
+This loop is fast because:
+- Primitives handles initial layout (no manual positioning)
+- Patch updates just the text that needs changing
+- Screenshot gives instant visual feedback
+- No need to recreate entire slide for text tweaks
+
+**What made it work:**
+- Named elements in primitives (e.g., `"name": "h1-q"`) make node IDs predictable
+- Patch preserves all styling — just updates text content
+- Hex colors working correctly (fixed in Session 30)
+
+**Impact:** Built 4 dense, multi-section slides in one session without significant friction. Primitives + patch is production-ready for complex layouts.
+
+**Recommendation:** Document this workflow as the recommended approach for custom slide design.
+
+---
+
+### 2026-01-14 - Text arrows as connector workaround
+
+**What we found:** Instead of using the `arrow` primitive (which creates complex vector paths), we used Unicode arrow characters in text:
+- `→` for horizontal flow
+- `↓` for vertical flow  
+- `↻` for cycle/loop indication
+
+These render cleanly, don't require additional primitives, and are easy to position as part of text elements.
+
+**Impact:** Avoided the complexity of vector arrows entirely. Slides look clean with text-based arrows.
+
+**When to use what:**
+- Text arrows (`→`): Simple flow indicators, inline with labels
+- Vector arrows: When you need custom styling, curves, or precise positioning
+
+**Path forward:** Document text arrows as recommended approach for simple connectors. Keep vector arrows for complex diagrams.
+
+---
+
+### 2026-01-14 - Session insight: One slide = one conversation
+
+**What we found:** When building the GTM Operating Canvas, we initially tried to pack everything onto one slide:
+- Strategic framing (The Window, The Claim)
+- Weekly tactics (This Week's Bet)
+- Q1 plan (Timeline, RACI)
+- Scoreboard (Critical Path status)
+
+The result was dense and hard to use. The user asked: "What conversation are we having when this slide is up?"
+
+**The insight:** Each slide should serve ONE conversation:
+| Slide | Conversation | Cadence |
+|-------|--------------|---------|
+| Position | "What do we believe?" | Stable |
+| This Week | "What's the bet?" | Weekly (Mon) |
+| Scoreboard | "What moved?" | Weekly (Fri) |
+| Plan | "Who owns what?" | Monthly |
+
+**Impact:** Redesigned from 1 packed canvas to 4 focused slides. Each has a clear purpose and update cadence.
+
+**Path forward:** This is a content/strategy insight, not a tool issue. But worth documenting as a pattern for future GTM/operating canvas work.
