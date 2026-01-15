@@ -2410,7 +2410,9 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
       const node = await (figma as any).getNodeByIdAsync(patch.target);
       
       if (!node) {
-        console.warn(`Node not found: ${patch.target}`);
+        // Provide context about why node wasn't found
+        const actionLabel = action === 'delete' ? 'delete' : action === 'add' ? 'add to' : 'edit';
+        console.warn(`Node not found for ${actionLabel}: ${patch.target}. IDs may be stale — try pulling fresh IDs first.`);
         failed.push(patch.target);
         continue;
       }
@@ -2846,17 +2848,99 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         startIndex
       });
     }
-    
+
+    // Get slide reference for copying
+    if (msg.type === 'get-slide-reference') {
+      console.log('[Plugin] get-slide-reference called');
+      const selection = figma.currentPage.selection;
+      
+      if (selection.length === 0) {
+        figma.notify('No selection. Click on a slide first.', { error: true });
+        figma.ui.postMessage({ type: 'slide-reference', success: false, error: 'No selection. Select a slide first.' });
+        return;
+      }
+      
+      console.log('[Plugin] Selection:', selection[0].type, selection[0].name);
+      
+      // Find the top-level slide/frame for the selection
+      // Walk up until we find a SLIDE (Figma Slides) or a top-level FRAME (Figma Design)
+      let node: BaseNode | null = selection[0];
+      
+      // In Figma Slides, structure is: PAGE -> SLIDE_GRID -> SLIDE_ROW -> SLIDE -> content
+      // In Figma Design, structure is: PAGE -> FRAME -> content
+      
+      // First check if selection itself is a slide/frame
+      const nodeType = (node as any).type;
+      console.log('[Plugin] Node type:', nodeType, 'Parent type:', (node.parent as any)?.type);
+      
+      if (nodeType === 'SLIDE' || (nodeType === 'FRAME' && node.parent?.type === 'PAGE')) {
+        const ref = `Slide: "${(node as any).name || 'Untitled'}" (${node.id})`;
+        figma.notify(ref, { timeout: 3000 });
+        figma.ui.postMessage({ 
+          type: 'slide-reference', 
+          success: true, 
+          id: node.id, 
+          name: (node as any).name || 'Untitled'
+        });
+        return;
+      }
+      
+      // Walk up the tree to find the slide
+      while (node && node.parent) {
+        const parentType = (node.parent as any).type;
+        const currentType = (node as any).type;
+        
+        console.log('[Plugin] Walking up:', currentType, '-> parent:', parentType);
+        
+        // Found a SLIDE in Figma Slides
+        if (currentType === 'SLIDE') {
+          const ref = `Slide: "${(node as any).name || 'Untitled'}" (${node.id})`;
+          figma.notify(ref, { timeout: 3000 });
+          figma.ui.postMessage({ 
+            type: 'slide-reference', 
+            success: true, 
+            id: node.id, 
+            name: (node as any).name || 'Untitled'
+          });
+          return;
+        }
+        
+        // Found a top-level FRAME in Figma Design
+        if (currentType === 'FRAME' && parentType === 'PAGE') {
+          const ref = `Slide: "${(node as any).name || 'Untitled'}" (${node.id})`;
+          figma.notify(ref, { timeout: 3000 });
+          figma.ui.postMessage({ 
+            type: 'slide-reference', 
+            success: true, 
+            id: node.id, 
+            name: (node as any).name || 'Untitled'
+          });
+          return;
+        }
+        
+        // Stop if we hit SLIDE_ROW (parent of slides in Figma Slides)
+        if (parentType === 'SLIDE_ROW' || parentType === 'PAGE') {
+          break;
+        }
+        
+        node = node.parent;
+      }
+      
+      figma.notify('Could not find slide. Try clicking directly on slide content.', { error: true });
+      figma.ui.postMessage({ type: 'slide-reference', success: false, error: 'Selection is not in a slide. Click on slide content first.' });
+      return;
+    }
+
     if (msg.type === 'export-ir') {
       const slides: Slide[] = [];
-      
+
       // Load stored mapping to preserve IDs
       const storedMapping = await figma.clientStorage.getAsync(MAPPING_KEY) || {};
       const reverseMapping: Record<string, string> = {};
       for (const [irId, figmaId] of Object.entries(storedMapping)) {
         reverseMapping[figmaId as string] = irId;
       }
-      
+
       // Collect all slide nodes
       const slideNodes: SceneNode[] = [];
       
@@ -3717,8 +3801,13 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         stops: GradientStop[];
       }
 
+      interface PathPoint {
+        x: number;
+        y: number;
+      }
+
       interface PrimitiveOperation {
-        op: 'background' | 'frame' | 'auto_layout_frame' | 'text' | 'rect' | 'ellipse' | 'line' | 'arrow';
+        op: 'background' | 'frame' | 'auto_layout_frame' | 'text' | 'rect' | 'ellipse' | 'line' | 'path' | 'arrow';
         name?: string;
         parent?: string;
         x?: number;
@@ -3740,13 +3829,20 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         bold?: boolean;
         maxWidth?: number;
         alignment?: 'LEFT' | 'CENTER' | 'RIGHT';
+        verticalAlignment?: 'TOP' | 'CENTER' | 'BOTTOM';
         // rect/ellipse
         stroke?: string | RGB;
-        // line
+        // line + path
         length?: number;
         rotation?: number;
         strokeWeight?: number;
-        // arrow
+        startCap?: 'NONE' | 'ROUND' | 'SQUARE' | 'ARROW_LINES' | 'ARROW_EQUILATERAL' | 'TRIANGLE_FILLED' | 'DIAMOND_FILLED' | 'CIRCLE_FILLED';
+        endCap?: 'NONE' | 'ROUND' | 'SQUARE' | 'ARROW_LINES' | 'ARROW_EQUILATERAL' | 'TRIANGLE_FILLED' | 'DIAMOND_FILLED' | 'CIRCLE_FILLED';
+        // path
+        points?: PathPoint[];
+        smooth?: boolean;  // auto-generate bezier curves
+        closed?: boolean;  // connect last point to first
+        // arrow (vector path - use line with caps for simpler arrows)
         headSize?: number;
         direction_arrow?: 'right' | 'down' | 'left' | 'up' | number;
         bidirectional?: boolean;
@@ -3924,14 +4020,29 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               textNode.fontSize = op.fontSize || 24;
               textNode.fills = [{ type: 'SOLID', color: resolveColor(op.color) }];
               textNode.characters = op.text || '';
-              if (op.maxWidth) {
+              
+              // Text sizing modes:
+              // 1. Fixed box (width + height): text stays bounded, use with alignment
+              // 2. Max width only: text wraps and grows height
+              // 3. Neither: text auto-sizes to content
+              if (op.width && op.height) {
+                // Fixed box mode - text-in-box pattern
+                textNode.resize(op.width, op.height);
+                textNode.textAutoResize = 'NONE';
+              } else if (op.maxWidth) {
                 textNode.resize(op.maxWidth, textNode.height);
                 textNode.textAutoResize = 'HEIGHT';
               }
-              // Text alignment
+              
+              // Text alignment (horizontal)
               if (op.alignment) {
                 textNode.textAlignHorizontal = op.alignment;
               }
+              // Text alignment (vertical) - useful for text-in-box pattern
+              if (op.verticalAlignment) {
+                textNode.textAlignVertical = op.verticalAlignment;
+              }
+              
               const parent = resolveParent(op.parent);
               parent.appendChild(textNode);
               if (op.x !== undefined) textNode.x = op.x;
@@ -3979,18 +4090,174 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               }
 
             } else if (op.op === 'line') {
-              const line = figma.createLine();
-              if (op.name) line.name = op.name;
-              line.x = op.x || 0;
-              line.y = op.y || 0;
-              line.resize(op.length || 100, 0);
-              line.rotation = op.rotation || 0;
-              line.strokes = [{ type: 'SOLID', color: resolveColor(op.color) }];
-              line.strokeWeight = op.strokeWeight || 2;
-              resolveParent(op.parent).appendChild(line);
+              const length = op.length || 100;
+              const color = resolveColor(op.color);
+              const strokeWeight = op.strokeWeight || 2;
+              const rotation = op.rotation || 0;
+              
+              // If caps are specified, use a vector for per-vertex control
+              if (op.startCap || op.endCap) {
+                const vector = figma.createVector();
+                if (op.name) vector.name = op.name;
+                
+                // Create a simple 2-vertex line as a vector
+                const vertices: VectorVertex[] = [
+                  { x: 0, y: 0, strokeCap: op.startCap || 'NONE' },
+                  { x: length, y: 0, strokeCap: op.endCap || 'NONE' }
+                ];
+                
+                const segments: VectorSegment[] = [
+                  { start: 0, end: 1 }
+                ];
+                
+                await vector.setVectorNetworkAsync({
+                  vertices,
+                  segments,
+                  regions: []
+                });
+                
+                vector.strokes = [{ type: 'SOLID', color }];
+                vector.strokeWeight = strokeWeight;
+                vector.fills = [];
+                vector.x = op.x || 0;
+                vector.y = op.y || 0;
+                vector.rotation = -rotation;  // Figma rotation is counter-clockwise
+                
+                resolveParent(op.parent).appendChild(vector);
+                const lineType = 'LINE_ARROW';
+                if (op.name) {
+                  nodesByName[op.name] = vector;
+                  createdNodes.push({ name: op.name, id: vector.id, type: lineType });
+                } else {
+                  createdNodes.push({ name: 'line', id: vector.id, type: lineType });
+                }
+              } else {
+                // No caps - use simple line
+                const line = figma.createLine();
+                if (op.name) line.name = op.name;
+                line.x = op.x || 0;
+                line.y = op.y || 0;
+                line.resize(length, 0);
+                line.rotation = rotation;
+                line.strokes = [{ type: 'SOLID', color }];
+                line.strokeWeight = strokeWeight;
+                resolveParent(op.parent).appendChild(line);
+                if (op.name) {
+                  nodesByName[op.name] = line;
+                  createdNodes.push({ name: op.name, id: line.id, type: 'LINE' });
+                } else {
+                  createdNodes.push({ name: 'line', id: line.id, type: 'LINE' });
+                }
+              }
+
+            } else if (op.op === 'path') {
+              // Multi-point path with optional smooth curves
+              const points = op.points || [];
+              if (points.length < 2) {
+                throw new Error('Path requires at least 2 points');
+              }
+
+              const color = resolveColor(op.color);
+              const strokeWeight = op.strokeWeight || 2;
+              const smooth = op.smooth || false;
+              const closed = op.closed || false;
+
+              const vector = figma.createVector();
+              if (op.name) vector.name = op.name;
+
+              // Build vertices with optional caps on first/last
+              const vertices: VectorVertex[] = points.map((pt, i) => {
+                const vertex: any = { x: pt.x, y: pt.y };
+                // Apply caps to endpoints (not for closed paths)
+                if (!closed) {
+                  if (i === 0 && op.startCap) {
+                    vertex.strokeCap = op.startCap;
+                  }
+                  if (i === points.length - 1 && op.endCap) {
+                    vertex.strokeCap = op.endCap;
+                  }
+                }
+                return vertex as VectorVertex;
+              });
+
+              // Build segments
+              const segments: VectorSegment[] = [];
+              for (let i = 0; i < points.length - 1; i++) {
+                const segment: any = { start: i, end: i + 1 };
+
+                if (smooth && points.length > 2) {
+                  // Calculate smooth bezier tangents using Catmull-Rom style
+                  const p0 = points[Math.max(0, i - 1)];
+                  const p1 = points[i];
+                  const p2 = points[i + 1];
+                  const p3 = points[Math.min(points.length - 1, i + 2)];
+
+                  // Tangent strength (adjust for smoother/sharper curves)
+                  const tension = 0.3;
+
+                  // Tangent at start of segment (pointing toward next point)
+                  segment.tangentStart = {
+                    x: (p2.x - p0.x) * tension,
+                    y: (p2.y - p0.y) * tension
+                  };
+
+                  // Tangent at end of segment (pointing from previous point)
+                  segment.tangentEnd = {
+                    x: (p1.x - p3.x) * tension,
+                    y: (p1.y - p3.y) * tension
+                  };
+                }
+
+                segments.push(segment as VectorSegment);
+              }
+
+              // Close the path if requested
+              if (closed) {
+                const lastSegment: any = { start: points.length - 1, end: 0 };
+                if (smooth) {
+                  const p0 = points[points.length - 2];
+                  const p1 = points[points.length - 1];
+                  const p2 = points[0];
+                  const p3 = points[1];
+                  const tension = 0.3;
+                  lastSegment.tangentStart = {
+                    x: (p2.x - p0.x) * tension,
+                    y: (p2.y - p0.y) * tension
+                  };
+                  lastSegment.tangentEnd = {
+                    x: (p1.x - p3.x) * tension,
+                    y: (p1.y - p3.y) * tension
+                  };
+                }
+                segments.push(lastSegment as VectorSegment);
+              }
+
+              await vector.setVectorNetworkAsync({
+                vertices,
+                segments,
+                regions: []
+              });
+
+              vector.strokes = [{ type: 'SOLID', color }];
+              vector.strokeWeight = strokeWeight;
+              
+              // Fill for closed paths
+              if (closed && op.fill) {
+                vector.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              } else {
+                vector.fills = [];
+              }
+
+              vector.x = op.x || 0;
+              vector.y = op.y || 0;
+
+              resolveParent(op.parent).appendChild(vector);
+              const pathType = closed ? 'PATH_CLOSED' : (smooth ? 'PATH_CURVED' : 'PATH');
               if (op.name) {
-                nodesByName[op.name] = line;
-                createdNodes.push({ name: op.name, id: line.id, type: 'LINE' });
+                nodesByName[op.name] = vector;
+                createdNodes.push({ name: op.name, id: vector.id, type: pathType });
+              } else {
+                createdNodes.push({ name: 'path', id: vector.id, type: pathType });
               }
 
             } else if (op.op === 'arrow') {

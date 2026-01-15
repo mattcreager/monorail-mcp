@@ -313,6 +313,12 @@
     <button class="ws-btn" id="ws-connect-btn">Connect</button>
   </div>
   
+  <!-- Quick Actions -->
+  <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+    <button class="ws-btn" id="copy-ref-btn" style="font-size: 10px; padding: 3px 8px; color: #888;">Copy Slide ID</button>
+    <span class="help" style="margin: 0; color: #555;">for sharing with Claude</span>
+  </div>
+  
   <!-- Activity Feed -->
   <div class="activity-section">
     <div class="activity-header">Activity</div>
@@ -523,6 +529,12 @@
     
     // Auto-connect on load
     setTimeout(connectWebSocket, 500);
+    
+    // Copy slide reference
+    const copyRefBtn = document.getElementById('copy-ref-btn');
+    copyRefBtn.onclick = () => {
+      parent.postMessage({ pluginMessage: { type: 'get-slide-reference' } }, '*');
+    };
     
     // Manual controls
     applyBtn.onclick = () => {
@@ -851,6 +863,47 @@
             created: msg.created,
             error: msg.error
           }));
+        }
+      }
+      
+      // Slide reference result
+      if (msg.type === 'slide-reference') {
+        console.log('[UI] Received slide-reference:', msg);
+        if (msg.success) {
+          const ref = `Slide: "${msg.name}" (${msg.id})`;
+          
+          // Use execCommand fallback which works better in iframes
+          const textarea = document.createElement('textarea');
+          textarea.value = ref;
+          textarea.style.position = 'fixed';
+          textarea.style.left = '-9999px';
+          document.body.appendChild(textarea);
+          textarea.select();
+          
+          try {
+            const success = document.execCommand('copy');
+            if (success) {
+              showToast(`Copied: ${ref}`);
+              addActivity('📋', `Copied "${msg.name}"`);
+            } else {
+              // execCommand failed, try modern API
+              navigator.clipboard.writeText(ref).then(() => {
+                showToast(`Copied: ${ref}`);
+                addActivity('📋', `Copied "${msg.name}"`);
+              }).catch(() => {
+                showToast(`Reference: ${ref}`, false);
+                addActivity('📋', `Reference for "${msg.name}"`);
+              });
+            }
+          } catch (err) {
+            console.error('[UI] Copy error:', err);
+            showToast(`Reference: ${ref}`, false);
+            addActivity('📋', `Reference for "${msg.name}"`);
+          }
+          
+          document.body.removeChild(textarea);
+        } else {
+          showToast(msg.error || 'Select a slide first', true);
         }
       }
     };

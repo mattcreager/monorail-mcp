@@ -547,10 +547,14 @@ The node IDs appeared valid (from slide creation output), but delete didn't work
 
 **Impact:** Had to work around by creating new slides instead of removing elements from existing ones.
 
-**Path forward:**
-- [ ] Investigate delete handler in plugin code
-- [ ] Add better error messages for why delete failed
-- [ ] Document which element types can/can't be deleted
+**Root cause (Session 33):** The delete handler was working correctly. The issue was **stale IDs** — user created elements with primitives, then recreated the slide (getting new IDs), then tried to delete with the old IDs.
+
+**Fix (Session 33):**
+- [x] Improved error messages: "Node IDs may be stale — try pulling fresh IDs first"
+- [x] Server response now includes actionable guidance with common causes
+- [x] Plugin console logs include action context (delete/add/edit)
+
+**The delete handler itself is correct.** The fix is better AI DX: guide Claude to pull fresh IDs before patching.
 
 ---
 

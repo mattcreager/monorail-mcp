@@ -829,8 +829,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 properties: {
                   op: {
                     type: "string",
-                    enum: ["background", "frame", "auto_layout_frame", "text", "rect", "ellipse", "line", "arrow"],
-                    description: "Operation type. Use 'background' to set the slide's native background color (not a rect layer). Use 'rect' only for visible shapes, NOT for backgrounds.",
+                    enum: ["background", "frame", "auto_layout_frame", "text", "rect", "ellipse", "line", "path", "arrow"],
+                    description: "Operation type. Use 'background' for slide backgrounds, 'line' for simple connectors with caps, 'path' for multi-point or curved lines.",
                   },
                   name: {
                     type: "string",
@@ -884,6 +884,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     required: ["stops"]
                   },
                   strokeWeight: { type: "number", description: "Stroke width (for line)" },
+                  // Line caps (for line op - simpler than vector arrow)
+                  startCap: { 
+                    type: "string", 
+                    enum: ["NONE", "ROUND", "SQUARE", "ARROW_LINES", "ARROW_EQUILATERAL", "TRIANGLE_FILLED", "DIAMOND_FILLED", "CIRCLE_FILLED"],
+                    description: "Start cap decoration (for line op). Use ARROW_EQUILATERAL for simple arrows."
+                  },
+                  endCap: { 
+                    type: "string", 
+                    enum: ["NONE", "ROUND", "SQUARE", "ARROW_LINES", "ARROW_EQUILATERAL", "TRIANGLE_FILLED", "DIAMOND_FILLED", "CIRCLE_FILLED"],
+                    description: "End cap decoration (for line/path op). Use ARROW_EQUILATERAL for simple arrows."
+                  },
+                  // Path properties
+                  points: {
+                    type: "array",
+                    description: "Array of {x, y} points for path op. Minimum 2 points.",
+                    items: {
+                      type: "object",
+                      properties: {
+                        x: { type: "number", description: "X coordinate" },
+                        y: { type: "number", description: "Y coordinate" }
+                      },
+                      required: ["x", "y"]
+                    }
+                  },
+                  smooth: { type: "boolean", description: "For path: auto-generate smooth bezier curves between points" },
+                  closed: { type: "boolean", description: "For path: connect last point back to first (creates a closed shape)" },
                   cornerRadius: { type: "number", description: "Corner radius (for rect)" },
                   // Auto Layout properties
                   spacing: { type: "number", description: "Item spacing in Auto Layout (default: 24)" },
@@ -1255,11 +1281,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (result.updated > 0) parts.push(`${result.updated} edited`);
         if (result.added > 0) parts.push(`${result.added} added`);
         if (result.deleted > 0) parts.push(`${result.deleted} deleted`);
-        
-        const failedText = result.failed.length > 0
-          ? `\n\nFailed: ${result.failed.join(", ")}`
-          : "";
-        
+
+        // Provide actionable guidance for failures
+        let failedText = "";
+        if (result.failed.length > 0) {
+          failedText = `\n\n⚠️ Failed: ${result.failed.join(", ")}`;
+          failedText += `\n   Node IDs may be stale. Try: monorail_pull to get fresh IDs, then retry.`;
+          failedText += `\n   Common causes: slide was recreated, elements were deleted, or wrong slide targeted.`;
+        }
+
         const newElementsText = result.newElements && result.newElements.length > 0
           ? `\n\nNew elements:\n${result.newElements.map((e: {id: string; name: string; container: string}) => `- ${e.name} (${e.id}) in ${e.container}`).join("\n")}`
           : "";
@@ -1958,10 +1988,70 @@ When designing slides from scratch, follow these spatial and visual guidelines.
 
 **Never use \`op: "rect"\` for backgrounds.** A rect creates a shape layer that sits ON TOP of the slide's existing background, causing layering issues.
 
+### Arrows and Connectors
+
+**For simple arrows, use \`line\` with \`endCap\`:**
+\`\`\`json
+{ "op": "line", "x": 100, "y": 200, "length": 150, "endCap": "ARROW_EQUILATERAL", "strokeWeight": 3, "color": "cyan" }
+\`\`\`
+
+**Different caps on each end:**
+\`\`\`json
+{ "op": "line", "length": 200, "startCap": "CIRCLE_FILLED", "endCap": "ARROW_EQUILATERAL", "color": "pink" }
+\`\`\`
+
+**Available caps:** \`ARROW_EQUILATERAL\` (filled triangle), \`ARROW_LINES\` (open arrow), \`TRIANGLE_FILLED\`, \`DIAMOND_FILLED\`, \`CIRCLE_FILLED\`, \`ROUND\`, \`SQUARE\`
+
+**Use \`rotation\` for direction:** 0=right, 90=down, 180=left, -90=up
+
+**When to use \`arrow\` op instead:** Only for custom head sizes. The \`line\` with caps handles single-direction and bidirectional connectors.
+
+### Multi-Point Paths
+
+**For complex connectors or shapes, use \`path\`:**
+
+**Zigzag connector with arrow:**
+\`\`\`json
+{ "op": "path", "points": [{"x": 0, "y": 0}, {"x": 150, "y": 80}, {"x": 300, "y": 0}], "endCap": "ARROW_EQUILATERAL", "color": "cyan" }
+\`\`\`
+
+**Smooth curved path:**
+\`\`\`json
+{ "op": "path", "points": [...], "smooth": true, "color": "orange" }
+\`\`\`
+
+**Closed filled shape (organic blob):**
+\`\`\`json
+{ "op": "path", "points": [{"x": 0, "y": 0}, {"x": 100, "y": -60}, {"x": 200, "y": 0}, {"x": 100, "y": 60}], "smooth": true, "closed": true, "fill": "green" }
+\`\`\`
+
+**Path options:** \`smooth\` (auto-bezier), \`closed\` (connect last to first), \`startCap\`/\`endCap\` (arrow decorations)
+
 ### Canvas Dimensions
 - Slide: 1920 × 1080 pixels
 - Safe margins: 80-160px from edges
 - Visual center: approximately (960, 500) — slightly above geometric center
+
+### Vertical Zone Planning (CRITICAL)
+
+**Before placing any elements, plan how content fills the full 1080px height.**
+
+Slides that cram content into the top half with empty bottom space look unfinished.
+
+**Standard 4-zone layout:**
+\`\`\`
+Zone 1: TITLE        y=50-180    (~130px)  - headline, subtitle
+Zone 2: MAIN         y=200-650   (~450px)  - cards, diagrams, core content  
+Zone 3: SECONDARY    y=670-830   (~160px)  - callouts, supporting info
+Zone 4: TAKEAWAY     y=850-1000  (~150px)  - punchline, anchors the bottom
+\`\`\`
+
+**Key insight:** Size elements to FILL their zone, not just fit their content.
+- Cards should be 350-450px tall, not 200px
+- Bottom text should anchor near y=900, not float at y=600
+
+**Anti-pattern:** Stacking content top-down without planning → empty bottom third
+**Correct approach:** Plan zones first, then size elements to fill them
 
 ### Positioning Patterns
 
@@ -1985,14 +2075,68 @@ Right content: x = 680-720
 
 ### Typography Scale
 
+**CRITICAL: Nothing below 24px. Ever.** If text seems too large, edit the copy shorter instead.
+
 | Role | Size | Weight | Color |
 |------|------|--------|-------|
 | Hero number | 96-180px | Bold | accent (cyan/orange) |
 | Headline | 56-72px | Bold | \`headline\` |
-| Title | 32-40px | Bold | \`white\` |
-| Body | 20-28px | Regular | \`body\` |
-| Caption/Label | 16-18px | Bold | \`muted\` or accent |
-| Eyebrow | 14-18px | Bold | accent (cyan) |
+| Title | 32-48px | Bold | \`white\` |
+| Body | 24-32px | Regular | \`body\` |
+| Caption/Label | 24px | Bold | \`muted\` or accent |
+| Eyebrow | 24px | Bold | accent (cyan) |
+
+### Word Economy
+
+- Every word must earn its place
+- "Ship utility" not "Ship something real"
+- If you can say it in 2 words, don't use 3
+- Constraint breeds clarity — shorter copy = larger fonts = better readability
+
+### Rhythm Through Line Breaks
+
+For body text in cards, use line breaks to create rhythm:
+\`\`\`
+We push.
+We reach out.
+We pitch.
+We earn every conversation.
+\`\`\`
+
+One phrase per line. More scannable than paragraphs.
+
+### Text-in-Box Pattern
+
+When placing text inside a rectangle, **bind the text dimensions to the box**:
+
+\`\`\`json
+[
+  { "op": "rect", "name": "card", "x": 100, "y": 300, "width": 200, "height": 100, "fill": "#1a1a2e", "cornerRadius": 12 },
+  { "op": "text", "name": "card-text", "text": "SOLVE\\nShip utility", "x": 116, "y": 316, "width": 168, "height": 68, "fontSize": 24, "bold": true, "alignment": "CENTER", "verticalAlignment": "CENTER" }
+]
+\`\`\`
+
+The pattern:
+1. Box at (x, y) with (width, height)
+2. Text at (x + margin, y + margin) with (width - 2×margin, height - 2×margin)
+3. Set \`alignment: "CENTER"\` and \`verticalAlignment: "CENTER"\`
+
+**Standard margin: 16px.** Text is now bounded and centered — it cannot escape.
+
+**Never** place text by guessing center coordinates. **Always** bind text dimensions to container dimensions.
+
+### Cards: Use Sparingly
+
+Cards (bordered/filled boxes) should group related content, not decorate.
+- If text has good spacing, it doesn't need a box
+- Plain text with good spacing often works better
+- Remove cards that don't add grouping value
+
+### Trust the Background
+
+- Slide backgrounds provide contrast
+- Don't add rectangles unless grouping content
+- Let text breathe directly on gradient/color
 
 ### Spacing Rules
 
@@ -2043,11 +2187,18 @@ Right content: x = 680-720
 
 After \`monorail_screenshot\`, ask yourself:
 
+- [ ] **Vertical fill:** Does content span from top (~60) to bottom (~900)? Empty bottom third = redo layout
+- [ ] **Typography minimum:** Is ALL text ≥24px? (If not, shorten the copy)
+- [ ] **Text containment:** Is text staying inside its boxes? (If not, use text-in-box pattern)
 - [ ] **Centering:** Is it optically balanced, not top-heavy?
 - [ ] **Breathing room:** Are there comfortable margins (80-160px)?
 - [ ] **Hierarchy:** Is it clear what to read first?
 - [ ] **Empty space:** Is there awkward emptiness anywhere?
 - [ ] **Edge safety:** Is anything too close to being clipped?
+- [ ] **Word economy:** Can any text be shorter while keeping meaning?
+
+**Most common mistake:** Content crammed in top half, bottom third empty.
+**Fix:** Plan vertical zones BEFORE placing elements. Size cards/containers to fill zones.
 
 If any answer is "no", use \`monorail_primitives\` with the same \`slide_id\` to add fixes, or \`monorail_patch\` to adjust text.
 

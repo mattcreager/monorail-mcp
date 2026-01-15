@@ -61,9 +61,11 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 - **Add elements to containers** — `monorail_patch` with `action: "add"` appends text to Auto Layout containers (bullets, items). Inherits sibling styling. No delete/recreate needed!
 - **Container discovery** — `monorail_pull` surfaces addable containers so AI can discover where to use `action: "add"`
 - **Primitives for design** — `monorail_primitives` creates slides from scratch (frames, text, shapes) — enables Claude to design without archetypes
+- **Gradient backgrounds** — linear and radial gradients via `op: "background"` with `gradient` config
+- **Arrow connectors** — `line` with `startCap`/`endCap` for simple arrows (independent end control)
+- **Multi-point paths** — `path` op with `points` array, `smooth` bezier curves, `closed` shapes
 
 ### The Gap 🔨
-- **Primitives: Arrows are vector paths** — Heavy for simple connectors. Add line + strokeCap option.
 - **Multi-instance debugging** — need server instance ID to diagnose connection issues when multiple servers run
 - **Multi-deck transparency** — each Figma file runs its own plugin instance; need to surface which deck is active
 - **No inline styling** — can't do mixed colors in text (e.g., "ACP is north." in cyan) — use capture/clone instead
@@ -102,8 +104,12 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
 **Session 32:** Tech debt resolved (primitives in TypeScript), background layering fixed (`op: "background"`), deck name in pull, text alignment.
 
 **Remaining quick wins:**
-- [ ] Simpler arrows (line + strokeCap)
-- [ ] Patch delete debugging
+- [x] Simpler arrows — DONE (Session 32). Use `line` with `endCap: "ARROW_EQUILATERAL"`
+- [x] Multi-point paths — DONE (Session 32). `path` op with `smooth` curves
+- [ ] Image placeholder ("image goes here" frame)
+
+**Discovery needed:**
+- [ ] Diagram primitives — higher-level abstractions for timelines, flowcharts (see `docs/discovery/diagram-primitives.md`)
 
 ### Immediate (Next Session)
 
@@ -114,7 +120,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
   - [x] Text alignment (center, right) — DONE (Session 32)
   - [x] Background operation — DONE (Session 32). Use `op: "background"` instead of rect.
   - [x] Gradient backgrounds — DONE (Session 32). Linear and radial via `gradient` property.
-  - [ ] Simpler arrows — line + strokeCap option vs vector paths (note: text arrows `→` work great as workaround)
+  - [x] Simpler arrows — DONE (Session 32). Use `line` with `startCap`/`endCap` (ARROW_EQUILATERAL, etc.)
   - [ ] Image placeholder — "image goes here" frame
   - DEFER: Image backgrounds (see `docs/discovery/background-fills.md`)
   - DEFER: Icons (needs component library integration, bigger lift)
@@ -124,7 +130,7 @@ An MCP tool that lets Claude and humans collaborate on presentation decks in Fig
   - [x] Summary mode — slide IDs + names without full element trees
   - (Deck name already fixed in Session 32)
 
-- [ ] **Patch delete debugging** — Session 31 delete operations failed silently. Investigate handler.
+- [x] **Patch delete debugging** — Session 33: Not a bug. Delete handler works correctly. Failures were due to stale IDs (slide recreated → new IDs). Added actionable error messages guiding to pull fresh IDs.
 
 - [ ] **Template Library Resource** — `monorail://templates` listing available templates with metadata
   - Open: Where do templates live? (Dedicated Figma page? Plugin storage?)
@@ -225,6 +231,51 @@ These are infrastructure improvements that compound but aren't blocking current 
 
 ## Session Log
 
+### Session 34 (2026-01-15)
+**Design Principles: 24px Minimum + Vertical Zone Planning + Copy Slide Reference**
+
+Deep dive into AI design quality. User manually refined a GRAVITY slide, then we analyzed the delta to extract learnable principles.
+
+**Part 1: 24px Minimum Font Size**
+- Established hard rule: Nothing below 24px. Ever.
+- If text seems too large, edit the copy shorter instead of shrinking font
+- Updated typography scale in skill doc — Caption/Eyebrow now 24px (was 14-18px)
+
+**Part 2: Text-in-Box Pattern**
+- Added `verticalAlignment` property to text ops: `"TOP" | "CENTER" | "BOTTOM"`
+- Added explicit `width` + `height` for text (fixed box mode)
+- Pattern: Bind text dimensions to container dimensions + center alignment
+- Text can't escape because its bounds ARE the box bounds
+
+**Part 3: Vertical Zone Planning (the big unlock)**
+- First attempt at slide recreation crammed content into top half, bottom third empty
+- **Unlock:** Plan vertical zones BEFORE placing elements
+- Standard 4-zone layout:
+  - Zone 1 (y=50-180): Title
+  - Zone 2 (y=200-650): Main content — cards, diagrams
+  - Zone 3 (y=670-830): Secondary — callouts
+  - Zone 4 (y=850-1000): Takeaway — anchors the bottom
+- Size elements to FILL their zone, not just fit content
+- Added to self-critique checklist: "Does content span top to bottom?"
+
+**Part 4: Plugin DX — Copy Slide Reference**
+- Problem: Hard to communicate which slide user is looking at
+- Added "📋 Copy Slide Reference" button to plugin UI
+- Copies `Slide: "Name" (ID)` format
+- User can paste to tell Claude exactly which slide to work on
+
+**Other principles codified:**
+- Word economy — "Ship utility" not "Ship something real"
+- Cards use sparingly — don't decorate, group
+- Trust the background — don't add rects unless grouping
+
+**Files changed:**
+- `figma-plugin/code.ts` — `verticalAlignment`, fixed text box mode, get-slide-reference handler
+- `figma-plugin/ui.html` — Copy Slide Reference button + clipboard handling
+- `src/index.ts` — Design principles (24px min, text-in-box, vertical zones, self-critique checklist)
+
+---
+
 ### Session 33 (2026-01-15)
 **Pull Improvements: slide_id Filter + Summary Mode**
 
@@ -259,6 +310,19 @@ Addressed Session 31 friction where 20-slide decks produced 8,500+ lines of pull
 
 **Note:** Deck name fix was already done in Session 32, no additional changes needed.
 
+**Part 2: Patch Delete Debugging**
+
+Investigated Session 31 delete failures. **Not a bug** — delete handler works correctly. Failures were due to stale IDs (slide recreated → new IDs → old IDs invalid).
+
+Fix: Improved error messages with actionable guidance:
+```
+⚠️ Failed: 17:1849, 17:1850
+   Node IDs may be stale. Try: monorail_pull to get fresh IDs, then retry.
+   Common causes: slide was recreated, elements were deleted, or wrong slide targeted.
+```
+
+This is AI DX, not a code fix — guide Claude to pull fresh IDs before patching.
+
 ---
 
 ### Session 32 (2026-01-15)
@@ -281,6 +345,27 @@ Resolved critical tech debt and two dogfood friction points.
 - Supports radial gradients: `{ "op": "background", "gradient": { "type": "radial", "stops": [...] } }`
 - AI DX: Added clear guidance in tool schema and skill doc ("Never use rect for backgrounds")
 - Discovery: `docs/discovery/background-fills.md` for image backgrounds (future work)
+
+**Part 3: Simpler Arrows**
+- Added `startCap` and `endCap` properties to `line` operation
+- Independent start/end control via VectorNetwork per-vertex caps
+- Caps: `ARROW_EQUILATERAL`, `ARROW_LINES`, `TRIANGLE_FILLED`, `DIAMOND_FILLED`, `CIRCLE_FILLED`
+- Example: `{ "op": "line", "length": 150, "endCap": "ARROW_EQUILATERAL" }` → single-direction arrow
+
+**Part 4: Multi-Point Paths**
+- New `path` operation for complex shapes and connectors
+- `points` array — any number of {x, y} coordinates
+- `smooth: true` — auto-generate bezier curves (Catmull-Rom style)
+- `closed: true` — connect last point to first (for shapes)
+- Supports `startCap`/`endCap` for arrow decorations
+- Example: `{ "op": "path", "points": [...], "smooth": true, "endCap": "ARROW_EQUILATERAL" }` → curved connector
+
+**Part 5: Dogfood + Discovery**
+- Tested on real "Blocking Chain" timeline slide
+- Created curved flow versions (wave, j-curve, hockey-stick)
+- **Finding:** Low-level primitives are powerful but coordinate math is tedious
+- **Gap:** Dots don't align with curves without calculating bezier positions
+- **Discovery doc:** `docs/discovery/diagram-primitives.md` — explores higher-level abstractions (timeline op, curve helpers, template approach)
 
 **Part 3: Deck Name in Pull**
 - Fixed: `monorail_pull` now returns actual Figma filename instead of "Pulled Deck"

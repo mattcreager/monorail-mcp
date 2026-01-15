@@ -1768,7 +1768,8 @@
       try {
         const node = await figma.getNodeByIdAsync(patch.target);
         if (!node) {
-          console.warn(`Node not found: ${patch.target}`);
+          const actionLabel = action === "delete" ? "delete" : action === "add" ? "add to" : "edit";
+          console.warn(`Node not found for ${actionLabel}: ${patch.target}. IDs may be stale \u2014 try pulling fresh IDs first.`);
           failed.push(patch.target);
           continue;
         }
@@ -1923,7 +1924,7 @@
     return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
   }
   figma.ui.onmessage = async (msg) => {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     try {
       if (msg.type === "apply-ir") {
         if (!msg.ir) {
@@ -2092,6 +2093,64 @@
           updatedNames,
           startIndex
         });
+      }
+      if (msg.type === "get-slide-reference") {
+        console.log("[Plugin] get-slide-reference called");
+        const selection = figma.currentPage.selection;
+        if (selection.length === 0) {
+          figma.notify("No selection. Click on a slide first.", { error: true });
+          figma.ui.postMessage({ type: "slide-reference", success: false, error: "No selection. Select a slide first." });
+          return;
+        }
+        console.log("[Plugin] Selection:", selection[0].type, selection[0].name);
+        let node = selection[0];
+        const nodeType = node.type;
+        console.log("[Plugin] Node type:", nodeType, "Parent type:", (_a = node.parent) == null ? void 0 : _a.type);
+        if (nodeType === "SLIDE" || nodeType === "FRAME" && ((_b = node.parent) == null ? void 0 : _b.type) === "PAGE") {
+          const ref = `Slide: "${node.name || "Untitled"}" (${node.id})`;
+          figma.notify(ref, { timeout: 3e3 });
+          figma.ui.postMessage({
+            type: "slide-reference",
+            success: true,
+            id: node.id,
+            name: node.name || "Untitled"
+          });
+          return;
+        }
+        while (node && node.parent) {
+          const parentType = node.parent.type;
+          const currentType = node.type;
+          console.log("[Plugin] Walking up:", currentType, "-> parent:", parentType);
+          if (currentType === "SLIDE") {
+            const ref = `Slide: "${node.name || "Untitled"}" (${node.id})`;
+            figma.notify(ref, { timeout: 3e3 });
+            figma.ui.postMessage({
+              type: "slide-reference",
+              success: true,
+              id: node.id,
+              name: node.name || "Untitled"
+            });
+            return;
+          }
+          if (currentType === "FRAME" && parentType === "PAGE") {
+            const ref = `Slide: "${node.name || "Untitled"}" (${node.id})`;
+            figma.notify(ref, { timeout: 3e3 });
+            figma.ui.postMessage({
+              type: "slide-reference",
+              success: true,
+              id: node.id,
+              name: node.name || "Untitled"
+            });
+            return;
+          }
+          if (parentType === "SLIDE_ROW" || parentType === "PAGE") {
+            break;
+          }
+          node = node.parent;
+        }
+        figma.notify("Could not find slide. Try clicking directly on slide content.", { error: true });
+        figma.ui.postMessage({ type: "slide-reference", success: false, error: "Selection is not in a slide. Click on slide content first." });
+        return;
       }
       if (msg.type === "export-ir") {
         const slides = [];
@@ -2339,7 +2398,7 @@
           }
           const accentColor = getAccentColor();
           const textColor = getTextColor();
-          const cornerRadius = ((_a = ds == null ? void 0 : ds.corners) == null ? void 0 : _a.cardRadius) || 8;
+          const cornerRadius = ((_c = ds == null ? void 0 : ds.corners) == null ? void 0 : _c.cardRadius) || 8;
           switch (layout) {
             case "quote": {
               slide.name = content.attribution ? `Quote: ${content.attribution}` : "Quote";
@@ -2383,7 +2442,7 @@
               const bulletsFrame = figma.createFrame();
               bulletsFrame.name = "Bullets";
               bulletsFrame.layoutMode = "VERTICAL";
-              bulletsFrame.itemSpacing = ((_b = ds == null ? void 0 : ds.spacing) == null ? void 0 : _b.itemSpacing) || 24;
+              bulletsFrame.itemSpacing = ((_d = ds == null ? void 0 : ds.spacing) == null ? void 0 : _d.itemSpacing) || 24;
               bulletsFrame.primaryAxisSizingMode = "AUTO";
               bulletsFrame.counterAxisSizingMode = "AUTO";
               bulletsFrame.fills = [];
@@ -2816,7 +2875,7 @@
               if (op.op === "background") {
                 if ("fills" in targetSlide) {
                   if (op.gradient) {
-                    const angle = ((_c = op.gradient.angle) != null ? _c : 90) * Math.PI / 180;
+                    const angle = ((_e = op.gradient.angle) != null ? _e : 90) * Math.PI / 180;
                     const cos = Math.cos(angle);
                     const sin = Math.sin(angle);
                     const gradientTransform = [
@@ -2863,7 +2922,7 @@
                 frame.layoutMode = op.direction || "VERTICAL";
                 frame.primaryAxisSizingMode = "AUTO";
                 frame.counterAxisSizingMode = "AUTO";
-                frame.itemSpacing = (_d = op.spacing) != null ? _d : 24;
+                frame.itemSpacing = (_f = op.spacing) != null ? _f : 24;
                 if (op.padding) {
                   frame.paddingTop = op.padding;
                   frame.paddingBottom = op.padding;
@@ -2893,12 +2952,18 @@
                 textNode.fontSize = op.fontSize || 24;
                 textNode.fills = [{ type: "SOLID", color: resolveColor2(op.color) }];
                 textNode.characters = op.text || "";
-                if (op.maxWidth) {
+                if (op.width && op.height) {
+                  textNode.resize(op.width, op.height);
+                  textNode.textAutoResize = "NONE";
+                } else if (op.maxWidth) {
                   textNode.resize(op.maxWidth, textNode.height);
                   textNode.textAutoResize = "HEIGHT";
                 }
                 if (op.alignment) {
                   textNode.textAlignHorizontal = op.alignment;
+                }
+                if (op.verticalAlignment) {
+                  textNode.textAlignVertical = op.verticalAlignment;
                 }
                 const parent = resolveParent2(op.parent);
                 parent.appendChild(textNode);
@@ -2944,18 +3009,139 @@
                   createdNodes.push({ name: op.name, id: ellipse.id, type: "ELLIPSE" });
                 }
               } else if (op.op === "line") {
-                const line = figma.createLine();
-                if (op.name) line.name = op.name;
-                line.x = op.x || 0;
-                line.y = op.y || 0;
-                line.resize(op.length || 100, 0);
-                line.rotation = op.rotation || 0;
-                line.strokes = [{ type: "SOLID", color: resolveColor2(op.color) }];
-                line.strokeWeight = op.strokeWeight || 2;
-                resolveParent2(op.parent).appendChild(line);
+                const length = op.length || 100;
+                const color = resolveColor2(op.color);
+                const strokeWeight = op.strokeWeight || 2;
+                const rotation = op.rotation || 0;
+                if (op.startCap || op.endCap) {
+                  const vector = figma.createVector();
+                  if (op.name) vector.name = op.name;
+                  const vertices = [
+                    { x: 0, y: 0, strokeCap: op.startCap || "NONE" },
+                    { x: length, y: 0, strokeCap: op.endCap || "NONE" }
+                  ];
+                  const segments = [
+                    { start: 0, end: 1 }
+                  ];
+                  await vector.setVectorNetworkAsync({
+                    vertices,
+                    segments,
+                    regions: []
+                  });
+                  vector.strokes = [{ type: "SOLID", color }];
+                  vector.strokeWeight = strokeWeight;
+                  vector.fills = [];
+                  vector.x = op.x || 0;
+                  vector.y = op.y || 0;
+                  vector.rotation = -rotation;
+                  resolveParent2(op.parent).appendChild(vector);
+                  const lineType = "LINE_ARROW";
+                  if (op.name) {
+                    nodesByName[op.name] = vector;
+                    createdNodes.push({ name: op.name, id: vector.id, type: lineType });
+                  } else {
+                    createdNodes.push({ name: "line", id: vector.id, type: lineType });
+                  }
+                } else {
+                  const line = figma.createLine();
+                  if (op.name) line.name = op.name;
+                  line.x = op.x || 0;
+                  line.y = op.y || 0;
+                  line.resize(length, 0);
+                  line.rotation = rotation;
+                  line.strokes = [{ type: "SOLID", color }];
+                  line.strokeWeight = strokeWeight;
+                  resolveParent2(op.parent).appendChild(line);
+                  if (op.name) {
+                    nodesByName[op.name] = line;
+                    createdNodes.push({ name: op.name, id: line.id, type: "LINE" });
+                  } else {
+                    createdNodes.push({ name: "line", id: line.id, type: "LINE" });
+                  }
+                }
+              } else if (op.op === "path") {
+                const points = op.points || [];
+                if (points.length < 2) {
+                  throw new Error("Path requires at least 2 points");
+                }
+                const color = resolveColor2(op.color);
+                const strokeWeight = op.strokeWeight || 2;
+                const smooth = op.smooth || false;
+                const closed = op.closed || false;
+                const vector = figma.createVector();
+                if (op.name) vector.name = op.name;
+                const vertices = points.map((pt, i) => {
+                  const vertex = { x: pt.x, y: pt.y };
+                  if (!closed) {
+                    if (i === 0 && op.startCap) {
+                      vertex.strokeCap = op.startCap;
+                    }
+                    if (i === points.length - 1 && op.endCap) {
+                      vertex.strokeCap = op.endCap;
+                    }
+                  }
+                  return vertex;
+                });
+                const segments = [];
+                for (let i = 0; i < points.length - 1; i++) {
+                  const segment = { start: i, end: i + 1 };
+                  if (smooth && points.length > 2) {
+                    const p0 = points[Math.max(0, i - 1)];
+                    const p1 = points[i];
+                    const p2 = points[i + 1];
+                    const p3 = points[Math.min(points.length - 1, i + 2)];
+                    const tension = 0.3;
+                    segment.tangentStart = {
+                      x: (p2.x - p0.x) * tension,
+                      y: (p2.y - p0.y) * tension
+                    };
+                    segment.tangentEnd = {
+                      x: (p1.x - p3.x) * tension,
+                      y: (p1.y - p3.y) * tension
+                    };
+                  }
+                  segments.push(segment);
+                }
+                if (closed) {
+                  const lastSegment = { start: points.length - 1, end: 0 };
+                  if (smooth) {
+                    const p0 = points[points.length - 2];
+                    const p1 = points[points.length - 1];
+                    const p2 = points[0];
+                    const p3 = points[1];
+                    const tension = 0.3;
+                    lastSegment.tangentStart = {
+                      x: (p2.x - p0.x) * tension,
+                      y: (p2.y - p0.y) * tension
+                    };
+                    lastSegment.tangentEnd = {
+                      x: (p1.x - p3.x) * tension,
+                      y: (p1.y - p3.y) * tension
+                    };
+                  }
+                  segments.push(lastSegment);
+                }
+                await vector.setVectorNetworkAsync({
+                  vertices,
+                  segments,
+                  regions: []
+                });
+                vector.strokes = [{ type: "SOLID", color }];
+                vector.strokeWeight = strokeWeight;
+                if (closed && op.fill) {
+                  vector.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
+                } else {
+                  vector.fills = [];
+                }
+                vector.x = op.x || 0;
+                vector.y = op.y || 0;
+                resolveParent2(op.parent).appendChild(vector);
+                const pathType = closed ? "PATH_CLOSED" : smooth ? "PATH_CURVED" : "PATH";
                 if (op.name) {
-                  nodesByName[op.name] = line;
-                  createdNodes.push({ name: op.name, id: line.id, type: "LINE" });
+                  nodesByName[op.name] = vector;
+                  createdNodes.push({ name: op.name, id: vector.id, type: pathType });
+                } else {
+                  createdNodes.push({ name: "path", id: vector.id, type: pathType });
                 }
               } else if (op.op === "arrow") {
                 const color = resolveColor2(op.color);
