@@ -2,906 +2,959 @@
 <html>
 <head>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: #1e1e1e;
-      color: #fff;
-      padding: 16px;
-      font-size: 13px;
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      background: var(--figma-color-bg, #1e1e1e);
+      color: var(--figma-color-text, #e0e0e0);
+      font-size: 11px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
     }
-    
-    h1 {
-      font-size: 18px;
-      font-weight: 700;
-      margin-bottom: 16px;
+
+    /* ── Status Bar ── */
+    .status-bar {
       display: flex;
       align-items: center;
-      gap: 8px;
-    }
-    
-    h1::before {
-      content: "🚝";
-    }
-    
-    /* WebSocket connection status */
-    .ws-status {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      background: #2d2d2d;
-      border-radius: 6px;
-      margin-bottom: 16px;
-      font-size: 12px;
-    }
-    
-    .ws-indicator {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #666;
+      gap: 6px;
+      padding: 6px 8px;
+      background: var(--figma-color-bg-secondary, #2a2a2a);
+      border-bottom: 1px solid var(--figma-color-border, #333);
+      height: 28px;
       flex-shrink: 0;
     }
-    
-    .ws-indicator.connected {
-      background: #34c759;
-      box-shadow: 0 0 6px rgba(52, 199, 89, 0.5);
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--figma-color-text-disabled, #555);
+      flex-shrink: 0;
+      transition: all 0.2s;
+      cursor: pointer;
     }
-    
-    .ws-indicator.connecting {
-      background: #ffcc00;
+    .status-dot:hover {
+      box-shadow: 0 0 6px rgba(255,255,255,0.2);
+    }
+    .status-dot.connected {
+      background: var(--figma-color-bg-success, #34c759);
+      box-shadow: 0 0 5px rgba(52, 199, 89, 0.5);
+    }
+    .status-dot.connecting {
+      background: var(--figma-color-bg-warning, #ffcc00);
       animation: pulse 1s infinite;
     }
-    
-    .ws-indicator.disconnected {
-      background: #ff3b30;
-    }
-    
     @keyframes pulse {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
+      50% { opacity: 0.4; }
     }
-    
-    .ws-status-text {
+
+    .status-label {
       flex: 1;
-      color: #999;
-    }
-    
-    .ws-btn {
-      padding: 4px 10px;
-      border: none;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--figma-color-text-secondary, #999);
+      font-weight: 500;
       cursor: pointer;
-      background: #3d3d3d;
+    }
+    .status-label .host { color: var(--figma-color-text, #e0e0e0); }
+    .status-label .task { opacity: 0.6; }
+    .status-label .sep { opacity: 0.3; margin: 0 2px; }
+
+    .status-uptime {
+      font-family: 'SF Mono', ui-monospace, monospace;
+      font-size: 10px;
+      color: var(--figma-color-text-tertiary, #666);
+      flex-shrink: 0;
+    }
+
+    .status-gear {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 3px;
+      cursor: pointer;
+      color: var(--figma-color-text-tertiary, #666);
+      flex-shrink: 0;
+      font-size: 13px;
+      line-height: 1;
+    }
+    .status-gear:hover {
+      background: var(--figma-color-bg-hover, #3a3a3a);
+      color: var(--figma-color-text-secondary, #999);
+    }
+
+    /* ── Selection Panel ── */
+    .selection-strip {
+      display: flex;
+      align-items: center;
+      padding: 5px 8px;
+      height: 26px;
+      border-bottom: 1px solid var(--figma-color-border, #333);
+      cursor: pointer;
+      flex-shrink: 0;
+      gap: 6px;
+    }
+    .selection-strip:hover {
+      background: var(--figma-color-bg-hover, #252525);
+    }
+
+    .selection-arrow {
+      font-size: 8px;
+      color: var(--figma-color-text-tertiary, #666);
+      transition: transform 0.15s;
+      width: 10px;
+      text-align: center;
+    }
+    .selection-panel.open .selection-arrow {
+      transform: rotate(90deg);
+    }
+
+    .selection-label {
+      color: var(--figma-color-text-secondary, #888);
+      font-weight: 500;
+      flex: 1;
+    }
+
+    .selection-badge {
+      background: var(--figma-color-bg-brand, #0d99ff);
       color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 8px;
+      min-width: 16px;
+      text-align: center;
     }
-    
-    .ws-btn:hover {
-      background: #4d4d4d;
+    .selection-badge.empty {
+      background: var(--figma-color-text-disabled, #444);
     }
-    
-    /* Activity feed */
-    .activity-section {
-      margin-bottom: 16px;
-    }
-    
-    .activity-header {
-      font-size: 11px;
-      font-weight: 600;
-      color: #666;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 8px;
-    }
-    
-    .activity-feed {
-      background: #2d2d2d;
-      border-radius: 6px;
-      padding: 8px 0;
-      max-height: 150px;
+
+    .selection-detail {
+      display: none;
+      border-bottom: 1px solid var(--figma-color-border, #333);
+      max-height: 100px;
       overflow-y: auto;
+      flex-shrink: 0;
     }
-    
+    .selection-panel.open .selection-detail {
+      display: block;
+    }
+
+    .selection-node {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 3px 8px 3px 24px;
+      font-size: 10px;
+    }
+    .selection-node:first-child { padding-top: 5px; }
+    .selection-node:last-child { padding-bottom: 5px; }
+
+    .node-type {
+      color: var(--figma-color-text-tertiary, #666);
+      font-family: 'SF Mono', ui-monospace, monospace;
+      font-size: 9px;
+      flex-shrink: 0;
+    }
+    .node-name {
+      color: var(--figma-color-text, #e0e0e0);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .node-dims {
+      color: var(--figma-color-text-tertiary, #666);
+      font-family: 'SF Mono', ui-monospace, monospace;
+      font-size: 9px;
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+    .selection-empty {
+      padding: 6px 8px 6px 24px;
+      font-size: 10px;
+      color: var(--figma-color-text-disabled, #555);
+      font-style: italic;
+    }
+
+    /* ── Activity Feed ── */
+    .activity-feed {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
     .activity-item {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      font-size: 12px;
-      color: #ccc;
+      gap: 6px;
+      padding: 3px 8px;
+      height: 24px;
+      color: var(--figma-color-text-secondary, #aaa);
     }
-    
     .activity-item:first-child {
-      color: #fff;
+      color: var(--figma-color-text, #e0e0e0);
     }
-    
+
     .activity-icon {
-      font-size: 11px;
-      width: 16px;
+      width: 14px;
       text-align: center;
       flex-shrink: 0;
+      font-size: 11px;
     }
-    
     .activity-text {
       flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    
     .activity-time {
-      color: #666;
-      font-size: 11px;
+      font-family: 'SF Mono', ui-monospace, monospace;
+      font-size: 10px;
+      color: var(--figma-color-text-tertiary, #555);
       flex-shrink: 0;
     }
-    
+
     .activity-empty {
-      padding: 12px;
-      text-align: center;
-      color: #666;
-      font-size: 12px;
-    }
-    
-    /* Collapsible section */
-    .collapsible {
-      border: 1px solid #333;
-      border-radius: 6px;
-      margin-bottom: 12px;
-      overflow: hidden;
-    }
-    
-    .collapsible-header {
       display: flex;
       align-items: center;
-      padding: 10px 12px;
-      background: #2a2a2a;
-      cursor: pointer;
-      user-select: none;
-    }
-    
-    .collapsible-header:hover {
-      background: #333;
-    }
-    
-    .collapsible-arrow {
-      margin-right: 8px;
-      transition: transform 0.2s;
-      color: #666;
-      font-size: 10px;
-    }
-    
-    .collapsible.open .collapsible-arrow {
-      transform: rotate(90deg);
-    }
-    
-    .collapsible-title {
-      font-size: 12px;
-      font-weight: 600;
-      color: #999;
-    }
-    
-    .collapsible-content {
-      display: none;
-      padding: 12px;
-      background: #252525;
-    }
-    
-    .collapsible.open .collapsible-content {
-      display: block;
-    }
-    
-    /* Form elements */
-    label {
-      display: block;
+      justify-content: center;
+      height: 100%;
+      color: var(--figma-color-text-disabled, #555);
       font-size: 11px;
-      font-weight: 600;
-      color: #777;
-      margin-bottom: 6px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
     }
-    
-    textarea {
-      width: 100%;
-      height: 120px;
-      background: #1e1e1e;
-      border: 1px solid #444;
-      border-radius: 4px;
-      color: #fff;
-      font-family: 'SF Mono', Monaco, monospace;
-      font-size: 10px;
-      padding: 8px;
-      resize: vertical;
-      margin-bottom: 8px;
+
+    /* ── Action Bar ── */
+    .action-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      height: 32px;
+      border-top: 1px solid var(--figma-color-border, #333);
+      background: var(--figma-color-bg-secondary, #2a2a2a);
+      flex-shrink: 0;
     }
-    
-    textarea:focus {
-      outline: none;
-      border-color: #0d99ff;
-    }
-    
-    textarea::placeholder {
-      color: #555;
-    }
-    
-    .btn {
-      width: 100%;
-      padding: 8px 12px;
+
+    .action-btn {
+      padding: 3px 8px;
       border: none;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-      margin-bottom: 6px;
-    }
-    
-    .btn-primary {
-      background: #0d99ff;
-      color: white;
-    }
-    
-    .btn-primary:hover {
-      background: #0b87e0;
-    }
-    
-    .btn-secondary {
-      background: #3d3d3d;
-      color: #fff;
-    }
-    
-    .btn-secondary:hover {
-      background: #4d4d4d;
-    }
-    
-    .help {
+      border-radius: 3px;
       font-size: 10px;
-      color: #555;
+      font-weight: 500;
+      cursor: pointer;
+      background: var(--figma-color-bg, #333);
+      color: var(--figma-color-text-secondary, #aaa);
+      font-family: inherit;
+    }
+    .action-btn:hover {
+      background: var(--figma-color-bg-hover, #3d3d3d);
+      color: var(--figma-color-text, #e0e0e0);
+    }
+    .action-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+    .action-btn:disabled:hover {
+      background: var(--figma-color-bg, #333);
+      color: var(--figma-color-text-secondary, #aaa);
+    }
+
+    /* ── Settings Overlay ── */
+    .settings-overlay {
+      display: none;
+      position: fixed;
+      top: 28px;
+      right: 0;
+      width: 200px;
+      background: var(--figma-color-bg-secondary, #2d2d2d);
+      border: 1px solid var(--figma-color-border, #444);
+      border-radius: 4px;
+      padding: 8px;
+      z-index: 10;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .settings-overlay.open { display: block; }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 10px;
+      color: var(--figma-color-text-secondary, #999);
+    }
+    .settings-row label { cursor: pointer; }
+
+    .settings-input {
+      width: 100%;
+      padding: 3px 6px;
+      border: 1px solid var(--figma-color-border, #444);
+      border-radius: 3px;
+      background: var(--figma-color-bg, #1e1e1e);
+      color: var(--figma-color-text, #e0e0e0);
+      font-family: 'SF Mono', ui-monospace, monospace;
+      font-size: 10px;
       margin-top: 4px;
     }
-    
-    .divider {
-      height: 1px;
-      background: #333;
-      margin: 12px 0;
+    .settings-input:focus { outline: none; border-color: var(--figma-color-bg-brand, #0d99ff); }
+
+    .settings-disconnect {
+      width: 100%;
+      margin-top: 6px;
+      padding: 4px;
+      border: none;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 500;
+      cursor: pointer;
+      background: rgba(255, 59, 48, 0.15);
+      color: var(--figma-color-bg-danger, #ff3b30);
+      font-family: inherit;
     }
-    
-    /* Toast notification */
+    .settings-disconnect:hover { background: rgba(255, 59, 48, 0.25); }
+
+    /* ── Toast ── */
     .toast {
       position: fixed;
-      bottom: 16px;
-      left: 16px;
-      right: 16px;
-      padding: 10px 14px;
-      border-radius: 6px;
-      font-size: 12px;
+      bottom: 40px;
+      left: 8px;
+      right: 8px;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 10px;
       font-weight: 500;
       opacity: 0;
-      transform: translateY(10px);
-      transition: all 0.2s;
+      transform: translateY(6px);
+      transition: all 0.15s;
       pointer-events: none;
+      z-index: 20;
     }
-    
-    .toast.show {
-      opacity: 1;
-      transform: translateY(0);
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.success { background: rgba(52, 199, 89, 0.9); color: #fff; }
+    .toast.error { background: rgba(255, 59, 48, 0.9); color: #fff; }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--figma-color-border, #444);
+      border-radius: 2px;
     }
-    
-    .toast.success {
-      background: rgba(52, 199, 89, 0.9);
-      color: white;
-    }
-    
-    .toast.error {
-      background: rgba(255, 59, 48, 0.9);
-      color: white;
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--figma-color-text-disabled, #555);
     }
   </style>
 </head>
 <body>
-  <h1>Monorail</h1>
-  
-  <!-- WebSocket Connection Status -->
-  <div class="ws-status">
-    <div class="ws-indicator" id="ws-indicator"></div>
-    <span class="ws-status-text" id="ws-status-text">Disconnected</span>
-    <button class="ws-btn" id="ws-connect-btn">Connect</button>
+
+  <!-- Status Bar -->
+  <div class="status-bar">
+    <div class="status-dot" id="status-dot"></div>
+    <div class="status-label" id="status-label">
+      <span class="host">Disconnected</span>
+    </div>
+    <span class="status-uptime" id="status-uptime"></span>
+    <div class="status-gear" id="settings-toggle" title="Settings">&#9881;</div>
   </div>
-  
-  <!-- Quick Actions -->
-  <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-    <button class="ws-btn" id="copy-ref-btn" style="font-size: 10px; padding: 3px 8px; color: #888;">Copy Slide ID</button>
-    <span class="help" style="margin: 0; color: #555;">for sharing with Claude</span>
+
+  <!-- Settings Overlay -->
+  <div class="settings-overlay" id="settings-overlay">
+    <div class="settings-row">
+      <label for="auto-connect">Auto-connect</label>
+      <input type="checkbox" id="auto-connect" checked>
+    </div>
+    <div style="padding: 4px 0;">
+      <div style="font-size: 10px; color: var(--figma-color-text-secondary, #999); margin-bottom: 2px;">WebSocket URL</div>
+      <input class="settings-input" id="ws-url-input" value="ws://localhost:9876">
+    </div>
+    <button class="settings-disconnect" id="disconnect-btn">Disconnect</button>
   </div>
-  
+
+  <!-- Selection Panel -->
+  <div class="selection-panel" id="selection-panel">
+    <div class="selection-strip" id="selection-strip">
+      <span class="selection-arrow">&#9654;</span>
+      <span class="selection-label">Selection</span>
+      <span class="selection-badge empty" id="selection-badge">0</span>
+    </div>
+    <div class="selection-detail" id="selection-detail">
+      <div class="selection-empty">Nothing selected</div>
+    </div>
+  </div>
+
   <!-- Activity Feed -->
-  <div class="activity-section">
-    <div class="activity-header">Activity</div>
-    <div class="activity-feed" id="activity-feed">
-      <div class="activity-empty">No activity yet</div>
-    </div>
+  <div class="activity-feed" id="activity-feed">
+    <div class="activity-empty">No activity yet</div>
   </div>
-  
-  <!-- Manual Controls (collapsed) -->
-  <div class="collapsible" id="manual-controls">
-    <div class="collapsible-header" onclick="toggleCollapsible('manual-controls')">
-      <span class="collapsible-arrow">▶</span>
-      <span class="collapsible-title">Manual Controls</span>
-    </div>
-    <div class="collapsible-content">
-      <label>Paste IR (JSON)</label>
-      <textarea id="ir-input" placeholder='{"slides": [...]}'></textarea>
-      <button class="btn btn-primary" id="apply-btn">Apply to Deck</button>
-      
-      <div class="divider"></div>
-      
-      <label>Pull Current Deck</label>
-      <button class="btn btn-secondary" id="export-btn">Pull as IR</button>
-      <textarea id="ir-output" placeholder="Pulled IR will appear here..." readonly></textarea>
-      <button class="btn btn-secondary" id="copy-btn" style="display: none;">Copy to Clipboard</button>
-      
-      <div class="divider"></div>
-      
-      <label>🧪 Spike: Template Capture</label>
-      <button class="btn btn-secondary" id="capture-btn">Capture Selected Slide</button>
-      <textarea id="template-output" placeholder="Captured template structure..." readonly style="height: 200px;"></textarea>
-      <button class="btn btn-secondary" id="copy-template-btn" style="display: none;">Copy Template</button>
-      <p class="help">Select a slide/frame in Figma, then click to capture full structure</p>
-    </div>
+
+  <!-- Action Bar -->
+  <div class="action-bar">
+    <button class="action-btn" id="copy-id-btn" disabled>Copy ID</button>
   </div>
-  
-  <!-- Toast notification -->
+
+  <!-- Toast -->
   <div class="toast" id="toast"></div>
-  
+
   <script>
-    // Elements
-    const wsIndicator = document.getElementById('ws-indicator');
-    const wsStatusText = document.getElementById('ws-status-text');
-    const wsConnectBtn = document.getElementById('ws-connect-btn');
+    // ── Elements ──
+    const statusDot = document.getElementById('status-dot');
+    const statusLabel = document.getElementById('status-label');
+    const statusUptime = document.getElementById('status-uptime');
+    const settingsToggle = document.getElementById('settings-toggle');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const autoConnectCheckbox = document.getElementById('auto-connect');
+    const wsUrlInput = document.getElementById('ws-url-input');
+    const disconnectBtn = document.getElementById('disconnect-btn');
+    const selectionPanel = document.getElementById('selection-panel');
+    const selectionStrip = document.getElementById('selection-strip');
+    const selectionBadge = document.getElementById('selection-badge');
+    const selectionDetail = document.getElementById('selection-detail');
     const activityFeed = document.getElementById('activity-feed');
-    const irInput = document.getElementById('ir-input');
-    const irOutput = document.getElementById('ir-output');
-    const applyBtn = document.getElementById('apply-btn');
-    const exportBtn = document.getElementById('export-btn');
-    const copyBtn = document.getElementById('copy-btn');
+    const copyIdBtn = document.getElementById('copy-id-btn');
     const toast = document.getElementById('toast');
-    
-    // State
+
+    // ── State ──
     let ws = null;
-    const WS_URL = 'ws://localhost:9876';
+    let wsUrl = 'ws://localhost:9876';
     const activities = [];
-    
-    // Activity feed
+    let connectedAt = null;
+    let uptimeInterval = null;
+    let selectionNodes = [];
+    let fileContext = {};
+    let userScrolled = false;
+
+    // ── Toast ──
+    function showToast(message, isError = false) {
+      toast.textContent = message;
+      toast.className = 'toast ' + (isError ? 'error' : 'success') + ' show';
+      setTimeout(() => { toast.className = 'toast'; }, 2500);
+    }
+
+    // ── Uptime ──
+    function startUptime() {
+      connectedAt = Date.now();
+      uptimeInterval = setInterval(updateUptime, 1000);
+      updateUptime();
+    }
+    function stopUptime() {
+      connectedAt = null;
+      if (uptimeInterval) clearInterval(uptimeInterval);
+      statusUptime.textContent = '';
+    }
+    function updateUptime() {
+      if (!connectedAt) return;
+      const s = Math.floor((Date.now() - connectedAt) / 1000);
+      const m = Math.floor(s / 60);
+      const h = Math.floor(m / 60);
+      if (h > 0) {
+        statusUptime.textContent = `${h}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+      } else {
+        statusUptime.textContent = `${m}:${String(s % 60).padStart(2, '0')}`;
+      }
+    }
+
+    // ── Activity Feed ──
     function addActivity(icon, text) {
-      const time = new Date().toLocaleTimeString('en-US', { 
-        hour: '2-digit', 
-        minute: '2-digit',
-        hour12: false 
+      const time = new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', hour12: false
       });
-      
       activities.unshift({ icon, text, time });
-      if (activities.length > 20) activities.pop();
-      
+      if (activities.length > 30) activities.pop();
       renderActivities();
     }
-    
+
     function renderActivities() {
       if (activities.length === 0) {
         activityFeed.innerHTML = '<div class="activity-empty">No activity yet</div>';
         return;
       }
-      
-      activityFeed.innerHTML = activities.map((a, i) => `
+      const wasAtTop = activityFeed.scrollTop === 0;
+      activityFeed.innerHTML = activities.map(a => `
         <div class="activity-item">
           <span class="activity-icon">${a.icon}</span>
           <span class="activity-text">${a.text}</span>
           <span class="activity-time">${a.time}</span>
         </div>
       `).join('');
-    }
-    
-    // Collapsible sections
-    function toggleCollapsible(id) {
-      document.getElementById(id).classList.toggle('open');
-    }
-    
-    // Toast notifications
-    function showToast(message, isError = false) {
-      toast.textContent = message;
-      toast.className = 'toast ' + (isError ? 'error' : 'success') + ' show';
-      setTimeout(() => {
-        toast.className = 'toast';
-      }, 2500);
-    }
-    
-    // WebSocket
-    function updateWsStatus(state, text) {
-      wsIndicator.className = 'ws-indicator ' + state;
-      wsStatusText.textContent = text;
-      wsConnectBtn.textContent = state === 'connected' ? 'Disconnect' : 'Connect';
-    }
-    
-    function connectWebSocket() {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
-        return;
+      // Auto-scroll to top (newest) unless user scrolled away
+      if (wasAtTop || !userScrolled) {
+        activityFeed.scrollTop = 0;
       }
-      
-      updateWsStatus('connecting', 'Connecting...');
-      
+    }
+
+    activityFeed.addEventListener('scroll', () => {
+      userScrolled = activityFeed.scrollTop > 10;
+    });
+
+    // ── Selection Panel ──
+    selectionStrip.onclick = () => {
+      selectionPanel.classList.toggle('open');
+    };
+
+    function updateSelection(count, nodes) {
+      selectionNodes = nodes || [];
+      selectionBadge.textContent = count;
+      selectionBadge.className = 'selection-badge' + (count === 0 ? ' empty' : '');
+      copyIdBtn.disabled = count === 0;
+
+      if (count === 0) {
+        selectionDetail.innerHTML = '<div class="selection-empty">Nothing selected</div>';
+      } else {
+        selectionDetail.innerHTML = nodes.map(n => {
+          const dims = (n.width != null && n.height != null)
+            ? `${n.width}\u00d7${n.height}` : '';
+          const parentPath = n.parent ? n.parent + ' \u203a ' : '';
+          return `<div class="selection-node">
+            <span class="node-type">${n.type}</span>
+            <span class="node-name" title="${parentPath}${n.name}">${n.name}</span>
+            ${dims ? `<span class="node-dims">${dims}</span>` : ''}
+          </div>`;
+        }).join('');
+      }
+
+      // Forward selection to MCP server via WebSocket
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'selection-changed', count, nodes }));
+      }
+    }
+
+    // ── Connection Status ──
+    function setStatus(state, label) {
+      statusDot.className = 'status-dot ' + state;
+      statusLabel.innerHTML = label;
+    }
+
+    // ── Settings ──
+    settingsToggle.onclick = (e) => {
+      e.stopPropagation();
+      settingsOverlay.classList.toggle('open');
+    };
+    document.addEventListener('click', (e) => {
+      if (!settingsOverlay.contains(e.target) && e.target !== settingsToggle) {
+        settingsOverlay.classList.remove('open');
+      }
+    });
+    wsUrlInput.onchange = () => {
+      wsUrl = wsUrlInput.value.trim() || 'ws://localhost:9876';
+    };
+    disconnectBtn.onclick = () => {
+      if (ws) ws.close();
+      settingsOverlay.classList.remove('open');
+    };
+
+    // ── Copy ID ──
+    copyIdBtn.onclick = () => {
+      parent.postMessage({ pluginMessage: { type: 'get-slide-reference' } }, '*');
+    };
+
+    // ── WebSocket ──
+    function connectWebSocket() {
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+          return;
+        }
+        // Clean up stale/failed connections
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        if (ws.readyState === WebSocket.CONNECTING) ws.close();
+        ws = null;
+      }
+
+      setStatus('connecting', '<span class="host">Connecting\u2026</span>');
+
       try {
-        ws = new WebSocket(WS_URL);
-        
+        ws = new WebSocket(wsUrl);
+
         ws.onopen = () => {
-          console.log('[WS] Connected to server');
-          updateWsStatus('connected', 'Connected to MCP server');
-          addActivity('●', 'Connected to Claude');
-          
+          setStatus('connected', '<span class="host">monorail</span>');
+          startUptime();
+          addActivity('\u25cf', 'Connected');
+
           ws.send(JSON.stringify({
             type: 'hello',
             plugin: 'monorail-figma',
-            version: '0.1.0'
+            version: '0.1.0',
+            fileKey: fileContext.fileKey || null,
+            fileName: fileContext.fileName || null,
+            pageName: fileContext.pageName || null
           }));
         };
-        
+
         ws.onmessage = (event) => {
-          console.log('[WS] Received:', event.data);
           try {
             const msg = JSON.parse(event.data);
-            
+
             if (msg.type === 'hello-ack') {
-              // Already logged connection
+              // Update label with server info if provided
+              const host = msg.activeLabel || msg.server || 'monorail';
+              const taskHtml = msg.task
+                ? `<span class="sep">\u00b7</span><span class="task">${msg.task}</span>`
+                : '';
+              setStatus('connected', `<span class="host">${host}</span>${taskHtml}`);
             } else if (msg.type === 'push-ir') {
               const count = msg.ir?.slides?.length || 0;
-              irInput.value = JSON.stringify(msg.ir, null, 2);
-              const modeText = msg.mode === 'replace' ? ' (replacing deck)' : '';
-              const posText = msg.startIndex !== undefined ? ` at position ${msg.startIndex}` : '';
-              addActivity('↓', `Received ${count} slides from Claude${modeText}${posText}`);
-
+              const modeText = msg.mode === 'replace' ? ' (replacing)' : '';
+              addActivity('\u2193', `Push ${count} slides${modeText}`);
               if (msg.autoApply) {
                 parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), mode: msg.mode || 'append', startIndex: msg.startIndex } }, '*');
               } else {
                 showToast(`Received ${count} slides`);
               }
             } else if (msg.type === 'request-export') {
-              addActivity('↑', 'Claude pulling deck');
+              addActivity('\u2191', 'Pulling deck');
               parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
             } else if (msg.type === 'patch-elements') {
               const count = msg.patches?.changes?.length || 0;
-              addActivity('✎', `Claude patching ${count} elements`);
+              addActivity('\u270e', `Patching ${count} elements`);
               parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches } }, '*');
             } else if (msg.type === 'capture-template') {
-              addActivity('🧪', msg.slideId ? `Claude capturing slide ${msg.slideId}` : 'Claude requesting template capture');
+              addActivity('\u25cb', msg.slideId ? `Capturing ${msg.slideId}` : 'Capturing template');
               parent.postMessage({ pluginMessage: { type: 'capture-template', slideId: msg.slideId, maxDepth: msg.maxDepth } }, '*');
             } else if (msg.type === 'instantiate-template') {
-              addActivity('🆕', 'Claude creating slide from template');
+              addActivity('+', 'Creating from template');
               parent.postMessage({ pluginMessage: { type: 'instantiate-template', sourceId: msg.sourceId, contentMap: msg.contentMap } }, '*');
             } else if (msg.type === 'create-styled-slide') {
-              addActivity('🎨', `Claude creating "${msg.layout}" slide`);
+              addActivity('+', `Creating "${msg.layout}" slide`);
               parent.postMessage({ pluginMessage: { type: 'create-styled-slide', layout: msg.layout, content: msg.content, designSystem: msg.designSystem } }, '*');
             } else if (msg.type === 'delete-slides') {
               const count = msg.slideIds?.length || 0;
-              addActivity('🗑️', `Claude deleting ${count} slides`);
+              addActivity('\u00d7', `Deleting ${count} slides`);
               parent.postMessage({ pluginMessage: { type: 'delete-slides', slideIds: msg.slideIds } }, '*');
             } else if (msg.type === 'reorder-slides') {
               const count = msg.slideIds?.length || 0;
-              addActivity('↕️', `Claude reordering ${count} slides`);
+              addActivity('\u2195', `Reordering ${count} slides`);
               parent.postMessage({ pluginMessage: { type: 'reorder-slides', slideIds: msg.slideIds } }, '*');
             } else if (msg.type === 'request-screenshot') {
-              const slideId = msg.slideId ? ` (${msg.slideId})` : '';
-              addActivity('📷', `Claude requesting screenshot${slideId}`);
+              addActivity('\u25ce', msg.slideId ? `Screenshot ${msg.slideId}` : 'Screenshot');
               parent.postMessage({ pluginMessage: { type: 'export-screenshot', slideId: msg.slideId, scale: msg.scale } }, '*');
             } else if (msg.type === 'apply-primitives') {
               const count = msg.operations?.length || 0;
-              const target = msg.slideId ? ` on ${msg.slideId}` : ' (new slide)';
-              addActivity('🔧', `Claude applying ${count} primitives${target}`);
+              const target = msg.slideId ? ` on ${msg.slideId}` : '';
+              addActivity('\u25a0', `${count} primitives${target}`);
               parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations } }, '*');
+            } else if (msg.type === 'get-css') {
+              addActivity('\u25a1', msg.nodeId ? `CSS for ${msg.nodeId}` : 'CSS for selection');
+              parent.postMessage({ pluginMessage: { type: 'get-css', nodeId: msg.nodeId } }, '*');
+            } else if (msg.type === 'export-node') {
+              addActivity('\u2b07', msg.nodeId ? `Export ${msg.format || 'SVG'} ${msg.nodeId}` : 'Export node');
+              parent.postMessage({ pluginMessage: { type: 'export-node', nodeId: msg.nodeId, format: msg.format, scale: msg.scale } }, '*');
+            } else if (msg.type === 'get-component-info') {
+              addActivity('\u25c6', msg.nodeId ? `Component ${msg.nodeId}` : 'Component info');
+              parent.postMessage({ pluginMessage: { type: 'get-component-info', nodeId: msg.nodeId } }, '*');
+            } else if (msg.type === 'find-nodes') {
+              const desc = [msg.nodeType, msg.name].filter(Boolean).join(' ');
+              addActivity('\u25c9', `Find ${desc || 'nodes'}`);
+              parent.postMessage({ pluginMessage: { type: 'find-nodes', nodeType: msg.nodeType, name: msg.name, parentId: msg.parentId, limit: msg.limit } }, '*');
             }
           } catch (e) {
-            console.error('[WS] Failed to parse message:', e);
+            console.error('[WS] Parse error:', e);
           }
         };
-        
+
         ws.onclose = () => {
-          console.log('[WS] Disconnected');
-          updateWsStatus('disconnected', 'Disconnected');
-          addActivity('○', 'Disconnected');
+          setStatus('', '<span class="host">Disconnected</span>');
+          stopUptime();
+          addActivity('\u25cb', 'Disconnected');
           ws = null;
         };
-        
-        ws.onerror = (err) => {
-          console.error('[WS] Error:', err);
-          updateWsStatus('disconnected', 'Connection failed');
+
+        ws.onerror = () => {
+          setStatus('', '<span class="host">Connection failed</span>');
         };
-        
+
       } catch (e) {
-        console.error('[WS] Failed to connect:', e);
-        updateWsStatus('disconnected', 'Failed: ' + e.message);
+        setStatus('', '<span class="host">Failed</span>');
       }
     }
-    
-    wsConnectBtn.onclick = connectWebSocket;
-    
-    // Auto-connect on load
-    setTimeout(connectWebSocket, 500);
-    
-    // Copy slide reference
-    const copyRefBtn = document.getElementById('copy-ref-btn');
-    copyRefBtn.onclick = () => {
-      parent.postMessage({ pluginMessage: { type: 'get-slide-reference' } }, '*');
-    };
-    
-    // Manual controls
-    applyBtn.onclick = () => {
-      const ir = irInput.value.trim();
-      if (!ir) {
-        showToast('Please paste IR first', true);
-        return;
-      }
-      
-      try {
-        const parsed = JSON.parse(ir);
-        parent.postMessage({ pluginMessage: { type: 'apply-ir', ir } }, '*');
-        addActivity('▶', `Manual apply: ${parsed.slides?.length || 0} slides`);
-      } catch (e) {
-        showToast('Invalid JSON: ' + e.message, true);
-      }
-    };
-    
-    exportBtn.onclick = () => {
-      parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
-      addActivity('◀', 'Manual pull requested');
-    };
-    
-    // Spike: Template capture
-    const captureBtn = document.getElementById('capture-btn');
-    const templateOutput = document.getElementById('template-output');
-    const copyTemplateBtn = document.getElementById('copy-template-btn');
-    
-    captureBtn.onclick = () => {
-      parent.postMessage({ pluginMessage: { type: 'capture-template' } }, '*');
-      addActivity('🧪', 'Capturing template structure...');
-    };
-    
-    copyTemplateBtn.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(templateOutput.value);
-        showToast('Template copied!');
-      } catch (e) {
-        showToast('Failed to copy', true);
-      }
-    };
-    
-    copyBtn.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(irOutput.value);
-        showToast('Copied to clipboard!');
-      } catch (e) {
-        showToast('Failed to copy', true);
-      }
-    };
-    
-    // Messages from plugin
+
+    // Click dot or label to connect/disconnect
+    statusDot.onclick = () => connectWebSocket();
+    statusLabel.onclick = () => connectWebSocket();
+
+    // Auto-connect
+    setTimeout(() => {
+      if (autoConnectCheckbox.checked) connectWebSocket();
+    }, 500);
+
+    // ── Messages from Plugin (code.ts) ──
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
       if (!msg) return;
-      
+
+      // Selection changed
+      if (msg.type === 'selection-changed') {
+        updateSelection(msg.count, msg.nodes);
+        return;
+      }
+
+      // File context (on plugin init)
+      if (msg.type === 'file-context') {
+        fileContext = { fileKey: msg.fileKey, fileName: msg.fileName, pageName: msg.pageName };
+        return;
+      }
+
+      // Applied IR
       if (msg.type === 'applied') {
-        // Build rich activity message
         const parts = [];
         if (msg.created > 0) {
           const names = msg.createdNames || [];
-          const nameText = names.length <= 2 
-            ? names.map(n => `"${n}"`).join(', ')
-            : `${msg.created} slides`;
-          parts.push(`Created ${nameText}`);
+          parts.push(`+${names.length <= 2 ? names.map(n => `"${n}"`).join(', ') : msg.created + ' slides'}`);
         }
         if (msg.updated > 0) {
           const names = msg.updatedNames || [];
-          const nameText = names.length <= 2
-            ? names.map(n => `"${n}"`).join(', ')
-            : `${msg.updated} slides`;
-          parts.push(`Updated ${nameText}`);
+          parts.push(`\u270e${names.length <= 2 ? names.map(n => `"${n}"`).join(', ') : msg.updated + ' slides'}`);
         }
-        if (msg.skipped > 0) {
-          parts.push(`${msg.skipped} skipped`);
-        }
-        
-        const posText = msg.startIndex !== undefined ? ` at pos ${msg.startIndex}` : '';
-        const activityText = parts.join(' • ') + posText || `Applied ${msg.count} slides`;
-        
-        addActivity('✓', activityText);
-        showToast(activityText);
-        irInput.value = '';
-        
+        if (msg.skipped > 0) parts.push(`${msg.skipped} skipped`);
+        const posText = msg.startIndex !== undefined ? ` @${msg.startIndex}` : '';
+        const text = (parts.join(' ') + posText) || `Applied ${msg.count} slides`;
+        addActivity('\u2713', text);
+        showToast(text);
+
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'applied', 
-            count: msg.count,
-            created: msg.created,
-            updated: msg.updated,
-            skipped: msg.skipped,
-            createdNames: msg.createdNames,
-            updatedNames: msg.updatedNames,
+          ws.send(JSON.stringify({
+            type: 'applied', count: msg.count, created: msg.created,
+            updated: msg.updated, skipped: msg.skipped,
+            createdNames: msg.createdNames, updatedNames: msg.updatedNames,
             startIndex: msg.startIndex
           }));
         }
       }
-      
+
+      // Exported deck
       if (msg.type === 'exported') {
         const parsed = JSON.parse(msg.ir);
         const count = parsed.slides?.length || 0;
-        addActivity('✓', `Pulled ${count} slides`);
-        irOutput.value = msg.ir;
-        copyBtn.style.display = 'block';
-        
+        addActivity('\u2713', `Pulled ${count} slides`);
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'exported', ir: parsed }));
         }
       }
-      
+
+      // Patched
       if (msg.type === 'patched') {
-        const edited = msg.updated || 0;
-        const added = msg.added || 0;
-        const deleted = msg.deleted || 0;
-        const failed = msg.failed?.length || 0;
-        
-        // Build activity message
         const parts = [];
-        if (edited > 0) parts.push(`${edited} edited`);
-        if (added > 0) parts.push(`${added} added`);
-        if (deleted > 0) parts.push(`${deleted} deleted`);
+        if (msg.updated > 0) parts.push(`${msg.updated} edited`);
+        if (msg.added > 0) parts.push(`${msg.added} added`);
+        if (msg.deleted > 0) parts.push(`${msg.deleted} deleted`);
+        const failed = msg.failed?.length || 0;
         const summary = parts.join(', ') || 'no changes';
-        
-        if (failed > 0) {
-          addActivity('⚠', `Patched: ${summary} (${failed} failed)`);
-          showToast(`Patched: ${summary}, ${failed} failed`, true);
-        } else {
-          addActivity('✓', `Patched: ${summary}`);
-          showToast(`Patched: ${summary}!`);
-        }
-        
+        addActivity(failed > 0 ? '\u26a0' : '\u2713', failed > 0 ? `${summary} (${failed} failed)` : summary);
+        if (failed > 0) showToast(`${summary}, ${failed} failed`, true);
+
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'patched', 
-            updated: msg.updated, 
-            added: msg.added,
-            deleted: msg.deleted,
-            failed: msg.failed,
-            newElements: msg.newElements,
-            deletedElements: msg.deletedElements
+          ws.send(JSON.stringify({
+            type: 'patched', updated: msg.updated, added: msg.added,
+            deleted: msg.deleted, failed: msg.failed,
+            newElements: msg.newElements, deletedElements: msg.deletedElements
           }));
         }
       }
-      
-      // Spike: Template capture result
+
+      // Template captured
       if (msg.type === 'template-captured') {
-        templateOutput.value = msg.template;
-        copyTemplateBtn.style.display = 'block';
-        addActivity('✓', `Captured ${msg.nodeCount} nodes`);
-        showToast(`Captured ${msg.nodeCount} nodes!`);
-        
-        // Send through WebSocket if connected
+        addActivity('\u2713', `Captured ${msg.nodeCount} nodes`);
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'template-captured', 
+          ws.send(JSON.stringify({
+            type: 'template-captured',
             template: JSON.parse(msg.template),
-            nodeCount: msg.nodeCount 
+            nodeCount: msg.nodeCount
           }));
         }
       }
-      
-      // Spike: Instantiate template result
+
+      // Instantiated
       if (msg.type === 'instantiated') {
         if (msg.success) {
-          addActivity('✓', `Created new slide (${msg.updated} updates)`);
-          showToast(`Created new slide!`);
+          addActivity('\u2713', `Created slide (${msg.updated} updates)`);
         } else {
-          addActivity('✗', `Failed: ${msg.error}`);
-          showToast(`Failed: ${msg.error}`, true);
+          addActivity('\u2717', `Failed: ${msg.error}`);
         }
-        
-        // Send through WebSocket if connected
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'instantiated', 
-            success: msg.success,
-            newSlideId: msg.newSlideId,
-            updated: msg.updated,
-            failed: msg.failed,
-            error: msg.error
+          ws.send(JSON.stringify({
+            type: 'instantiated', success: msg.success,
+            newSlideId: msg.newSlideId, updated: msg.updated,
+            failed: msg.failed, error: msg.error
           }));
         }
       }
-      
-      // Spike: Create styled slide result
+
+      // Styled slide created
       if (msg.type === 'styled-slide-created') {
-        if (msg.success) {
-          addActivity('✓', `Created styled slide`);
-          showToast(`Created styled slide!`);
-        } else {
-          addActivity('✗', `Failed: ${msg.error}`);
-          showToast(`Failed: ${msg.error}`, true);
-        }
-        
-        // Send through WebSocket if connected
+        addActivity(msg.success ? '\u2713' : '\u2717', msg.success ? 'Created styled slide' : `Failed: ${msg.error}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'styled-slide-created', 
-            success: msg.success,
-            slideId: msg.slideId,
-            error: msg.error
+          ws.send(JSON.stringify({
+            type: 'styled-slide-created', success: msg.success,
+            slideId: msg.slideId, error: msg.error
           }));
         }
       }
-      
-      // Delete slides result
+
+      // Slides deleted
       if (msg.type === 'slides-deleted') {
         const deleted = msg.deleted || 0;
         const failed = msg.failed?.length || 0;
         const names = msg.deletedNames || [];
-        
-        // Build rich activity message
-        let activityText = '';
+        let text = '';
         if (deleted > 0) {
-          const nameList = names.length <= 2
-            ? names.map(n => `"${n}"`).join(', ')
-            : `${names[0]} + ${names.length - 1} more`;
-          activityText = `Deleted: ${nameList}`;
+          text = names.length <= 2
+            ? 'Deleted ' + names.map(n => `"${n}"`).join(', ')
+            : `Deleted ${deleted} slides`;
         }
-        if (failed > 0) {
-          activityText += activityText ? ` (${failed} not found)` : `${failed} slides not found`;
-        }
-        
-        addActivity(failed > 0 ? '⚠' : '🗑️', activityText || `Deleted ${deleted} slides`);
-        showToast(activityText || `Deleted ${deleted} slides!`, failed > 0);
-        
-        // Send through WebSocket if connected
+        if (failed > 0) text += (text ? ` (${failed} not found)` : `${failed} not found`);
+        addActivity(failed > 0 ? '\u26a0' : '\u00d7', text || `Deleted ${deleted} slides`);
+
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'slides-deleted', 
-            deleted: msg.deleted,
-            failed: msg.failed,
-            deletedNames: msg.deletedNames
+          ws.send(JSON.stringify({
+            type: 'slides-deleted', deleted: msg.deleted,
+            failed: msg.failed, deletedNames: msg.deletedNames
           }));
         }
       }
-      
-      // Reorder slides result
+
+      // Slides reordered
       if (msg.type === 'slides-reordered') {
         if (msg.success) {
-          // Show what changed
           const before = msg.beforeOrder || [];
           const after = msg.afterOrder || [];
-          let activityText = '';
-          
-          // Find slides that moved
           const moved = [];
           for (let i = 0; i < Math.min(before.length, after.length); i++) {
-            if (before[i] !== after[i]) {
-              moved.push(after[i]);
-            }
+            if (before[i] !== after[i]) moved.push(after[i]);
           }
-          
-          if (moved.length > 0 && moved.length <= 3) {
-            activityText = `Moved: ${moved.map(n => `"${n}"`).join(', ')}`;
-          } else if (moved.length > 3) {
-            activityText = `Reordered ${moved.length} slides`;
-          } else {
-            activityText = `Order unchanged (${msg.count} slides)`;
-          }
-          
-          addActivity('↕️', activityText);
-          showToast(activityText);
+          const text = moved.length > 0 && moved.length <= 3
+            ? 'Moved ' + moved.map(n => `"${n}"`).join(', ')
+            : moved.length > 3
+              ? `Reordered ${moved.length} slides`
+              : `Order unchanged (${msg.count})`;
+          addActivity('\u2195', text);
         } else {
-          addActivity('✗', `Reorder failed: ${msg.error}`);
-          showToast(`Reorder failed: ${msg.error}`, true);
+          addActivity('\u2717', `Reorder failed: ${msg.error}`);
         }
-        
-        // Send through WebSocket if connected
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'slides-reordered', 
-            success: msg.success,
-            count: msg.count,
-            beforeOrder: msg.beforeOrder,
-            afterOrder: msg.afterOrder,
-            error: msg.error
+          ws.send(JSON.stringify({
+            type: 'slides-reordered', success: msg.success,
+            count: msg.count, beforeOrder: msg.beforeOrder,
+            afterOrder: msg.afterOrder, error: msg.error
           }));
         }
       }
-      
-      // Screenshot result
+
+      // Screenshot
       if (msg.type === 'screenshot-exported') {
         if (msg.success) {
-          const sizeKB = Math.round((msg.base64?.length || 0) * 3 / 4 / 1024);
-          addActivity('📷', `Screenshot: "${msg.slideName}" (${sizeKB}KB)`);
-          showToast(`Screenshot exported!`);
+          const kb = Math.round((msg.base64?.length || 0) * 3 / 4 / 1024);
+          addActivity('\u25ce', `Screenshot "${msg.slideName}" (${kb}KB)`);
         } else {
-          addActivity('✗', `Screenshot failed: ${msg.error}`);
-          showToast(`Screenshot failed: ${msg.error}`, true);
+          addActivity('\u2717', `Screenshot failed: ${msg.error}`);
         }
-        
-        // Send through WebSocket if connected
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'screenshot-exported',
-            success: msg.success,
-            slideId: msg.slideId,
-            slideName: msg.slideName,
-            base64: msg.base64,
-            width: msg.width,
-            height: msg.height,
+          ws.send(JSON.stringify({
+            type: 'screenshot-exported', success: msg.success,
+            slideId: msg.slideId, slideName: msg.slideName,
+            base64: msg.base64, width: msg.width, height: msg.height,
             error: msg.error
           }));
         }
       }
-      
-      // Primitives result
+
+      // Primitives
       if (msg.type === 'primitives-applied') {
+        const count = msg.created?.length || 0;
         if (msg.success) {
-          const count = msg.created?.length || 0;
-          addActivity('✓', `Created ${count} elements on "${msg.slideName}"`);
-          showToast(`Created ${count} elements!`);
+          addActivity('\u2713', `${count} elements on "${msg.slideName}"`);
         } else {
-          addActivity('✗', `Primitives failed: ${msg.error}`);
-          showToast(`Failed: ${msg.error}`, true);
+          addActivity('\u2717', `Primitives failed: ${msg.error}`);
         }
-        
-        // Send through WebSocket if connected
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ 
-            type: 'primitives-applied',
-            success: msg.success,
-            slideId: msg.slideId,
-            slideName: msg.slideName,
-            created: msg.created,
-            error: msg.error
+          ws.send(JSON.stringify({
+            type: 'primitives-applied', success: msg.success,
+            slideId: msg.slideId, slideName: msg.slideName,
+            created: msg.created, warnings: msg.warnings, error: msg.error
+          }));
+        }
+        if (msg.warnings?.length > 0) {
+          addActivity('\u26a0', `${msg.warnings.length} warning(s)`);
+        }
+      }
+
+      // CSS extracted
+      if (msg.type === 'css-extracted') {
+        addActivity(msg.success ? '\u2713' : '\u2717',
+          msg.success ? `CSS for "${msg.raw?.name}"` : `CSS failed: ${msg.error}`);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'css-extracted', success: msg.success,
+            css: msg.css, raw: msg.raw, error: msg.error
           }));
         }
       }
-      
-      // Slide reference result
+
+      // Node exported (SVG/PNG)
+      if (msg.type === 'node-exported') {
+        addActivity(msg.success ? '\u2713' : '\u2717',
+          msg.success ? `Exported "${msg.nodeName}" as ${msg.format}` : `Export failed: ${msg.error}`);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'node-exported', success: msg.success,
+            nodeId: msg.nodeId, nodeName: msg.nodeName,
+            format: msg.format, data: msg.data,
+            width: msg.width, height: msg.height, error: msg.error
+          }));
+        }
+      }
+
+      // Component info
+      if (msg.type === 'component-info') {
+        addActivity(msg.success ? '\u2713' : '\u2717',
+          msg.success ? `Component "${msg.node?.name}"` : `Component failed: ${msg.error}`);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        }
+      }
+
+      // Nodes found (search results)
+      if (msg.type === 'nodes-found') {
+        addActivity(msg.success ? '\u2713' : '\u2717',
+          msg.success ? `Found ${msg.total} node(s)` : `Find failed: ${msg.error}`);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        }
+      }
+
+      // Slide reference (copy ID)
       if (msg.type === 'slide-reference') {
-        console.log('[UI] Received slide-reference:', msg);
         if (msg.success) {
           const ref = `Slide: "${msg.name}" (${msg.id})`;
-          
-          // Use execCommand fallback which works better in iframes
-          const textarea = document.createElement('textarea');
-          textarea.value = ref;
-          textarea.style.position = 'fixed';
-          textarea.style.left = '-9999px';
-          document.body.appendChild(textarea);
-          textarea.select();
-          
+          const ta = document.createElement('textarea');
+          ta.value = ref;
+          ta.style.cssText = 'position:fixed;left:-9999px';
+          document.body.appendChild(ta);
+          ta.select();
           try {
-            const success = document.execCommand('copy');
-            if (success) {
+            if (document.execCommand('copy')) {
               showToast(`Copied: ${ref}`);
-              addActivity('📋', `Copied "${msg.name}"`);
+              addActivity('\u2398', `Copied "${msg.name}"`);
             } else {
-              // execCommand failed, try modern API
               navigator.clipboard.writeText(ref).then(() => {
                 showToast(`Copied: ${ref}`);
-                addActivity('📋', `Copied "${msg.name}"`);
               }).catch(() => {
-                showToast(`Reference: ${ref}`, false);
-                addActivity('📋', `Reference for "${msg.name}"`);
+                showToast(ref);
               });
             }
           } catch (err) {
-            console.error('[UI] Copy error:', err);
-            showToast(`Reference: ${ref}`, false);
-            addActivity('📋', `Reference for "${msg.name}"`);
+            showToast(ref);
           }
-          
-          document.body.removeChild(textarea);
+          document.body.removeChild(ta);
         } else {
           showToast(msg.error || 'Select a slide first', true);
         }

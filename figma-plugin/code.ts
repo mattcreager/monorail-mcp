@@ -5,7 +5,32 @@
 import type { SlideContent, Slide, DeckIR, ElementInfo, AddableContainer } from '../shared/types';
 
 // Show the UI
-figma.showUI(__html__, { width: 320, height: 280 });
+figma.showUI(__html__, { width: 320, height: 280, themeColors: true });
+
+// Send file context to UI for identification
+figma.ui.postMessage({
+  type: 'file-context',
+  fileKey: (figma as any).fileKey ?? null,
+  fileName: figma.root.name,
+  pageName: figma.currentPage.name
+});
+
+// Forward selection changes to UI
+figma.on('selectionchange', () => {
+  const sel = figma.currentPage.selection;
+  figma.ui.postMessage({
+    type: 'selection-changed',
+    count: sel.length,
+    nodes: sel.slice(0, 20).map(n => ({
+      id: n.id,
+      name: n.name,
+      type: n.type,
+      width: 'width' in n ? Math.round((n as any).width) : null,
+      height: 'height' in n ? Math.round((n as any).height) : null,
+      parent: n.parent?.name ?? null
+    }))
+  });
+});
 
 // Colors - dark theme
 const COLORS = {
@@ -3861,6 +3886,10 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         // Track created nodes by name for referencing
         const nodesByName: Record<string, SceneNode> = {};
         const createdNodes: Array<{ name: string; id: string; type: string }> = [];
+        const warnings: string[] = [];
+        
+        // Design system constants
+        const MIN_FONT_SIZE = 24;
 
         // Find or create target slide
         let targetSlide: SceneNode & ChildrenMixin;
@@ -4017,7 +4046,14 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               if (op.name) textNode.name = op.name;
               const fontName = await getFontName(op.bold || false);
               textNode.fontName = fontName;
-              textNode.fontSize = op.fontSize || 24;
+              
+              // Font size validation
+              const requestedSize = op.fontSize || 24;
+              if (requestedSize < MIN_FONT_SIZE) {
+                const preview = (op.text || '').substring(0, 30) + ((op.text || '').length > 30 ? '...' : '');
+                warnings.push(`Font size ${requestedSize}px is below minimum (${MIN_FONT_SIZE}px) for text: "${preview}"`);
+              }
+              textNode.fontSize = requestedSize;
               textNode.fills = [{ type: 'SOLID', color: resolveColor(op.color) }];
               textNode.characters = op.text || '';
               
@@ -4346,12 +4382,19 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
 
         const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"`;
         figma.notify(summary);
+        
+        // Notify about warnings
+        if (warnings.length > 0) {
+          figma.notify(`⚠️ ${warnings.length} design warning(s)`, { timeout: 3000 });
+        }
+        
         figma.ui.postMessage({
           type: 'primitives-applied',
           success: true,
           slideId: targetSlide.id,
           slideName: targetSlide.name,
-          created: createdNodes
+          created: createdNodes,
+          warnings: warnings.length > 0 ? warnings : undefined
         });
 
       } catch (err) {
@@ -4359,6 +4402,268 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         console.error('Primitives error:', errorMsg);
         figma.notify(`Failed: ${errorMsg}`, { error: true });
         figma.ui.postMessage({ type: 'primitives-applied', success: false, error: errorMsg });
+      }
+    }
+
+    // =======================================================================
+    // GET-CSS: Return getCSSAsync() + raw fills/strokes/effects for a node
+    // Design-to-code tool — does not affect slide functionality
+    // =======================================================================
+    if (msg.type === 'get-css') {
+      const nodeId = (msg as any).nodeId as string | undefined;
+      let targetNode: SceneNode | null = null;
+
+      if (nodeId) {
+        targetNode = await (figma as any).getNodeByIdAsync(nodeId);
+      } else if (figma.currentPage.selection.length > 0) {
+        targetNode = figma.currentPage.selection[0];
+      }
+
+      if (!targetNode) {
+        figma.ui.postMessage({ type: 'css-extracted', success: false, error: nodeId ? `Node not found: ${nodeId}` : 'No node selected' });
+        return;
+      }
+
+      try {
+        // getCSSAsync returns Record<string, string> — same as Figma's "Copy as CSS"
+        const css = await (targetNode as any).getCSSAsync();
+
+        // Also return raw paint data for properties CSS can't fully represent
+        const raw: any = {
+          nodeId: targetNode.id,
+          name: targetNode.name,
+          type: targetNode.type,
+          width: targetNode.width,
+          height: targetNode.height,
+        };
+
+        if ('fills' in targetNode && targetNode.fills !== figma.mixed) {
+          raw.fills = JSON.parse(JSON.stringify(targetNode.fills));
+        }
+        if ('strokes' in targetNode) {
+          raw.strokes = JSON.parse(JSON.stringify(targetNode.strokes));
+        }
+        if ('strokeWeight' in targetNode && targetNode.strokeWeight !== figma.mixed) {
+          raw.strokeWeight = targetNode.strokeWeight;
+        }
+        if ('strokeAlign' in targetNode) {
+          raw.strokeAlign = (targetNode as any).strokeAlign;
+        }
+        if ('effects' in targetNode) {
+          raw.effects = JSON.parse(JSON.stringify(targetNode.effects));
+        }
+        if ('cornerRadius' in targetNode && targetNode.cornerRadius !== figma.mixed) {
+          raw.cornerRadius = targetNode.cornerRadius;
+        }
+        if ('opacity' in targetNode) {
+          raw.opacity = targetNode.opacity;
+        }
+        if ('blendMode' in targetNode) {
+          raw.blendMode = (targetNode as any).blendMode;
+        }
+
+        figma.ui.postMessage({
+          type: 'css-extracted',
+          success: true,
+          css,
+          raw,
+        });
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        figma.ui.postMessage({ type: 'css-extracted', success: false, error: errorMsg });
+      }
+    }
+
+    // =========================================================================
+    // export-node — Export any node as SVG or PNG
+    // =========================================================================
+    if (msg.type === 'export-node') {
+      const nodeId = (msg as any).nodeId as string | undefined;
+      const format = ((msg as any).format as string || 'SVG').toUpperCase();
+      const scale = (msg as any).scale as number || 1;
+
+      let targetNode: SceneNode | null = null;
+
+      if (nodeId) {
+        targetNode = await (figma as any).getNodeByIdAsync(nodeId);
+      } else if (figma.currentPage.selection.length > 0) {
+        targetNode = figma.currentPage.selection[0];
+      }
+
+      if (!targetNode) {
+        figma.ui.postMessage({
+          type: 'node-exported', success: false,
+          error: nodeId ? `Node not found: ${nodeId}` : 'No node selected',
+        });
+        return;
+      }
+
+      try {
+        if (format === 'SVG') {
+          const svgData = await targetNode.exportAsync({ format: 'SVG' });
+          // Chunked conversion to avoid stack overflow on large SVGs
+          const chunks: string[] = [];
+          for (let i = 0; i < svgData.length; i += 8192) {
+            chunks.push(String.fromCharCode.apply(null, [...svgData.slice(i, i + 8192)]));
+          }
+          const svgString = chunks.join('');
+          figma.ui.postMessage({
+            type: 'node-exported', success: true,
+            nodeId: targetNode.id, nodeName: targetNode.name,
+            format: 'SVG', data: svgString,
+            width: Math.round(targetNode.width), height: Math.round(targetNode.height),
+          });
+        } else {
+          const pngData = await targetNode.exportAsync({
+            format: 'PNG',
+            constraint: { type: 'SCALE', value: scale },
+          });
+          const base64 = figma.base64Encode(pngData);
+          figma.ui.postMessage({
+            type: 'node-exported', success: true,
+            nodeId: targetNode.id, nodeName: targetNode.name,
+            format: 'PNG', data: base64,
+            width: Math.round(targetNode.width * scale), height: Math.round(targetNode.height * scale),
+          });
+        }
+        figma.notify(`Exported "${targetNode.name}" as ${format}`);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        figma.ui.postMessage({ type: 'node-exported', success: false, error: errorMsg });
+      }
+    }
+
+    // =========================================================================
+    // get-component-info — Inspect component relationships
+    // =========================================================================
+    if (msg.type === 'get-component-info') {
+      const nodeId = (msg as any).nodeId as string | undefined;
+      let targetNode: SceneNode | null = null;
+
+      if (nodeId) {
+        targetNode = await (figma as any).getNodeByIdAsync(nodeId);
+      } else if (figma.currentPage.selection.length > 0) {
+        targetNode = figma.currentPage.selection[0];
+      }
+
+      if (!targetNode) {
+        figma.ui.postMessage({
+          type: 'component-info', success: false,
+          error: nodeId ? `Node not found: ${nodeId}` : 'No node selected',
+        });
+        return;
+      }
+
+      const result: any = {
+        type: 'component-info',
+        success: true,
+        node: { id: targetNode.id, name: targetNode.name, type: targetNode.type },
+      };
+
+      if (targetNode.type === 'INSTANCE') {
+        const inst = targetNode as InstanceNode;
+        result.isInstance = true;
+        const main = inst.mainComponent;
+        if (main) {
+          result.mainComponent = {
+            id: main.id,
+            name: main.name,
+            description: main.description || undefined,
+          };
+          if (main.parent && main.parent.type === 'COMPONENT_SET') {
+            const cs = main.parent as ComponentSetNode;
+            result.componentSet = { id: cs.id, name: cs.name, variantCount: cs.children.length };
+            result.variants = cs.children.map((v: any) => ({
+              id: v.id, name: v.name,
+              properties: v.variantProperties || {},
+            }));
+          }
+        }
+        if ('componentProperties' in inst) {
+          result.componentProperties = {};
+          for (const [key, prop] of Object.entries(inst.componentProperties)) {
+            result.componentProperties[key] = {
+              type: (prop as any).type,
+              value: String((prop as any).value),
+            };
+          }
+        }
+      } else if (targetNode.type === 'COMPONENT') {
+        const comp = targetNode as ComponentNode;
+        result.mainComponent = { id: comp.id, name: comp.name, description: comp.description || undefined };
+        if (comp.parent && comp.parent.type === 'COMPONENT_SET') {
+          const cs = comp.parent as ComponentSetNode;
+          result.componentSet = { id: cs.id, name: cs.name, variantCount: cs.children.length };
+          result.variants = cs.children.map((v: any) => ({
+            id: v.id, name: v.name,
+            properties: v.variantProperties || {},
+          }));
+        }
+      } else if (targetNode.type === 'COMPONENT_SET') {
+        const cs = targetNode as ComponentSetNode;
+        result.componentSet = { id: cs.id, name: cs.name, variantCount: cs.children.length };
+        result.variants = cs.children.map((v: any) => ({
+          id: v.id, name: v.name,
+          properties: v.variantProperties || {},
+        }));
+      }
+
+      figma.ui.postMessage(result);
+    }
+
+    // =========================================================================
+    // find-nodes — Search nodes by type and/or name
+    // =========================================================================
+    if (msg.type === 'find-nodes') {
+      const nodeType = (msg as any).nodeType as string | undefined;
+      const name = (msg as any).name as string | undefined;
+      const parentId = (msg as any).parentId as string | undefined;
+      const limit = Math.min((msg as any).limit || 20, 100);
+
+      try {
+        let searchRoot: BaseNode & ChildrenMixin;
+        if (parentId) {
+          const parent = await (figma as any).getNodeByIdAsync(parentId);
+          if (!parent || !('children' in parent)) {
+            figma.ui.postMessage({
+              type: 'nodes-found', success: false,
+              error: `Parent not found or has no children: ${parentId}`,
+            });
+            return;
+          }
+          searchRoot = parent;
+        } else {
+          searchRoot = figma.currentPage;
+        }
+
+        const nameLower = name?.toLowerCase();
+        const matches = searchRoot.findAll((node) => {
+          if (nodeType && node.type !== nodeType) return false;
+          if (nameLower && !node.name.toLowerCase().includes(nameLower)) return false;
+          return true;
+        });
+
+        const total = matches.length;
+        const results = matches.slice(0, limit).map((node) => ({
+          id: node.id,
+          name: node.name,
+          type: node.type,
+          x: 'x' in node ? Math.round((node as any).x) : 0,
+          y: 'y' in node ? Math.round((node as any).y) : 0,
+          width: 'width' in node ? Math.round((node as any).width) : 0,
+          height: 'height' in node ? Math.round((node as any).height) : 0,
+          parentId: node.parent?.id ?? null,
+          parentName: node.parent?.name ?? null,
+        }));
+
+        figma.ui.postMessage({
+          type: 'nodes-found', success: true,
+          nodes: results, total, truncated: total > limit,
+        });
+        figma.notify(`Found ${total} nodes${total > limit ? ` (showing ${limit})` : ''}`);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        figma.ui.postMessage({ type: 'nodes-found', success: false, error: errorMsg });
       }
     }
 

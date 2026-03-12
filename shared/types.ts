@@ -478,3 +478,66 @@ export interface AddableContainer {
   /** Usage hint for AI */
   hint: string;
 }
+
+// =============================================================================
+// NODE EXPORT TYPES
+// =============================================================================
+
+export interface ExportResult {
+  success: boolean;
+  nodeId?: string;
+  nodeName?: string;
+  format?: 'SVG' | 'PNG';
+  /** SVG: UTF-8 string. PNG: base64-encoded. */
+  data?: string;
+  width?: number;
+  height?: number;
+  error?: string;
+}
+
+// =============================================================================
+// COMPONENT INSPECTION TYPES
+// =============================================================================
+
+export interface ComponentInfoResult {
+  success: boolean;
+  node: { id: string; name: string; type: string };
+  isInstance?: boolean;
+  mainComponent?: {
+    id: string;
+    name: string;
+    description?: string;
+  };
+  componentSet?: {
+    id: string;
+    name: string;
+    variantCount: number;
+  };
+  componentProperties?: Record<string, { type: string; value: string; options?: string[] }>;
+  variants?: Array<{ id: string; name: string; properties: Record<string, string> }>;
+  error?: string;
+}
+
+// =============================================================================
+// NODE SEARCH TYPES
+// =============================================================================
+
+export interface FoundNode {
+  id: string;
+  name: string;
+  type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  parentId: string | null;
+  parentName: string | null;
+}
+
+export interface FindResult {
+  success: boolean;
+  nodes?: FoundNode[];
+  total?: number;
+  truncated?: boolean;
+  error?: string;
+}

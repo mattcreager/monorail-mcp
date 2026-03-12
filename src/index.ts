@@ -734,6 +734,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "monorail_css",
+        description:
+          "Extract CSS and raw paint data from a Figma node. Returns Figma's getCSSAsync() output (same as 'Copy as CSS') plus raw fills, strokes, effects with full gradient data and blend modes. Use for design-to-code translation.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            node_id: {
+              type: "string",
+              description:
+                "Figma node ID to extract CSS from. If omitted, uses the currently selected node.",
+            },
+          },
+        },
+      },
+      {
         name: "monorail_clone",
         description:
           "Clone a slide and update its text content. Creates a new slide that preserves all styling, positioning, and structure from the source — then updates specific text slots. Use capture first to identify slot IDs.",
@@ -854,7 +869,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   bidirectional: { type: "boolean", description: "If true, arrow has heads on both ends" },
                   // Text properties
                   text: { type: "string", description: "Text content (for text op)" },
-                  fontSize: { type: "number", description: "Font size in pixels (for text op)" },
+                  fontSize: { type: "number", description: "Font size in pixels (for text op). MINIMUM 24px for readability at presentation distance. Sizes below 24px will trigger a warning." },
                   bold: { type: "boolean", description: "Bold font (for text op)" },
                   maxWidth: { type: "number", description: "Maximum width before wrapping (for text op)" },
                   // Colors (named: 'headline', 'body', 'muted', 'cyan', 'orange', 'green', 'pink', 'red', 'yellow', hex '#1a1a2e', or {r,g,b})
@@ -922,6 +937,74 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["operations"],
         },
       },
+      {
+        name: "monorail_export",
+        description:
+          "Export any Figma node as SVG or PNG. Unlike monorail_screenshot (slide-level PNG), this targets individual nodes (vectors, components, icons) and supports SVG output. Returns SVG as a UTF-8 string or PNG as base64.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            node_id: {
+              type: "string",
+              description:
+                "Figma node ID to export. If omitted, exports the currently selected node.",
+            },
+            format: {
+              type: "string",
+              enum: ["SVG", "PNG"],
+              description: "Export format (default: SVG).",
+            },
+            scale: {
+              type: "number",
+              description:
+                "Export scale factor (default: 1). Only affects PNG output.",
+            },
+          },
+        },
+      },
+      {
+        name: "monorail_component",
+        description:
+          "Get component info for a Figma node. Returns main component, variant properties, component set, and sibling variants. Works on instances (returns source component), components, and component sets.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            node_id: {
+              type: "string",
+              description:
+                "Figma node ID. Can be an instance, component, or component set. If omitted, uses selected node.",
+            },
+          },
+        },
+      },
+      {
+        name: "monorail_find",
+        description:
+          "Search for nodes by type and/or name. Returns IDs, positions, bounds, and parent info. Use to discover components, vectors, text nodes, or frames in the document. Searches current page by default, or within a specific parent node.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            type: {
+              type: "string",
+              description:
+                "Node type filter (e.g. 'COMPONENT', 'INSTANCE', 'VECTOR', 'TEXT', 'FRAME'). Optional.",
+            },
+            name: {
+              type: "string",
+              description: "Name filter — substring match, case-insensitive. Optional.",
+            },
+            parent_id: {
+              type: "string",
+              description:
+                "Scope search to descendants of this node ID. If omitted, searches entire current page.",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum results to return (default: 20, max: 100).",
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -938,11 +1021,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
       
       if (isConnected) {
+        const selectionText = currentSelection.count > 0
+          ? `\n  Selection: ${currentSelection.count} node(s)\n` + currentSelection.nodes.map(n => {
+              const dims = n.width != null && n.height != null ? ` ${n.width}×${n.height}` : '';
+              return `    - ${n.type} "${n.name}"${dims}${n.parent ? ` (in ${n.parent})` : ''}`;
+            }).join('\n')
+          : '\n  Selection: none';
         return {
           content: [
             {
               type: "text" as const,
-              text: `✓ Figma plugin connected\n  Plugin: ${pluginInfo.name || "unknown"}\n  Version: ${pluginInfo.version || "unknown"}\n  Connected at: ${pluginInfo.connectedAt || "unknown"}\n  WebSocket server: ws://localhost:${WS_PORT}`,
+              text: `✓ Figma plugin connected\n  Plugin: ${pluginInfo.name || "unknown"}\n  Version: ${pluginInfo.version || "unknown"}\n  Connected at: ${pluginInfo.connectedAt || "unknown"}\n  WebSocket server: ws://localhost:${WS_PORT}${selectionText}`,
             },
           ],
         };
@@ -1446,6 +1535,330 @@ ${JSON.stringify(output, null, 2)}
     }
 
     // =========================================================================
+    // monorail_css - Extract CSS + raw paint data from a node
+    // =========================================================================
+    case "monorail_css": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+
+      const nodeId = typeof request.params?.arguments?.node_id === 'string'
+        ? request.params.arguments.node_id
+        : undefined;
+
+      if (!isConnected) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (hasPendingRequest('css')) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Error: Another CSS request is already in progress. Please wait.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const cssPromise = createPendingRequest<CssResult>('css', "Timeout waiting for CSS extraction");
+      connectedPlugin!.send(JSON.stringify({ type: "get-css", nodeId }));
+
+      try {
+        const result = await cssPromise;
+
+        if (!result.success) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error extracting CSS: ${result.error}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Format CSS properties as a CSS block
+        const cssLines = Object.entries(result.css || {})
+          .map(([prop, val]) => `${prop}: ${val};`)
+          .join('\n');
+
+        const output = {
+          node: result.raw?.name,
+          type: result.raw?.type,
+          dimensions: { width: result.raw?.width, height: result.raw?.height },
+          css: result.css,
+          raw: result.raw,
+        };
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✓ CSS for "${result.raw?.name}" (${result.raw?.type}, ${result.raw?.width}×${result.raw?.height})
+
+**Figma CSS:**
+\`\`\`css
+${cssLines}
+\`\`\`
+
+**Raw paint data:**
+\`\`\`json
+${JSON.stringify(output, null, 2)}
+\`\`\``,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error extracting CSS: ${e instanceof Error ? e.message : "unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_export - Export node as SVG or PNG
+    // =========================================================================
+    case "monorail_export": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+
+      const nodeId = typeof request.params?.arguments?.node_id === 'string'
+        ? request.params.arguments.node_id
+        : undefined;
+      const format = typeof request.params?.arguments?.format === 'string'
+        ? request.params.arguments.format.toUpperCase()
+        : 'SVG';
+      const scale = typeof request.params?.arguments?.scale === 'number'
+        ? request.params.arguments.scale
+        : 1;
+
+      if (!isConnected) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first." }],
+          isError: true,
+        };
+      }
+
+      if (hasPendingRequest('export')) {
+        return {
+          content: [{ type: "text" as const, text: "Error: Another export request is already in progress. Please wait." }],
+          isError: true,
+        };
+      }
+
+      const exportPromise = createPendingRequest<ExportResult>('export', "Timeout waiting for node export");
+      connectedPlugin!.send(JSON.stringify({ type: "export-node", nodeId, format, scale }));
+
+      try {
+        const result = await exportPromise;
+
+        if (!result.success) {
+          return {
+            content: [{ type: "text" as const, text: `Error exporting node: ${result.error}` }],
+            isError: true,
+          };
+        }
+
+        if (result.format === 'PNG') {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `✓ Exported "${result.nodeName}" as PNG (${result.width}×${result.height})`,
+              },
+              {
+                type: "image" as const,
+                data: result.data!,
+                mimeType: "image/png",
+              },
+            ],
+          };
+        } else {
+          // SVG — return as text
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `✓ Exported "${result.nodeName}" as SVG (${result.width}×${result.height})\n\n\`\`\`svg\n${result.data}\n\`\`\``,
+              },
+            ],
+          };
+        }
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error exporting node: ${e instanceof Error ? e.message : "unknown error"}` }],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_component - Inspect component relationships
+    // =========================================================================
+    case "monorail_component": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+
+      const nodeId = typeof request.params?.arguments?.node_id === 'string'
+        ? request.params.arguments.node_id
+        : undefined;
+
+      if (!isConnected) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first." }],
+          isError: true,
+        };
+      }
+
+      if (hasPendingRequest('component')) {
+        return {
+          content: [{ type: "text" as const, text: "Error: Another component request is already in progress. Please wait." }],
+          isError: true,
+        };
+      }
+
+      const compPromise = createPendingRequest<ComponentInfoResult>('component', "Timeout waiting for component info");
+      connectedPlugin!.send(JSON.stringify({ type: "get-component-info", nodeId }));
+
+      try {
+        const result = await compPromise;
+
+        if (!result.success) {
+          return {
+            content: [{ type: "text" as const, text: `Error getting component info: ${result.error}` }],
+            isError: true,
+          };
+        }
+
+        // Build human-readable summary
+        const lines: string[] = [];
+        lines.push(`✓ Component info for "${result.node.name}" (${result.node.type})`);
+        if (result.isInstance && result.mainComponent) {
+          lines.push(`  Instance of: "${result.mainComponent.name}" (${result.mainComponent.id})`);
+          if (result.mainComponent.description) lines.push(`  Description: ${result.mainComponent.description}`);
+        }
+        if (result.componentSet) {
+          lines.push(`  Component set: "${result.componentSet.name}" (${result.componentSet.variantCount} variants)`);
+        }
+        if (result.componentProperties && Object.keys(result.componentProperties).length > 0) {
+          lines.push(`  Properties:`);
+          for (const [key, prop] of Object.entries(result.componentProperties)) {
+            lines.push(`    ${key}: ${prop.value} (${prop.type})`);
+          }
+        }
+        if (result.variants && result.variants.length > 0) {
+          lines.push(`  Variants:`);
+          for (const v of result.variants) {
+            lines.push(`    - "${v.name}" (${v.id})`);
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: lines.join('\n') + `\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error getting component info: ${e instanceof Error ? e.message : "unknown error"}` }],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_find - Search nodes by type/name
+    // =========================================================================
+    case "monorail_find": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+
+      const nodeType = typeof request.params?.arguments?.type === 'string'
+        ? request.params.arguments.type
+        : undefined;
+      const nodeName = typeof request.params?.arguments?.name === 'string'
+        ? request.params.arguments.name
+        : undefined;
+      const parentId = typeof request.params?.arguments?.parent_id === 'string'
+        ? request.params.arguments.parent_id
+        : undefined;
+      const limit = typeof request.params?.arguments?.limit === 'number'
+        ? Math.min(Math.max(request.params.arguments.limit, 1), 100)
+        : 20;
+
+      if (!isConnected) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first." }],
+          isError: true,
+        };
+      }
+
+      if (hasPendingRequest('find')) {
+        return {
+          content: [{ type: "text" as const, text: "Error: Another find request is already in progress. Please wait." }],
+          isError: true,
+        };
+      }
+
+      const findPromise = createPendingRequest<FindResult>('find', "Timeout waiting for node search");
+      connectedPlugin!.send(JSON.stringify({ type: "find-nodes", nodeType, name: nodeName, parentId, limit }));
+
+      try {
+        const result = await findPromise;
+
+        if (!result.success) {
+          return {
+            content: [{ type: "text" as const, text: `Error searching nodes: ${result.error}` }],
+            isError: true,
+          };
+        }
+
+        const nodes = result.nodes || [];
+        if (nodes.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: `No nodes found matching criteria.` }],
+          };
+        }
+
+        const lines: string[] = [];
+        lines.push(`✓ Found ${result.total} node(s)${result.truncated ? ` (showing ${nodes.length})` : ''}`);
+        lines.push('');
+        for (const n of nodes) {
+          lines.push(`- **${n.name}** (${n.type}) — ID: \`${n.id}\`, ${n.width}×${n.height} at (${n.x}, ${n.y})${n.parentName ? ` in "${n.parentName}"` : ''}`);
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: lines.join('\n') + `\n\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error searching nodes: ${e instanceof Error ? e.message : "unknown error"}` }],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
     // monorail_clone - Clone slide and update content
     // =========================================================================
     case "monorail_clone": {
@@ -1819,6 +2232,7 @@ The new slide has been selected in Figma.`,
           slideId?: string;
           slideName?: string;
           created?: Array<{ name: string; id: string; type: string }>;
+          warnings?: string[];
           error?: string;
         }>('primitives', 'Primitives request timed out');
 
@@ -1847,6 +2261,12 @@ The new slide has been selected in Figma.`,
         // Build success response
         const createdList = result.created?.map(n => `  - ${n.name} (${n.type}): ${n.id}`).join('\n') || '';
         
+        // Format warnings if any
+        let warningsText = '';
+        if (result.warnings && result.warnings.length > 0) {
+          warningsText = `\n\n**⚠️ Design Warnings (${result.warnings.length}):**\n${result.warnings.map(w => `  - ${w}`).join('\n')}\n\n_Minimum font size is 24px for readability at presentation distance._`;
+        }
+        
         return {
           content: [
             {
@@ -1854,7 +2274,7 @@ The new slide has been selected in Figma.`,
               text: `✓ Created ${result.created?.length || 0} elements on "${result.slideName}" (${result.slideId})
 
 **Created nodes:**
-${createdList}
+${createdList}${warningsText}
 
 **Tip:** Use \`monorail_screenshot\` to see the result, or \`monorail_patch\` to edit text nodes by ID.`,
             },
@@ -2052,6 +2472,17 @@ Zone 4: TAKEAWAY     y=850-1000  (~150px)  - punchline, anchors the bottom
 
 **Anti-pattern:** Stacking content top-down without planning → empty bottom third
 **Correct approach:** Plan zones first, then size elements to fill them
+
+### Universal Layout Principles (Generalizable)
+
+These apply to any slide, not just specific layouts:
+
+- **Breathing room:** Distinct sections should not touch. Give space so the eye can reset.
+- **Visual balance:** Distribute weight across the canvas; avoid top‑heavy or bottom‑empty layouts.
+- **Hierarchy via proximity:** Related items cluster together; unrelated items get extra distance.
+- **Closer stands alone:** The final punchline should be visually distinct (centered or isolated).
+- **Bridge alignment:** If there is a bridge element (e.g. KEY CARD), align it to narrative pivot points.
+- **Size moderation:** Larger type improves readability, but can crowd layout—balance size with spacing.
 
 ### Positioning Patterns
 
@@ -2412,10 +2843,11 @@ After pushing slides, use \`monorail_screenshot\` to see what was rendered:
 // WEBSOCKET BRIDGE
 // =============================================================================
 
-const WS_PORT = 9876;
+const WS_PORT = parseInt(process.env.MONORAIL_WS_PORT || "9876", 10);
 let wsServer: WebSocketServer | null = null;
 let connectedPlugin: WebSocket | null = null;
 let pluginInfo: { name?: string; version?: string; connectedAt?: string } = {};
+let currentSelection: { count: number; nodes: Array<{ id: string; name: string; type: string; width: number | null; height: number | null; parent: string | null }> } = { count: 0, nodes: [] };
 
 // =============================================================================
 // PENDING REQUEST MANAGER
@@ -2434,9 +2866,13 @@ interface PendingRequest<T> {
 interface CapturedTemplate { template: any; nodeCount: number; }
 interface InstantiateResult { success: boolean; newSlideId?: string; updated?: number; failed?: string[]; fontSubstitutions?: string[]; error?: string; }
 interface CreateResult { success: boolean; slideId?: string; error?: string; }
+interface CssResult { success: boolean; css?: Record<string, string>; raw?: any; error?: string; }
+interface ExportResult { success: boolean; nodeId?: string; nodeName?: string; format?: string; data?: string; width?: number; height?: number; error?: string; }
+interface ComponentInfoResult { success: boolean; node: { id: string; name: string; type: string }; isInstance?: boolean; mainComponent?: { id: string; name: string; description?: string }; componentSet?: { id: string; name: string; variantCount: number }; componentProperties?: Record<string, { type: string; value: string; options?: string[] }>; variants?: Array<{ id: string; name: string; properties: Record<string, string> }>; error?: string; }
+interface FindResult { success: boolean; nodes?: Array<{ id: string; name: string; type: string; x: number; y: number; width: number; height: number; parentId: string | null; parentName: string | null }>; total?: number; truncated?: boolean; error?: string; }
 
 // Type-safe request type keys
-type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot' | 'primitives';
+type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot' | 'primitives' | 'css' | 'export' | 'component' | 'find';
 
 // Map of pending requests by type
 const pendingRequests = new Map<RequestType, PendingRequest<any>>();
@@ -2483,171 +2919,279 @@ function hasPendingRequest(type: RequestType): boolean {
   return pendingRequests.has(type);
 }
 
-function startWebSocketServer() {
-  wsServer = new WebSocketServer({ port: WS_PORT });
+// =============================================================================
+// MESSAGE HANDLER (shared between direct mode and proxy mode)
+// =============================================================================
 
-  wsServer.on("listening", () => {
-    console.error(`[WebSocket] Server listening on ws://localhost:${WS_PORT}`);
+function handlePluginMessage(data: string, sender: WebSocket) {
+  console.error(`[WebSocket] Received: ${data}`);
+  try {
+    const parsed = JSON.parse(data);
+
+    if (parsed.type === "hello") {
+      pluginInfo = {
+        name: parsed.plugin || "unknown",
+        version: parsed.version || "unknown",
+        connectedAt: new Date().toISOString(),
+      };
+      // Only send hello-ack in direct mode (proxy handles it in proxy mode)
+      if (!proxyMode) {
+        sender.send(JSON.stringify({
+          type: "hello-ack",
+          server: "monorail-mcp",
+          version: "0.1.0",
+          timestamp: new Date().toISOString(),
+        }));
+      }
+      console.error(`[WebSocket] Hello from ${pluginInfo.name} v${pluginInfo.version}`);
+    } else if (parsed.type === "registered") {
+      // Proxy acknowledged our registration
+      console.error(`[WebSocket] Registered with proxy as ${parsed.id}`);
+    } else if (parsed.type === "busy") {
+      // Proxy says another session has inflight request
+      console.error(`[WebSocket] Proxy busy: ${parsed.message}`);
+    } else if (parsed.type === "status-response") {
+      // Proxy status response — store for monorail_status
+      proxyStatus = parsed;
+      console.error(`[WebSocket] Proxy status: ${parsed.pluginCount} plugins, ${parsed.upstreamCount} upstreams`);
+    } else if (parsed.type === "ping") {
+      sender.send(JSON.stringify({ type: "pong" }));
+    } else if (parsed.type === "exported") {
+      console.error(`[WebSocket] Received exported IR with ${parsed.ir?.slides?.length || 0} slides`);
+      if (parsed.ir) {
+        resolvePendingRequest<DeckIR>('pull', parsed.ir as DeckIR);
+      }
+    } else if (parsed.type === "applied") {
+      console.error(`[WebSocket] Plugin applied ${parsed.count} slides`);
+    } else if (parsed.type === "patched") {
+      const edited = parsed.updated || 0;
+      const added = parsed.added || 0;
+      const deleted = parsed.deleted || 0;
+      console.error(`[WebSocket] Patched: ${edited} edited, ${added} added, ${deleted} deleted, ${parsed.failed?.length || 0} failed`);
+      resolvePendingRequest<PatchResult>('patch', {
+        updated: edited, added, deleted,
+        failed: parsed.failed || [],
+        newElements: parsed.newElements || [],
+        deletedElements: parsed.deletedElements || [],
+      });
+    } else if (parsed.type === "template-captured") {
+      console.error(`[WebSocket] Captured template with ${parsed.nodeCount} nodes`);
+      resolvePendingRequest<CapturedTemplate>('capture', {
+        template: parsed.template,
+        nodeCount: parsed.nodeCount || 0,
+      });
+    } else if (parsed.type === "instantiated") {
+      console.error(`[WebSocket] Instantiate result: success=${parsed.success}, updated=${parsed.updated}`);
+      resolvePendingRequest<InstantiateResult>('instantiate', {
+        success: parsed.success, newSlideId: parsed.newSlideId,
+        updated: parsed.updated, failed: parsed.failed,
+        fontSubstitutions: parsed.fontSubstitutions, error: parsed.error,
+      });
+    } else if (parsed.type === "styled-slide-created") {
+      console.error(`[WebSocket] Create styled slide result: success=${parsed.success}`);
+      resolvePendingRequest<CreateResult>('create', {
+        success: parsed.success, slideId: parsed.slideId, error: parsed.error,
+      });
+    } else if (parsed.type === "slides-deleted") {
+      console.error(`[WebSocket] Delete result: deleted=${parsed.deleted}, failed=${parsed.failed?.length || 0}`);
+      resolvePendingRequest<DeleteResult>('delete', {
+        deleted: parsed.deleted || 0, failed: parsed.failed || [],
+      });
+    } else if (parsed.type === "slides-reordered") {
+      console.error(`[WebSocket] Reorder result: success=${parsed.success}, count=${parsed.count}`);
+      resolvePendingRequest<ReorderResult>('reorder', {
+        success: parsed.success, count: parsed.count, error: parsed.error,
+      });
+    } else if (parsed.type === "screenshot-exported") {
+      const sizeKB = parsed.base64 ? Math.round((parsed.base64.length * 3 / 4) / 1024) : 0;
+      console.error(`[WebSocket] Screenshot result: success=${parsed.success}, size=${sizeKB}KB`);
+      resolvePendingRequest<ScreenshotResult>('screenshot', {
+        success: parsed.success, slideId: parsed.slideId, slideName: parsed.slideName,
+        base64: parsed.base64, width: parsed.width, height: parsed.height, error: parsed.error,
+      });
+    } else if (parsed.type === "primitives-applied") {
+      const count = parsed.created?.length || 0;
+      console.error(`[WebSocket] Primitives result: success=${parsed.success}, created=${count}`);
+      resolvePendingRequest<{
+        success: boolean; slideId?: string; slideName?: string;
+        created?: Array<{ name: string; id: string; type: string }>;
+        warnings?: string[]; error?: string;
+      }>('primitives', {
+        success: parsed.success, slideId: parsed.slideId, slideName: parsed.slideName,
+        created: parsed.created, warnings: parsed.warnings, error: parsed.error,
+      });
+    } else if (parsed.type === "css-extracted") {
+      console.error(`[WebSocket] CSS result: success=${parsed.success}, node=${parsed.raw?.name}`);
+      resolvePendingRequest<CssResult>('css', {
+        success: parsed.success, css: parsed.css, raw: parsed.raw, error: parsed.error,
+      });
+    } else if (parsed.type === "node-exported") {
+      const sizeInfo = parsed.format === 'PNG' ? `${Math.round((parsed.data?.length || 0) * 3 / 4 / 1024)}KB` : `${parsed.data?.length || 0} chars`;
+      console.error(`[WebSocket] Export result: success=${parsed.success}, format=${parsed.format}, size=${sizeInfo}`);
+      resolvePendingRequest<ExportResult>('export', {
+        success: parsed.success, nodeId: parsed.nodeId, nodeName: parsed.nodeName,
+        format: parsed.format, data: parsed.data,
+        width: parsed.width, height: parsed.height, error: parsed.error,
+      });
+    } else if (parsed.type === "component-info") {
+      console.error(`[WebSocket] Component info: success=${parsed.success}, node=${parsed.node?.name}`);
+      resolvePendingRequest<ComponentInfoResult>('component', {
+        success: parsed.success, node: parsed.node,
+        isInstance: parsed.isInstance, mainComponent: parsed.mainComponent,
+        componentSet: parsed.componentSet, componentProperties: parsed.componentProperties,
+        variants: parsed.variants, error: parsed.error,
+      });
+    } else if (parsed.type === "nodes-found") {
+      console.error(`[WebSocket] Find result: success=${parsed.success}, total=${parsed.total}`);
+      resolvePendingRequest<FindResult>('find', {
+        success: parsed.success, nodes: parsed.nodes,
+        total: parsed.total, truncated: parsed.truncated, error: parsed.error,
+      });
+    } else if (parsed.type === "selection-changed") {
+      currentSelection = { count: parsed.count || 0, nodes: parsed.nodes || [] };
+      console.error(`[WebSocket] Selection: ${currentSelection.count} nodes`);
+    } else {
+      console.error(`[WebSocket] Unknown message type: ${parsed.type}`);
+    }
+  } catch (e) {
+    sender.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+  }
+}
+
+// =============================================================================
+// CONNECTION MODES
+// =============================================================================
+
+import { spawn } from "child_process";
+import { fileURLToPath } from "url";
+import path from "path";
+
+const PROXY_PORT = parseInt(process.env.MONORAIL_PROXY_PORT || "9877", 10);
+const HOST_LABEL = process.env.MONORAIL_HOST_LABEL || process.env.TERM_PROGRAM || "claude";
+let proxyMode = false;
+let proxyStatus: any = null;
+
+function setupSocket(ws: WebSocket) {
+  connectedPlugin = ws;
+  ws.on("message", (data) => handlePluginMessage(data.toString(), ws));
+  ws.on("close", () => {
+    console.error("[WebSocket] Connection closed");
+    if (connectedPlugin === ws) {
+      connectedPlugin = null;
+      pluginInfo = {};
+    }
   });
+  ws.on("error", (err) => {
+    console.error("[WebSocket] Error:", err.message);
+  });
+}
 
-  wsServer.on("connection", (ws) => {
-    console.error("[WebSocket] Plugin connected!");
-    connectedPlugin = ws;
+/** Mode 1: Connect to proxy as upstream client */
+function connectToProxy(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`ws://localhost:${PROXY_PORT}`);
+    const timeout = setTimeout(() => { ws.terminate(); resolve(false); }, 2000);
 
-    ws.on("message", (data) => {
-      const message = data.toString();
-      console.error(`[WebSocket] Received: ${message}`);
+    ws.on("open", () => {
+      clearTimeout(timeout);
+      proxyMode = true;
+      console.error(`[WebSocket] Connected to proxy on port ${PROXY_PORT}`);
+      ws.send(JSON.stringify({
+        type: "register",
+        id: `mcp-${process.pid}`,
+        label: HOST_LABEL,
+      }));
+      setupSocket(ws);
+      resolve(true);
+    });
 
-      // Parse and handle messages
-      try {
-        const parsed = JSON.parse(message);
+    ws.on("error", () => {
+      clearTimeout(timeout);
+      resolve(false);
+    });
+  });
+}
 
-        if (parsed.type === "hello") {
-          // Store plugin info
-          pluginInfo = {
-            name: parsed.plugin || "unknown",
-            version: parsed.version || "unknown",
-            connectedAt: new Date().toISOString(),
-          };
-          
-          // Respond to hello with acknowledgment
-          ws.send(
-            JSON.stringify({
-              type: "hello-ack",
-              server: "monorail-mcp",
-              version: "0.1.0",
-              timestamp: new Date().toISOString(),
-            })
-          );
-          console.error(`[WebSocket] Sent hello-ack to ${pluginInfo.name} v${pluginInfo.version}`);
-        } else if (parsed.type === "ping") {
-          ws.send(JSON.stringify({ type: "pong" }));
-        } else if (parsed.type === "exported") {
-          // Plugin sent exported IR (response to request-export)
-          console.error(`[WebSocket] Received exported IR with ${parsed.ir?.slides?.length || 0} slides`);
-          if (parsed.ir) {
-            resolvePendingRequest<DeckIR>('pull', parsed.ir as DeckIR);
-          }
-        } else if (parsed.type === "applied") {
-          // Plugin confirmed it applied IR
-          console.error(`[WebSocket] Plugin applied ${parsed.count} slides`);
-        } else if (parsed.type === "patched") {
-          // Plugin sent patch result
-          const edited = parsed.updated || 0;
-          const added = parsed.added || 0;
-          const deleted = parsed.deleted || 0;
-          console.error(`[WebSocket] Patched: ${edited} edited, ${added} added, ${deleted} deleted, ${parsed.failed?.length || 0} failed`);
-          resolvePendingRequest<PatchResult>('patch', {
-            updated: edited,
-            added: added,
-            deleted: deleted,
-            failed: parsed.failed || [],
-            newElements: parsed.newElements || [],
-            deletedElements: parsed.deletedElements || [],
-          });
-        } else if (parsed.type === "template-captured") {
-          // Plugin sent captured template
-          console.error(`[WebSocket] Captured template with ${parsed.nodeCount} nodes`);
-          resolvePendingRequest<CapturedTemplate>('capture', {
-            template: parsed.template,
-            nodeCount: parsed.nodeCount || 0,
-          });
-        } else if (parsed.type === "instantiated") {
-          // Plugin sent instantiate result
-          console.error(`[WebSocket] Instantiate result: success=${parsed.success}, updated=${parsed.updated}`);
-          resolvePendingRequest<InstantiateResult>('instantiate', {
-            success: parsed.success,
-            newSlideId: parsed.newSlideId,
-            updated: parsed.updated,
-            failed: parsed.failed,
-            fontSubstitutions: parsed.fontSubstitutions,
-            error: parsed.error,
-          });
-        } else if (parsed.type === "styled-slide-created") {
-          // Plugin sent create styled slide result
-          console.error(`[WebSocket] Create styled slide result: success=${parsed.success}`);
-          resolvePendingRequest<CreateResult>('create', {
-            success: parsed.success,
-            slideId: parsed.slideId,
-            error: parsed.error,
-          });
-        } else if (parsed.type === "slides-deleted") {
-          // Plugin sent delete result
-          console.error(`[WebSocket] Delete result: deleted=${parsed.deleted}, failed=${parsed.failed?.length || 0}`);
-          resolvePendingRequest<DeleteResult>('delete', {
-            deleted: parsed.deleted || 0,
-            failed: parsed.failed || [],
-          });
-        } else if (parsed.type === "slides-reordered") {
-          // Plugin sent reorder result
-          console.error(`[WebSocket] Reorder result: success=${parsed.success}, count=${parsed.count}`);
-          resolvePendingRequest<ReorderResult>('reorder', {
-            success: parsed.success,
-            count: parsed.count,
-            error: parsed.error,
-          });
-        } else if (parsed.type === "screenshot-exported") {
-          // Plugin sent screenshot result
-          const sizeKB = parsed.base64 ? Math.round((parsed.base64.length * 3 / 4) / 1024) : 0;
-          console.error(`[WebSocket] Screenshot result: success=${parsed.success}, size=${sizeKB}KB`);
-          resolvePendingRequest<ScreenshotResult>('screenshot', {
-            success: parsed.success,
-            slideId: parsed.slideId,
-            slideName: parsed.slideName,
-            base64: parsed.base64,
-            width: parsed.width,
-            height: parsed.height,
-            error: parsed.error,
-          });
-        } else if (parsed.type === "primitives-applied") {
-          // Plugin sent primitives result
-          const count = parsed.created?.length || 0;
-          console.error(`[WebSocket] Primitives result: success=${parsed.success}, created=${count}`);
-          resolvePendingRequest<{
-            success: boolean;
-            slideId?: string;
-            slideName?: string;
-            created?: Array<{ name: string; id: string; type: string }>;
-            error?: string;
-          }>('primitives', {
-            success: parsed.success,
-            slideId: parsed.slideId,
-            slideName: parsed.slideName,
-            created: parsed.created,
-            error: parsed.error,
-          });
-        } else {
-          // Echo unknown messages for now (debugging)
-          console.error(`[WebSocket] Unknown message type: ${parsed.type}`);
-        }
-      } catch (e) {
-        // Not JSON, echo as text
-        ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+/** Mode 2: Direct WebSocket server (original behavior) */
+function startDirectServer(): Promise<boolean> {
+  return new Promise((resolve) => {
+    wsServer = new WebSocketServer({ port: WS_PORT });
+
+    wsServer.on("listening", () => {
+      console.error(`[WebSocket] Direct server listening on ws://localhost:${WS_PORT}`);
+      resolve(true);
+    });
+
+    wsServer.on("connection", (ws) => {
+      console.error("[WebSocket] Plugin connected!");
+      setupSocket(ws);
+    });
+
+    wsServer.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(`[WebSocket] Port ${WS_PORT} in use, cannot start direct server`);
+        wsServer?.close();
+        resolve(false);
+      } else {
+        console.error("[WebSocket] Server error:", err.message);
       }
     });
-
-    ws.on("close", () => {
-      console.error("[WebSocket] Plugin disconnected");
-      if (connectedPlugin === ws) {
-        connectedPlugin = null;
-        pluginInfo = {};
-      }
-    });
-
-    ws.on("error", (err) => {
-      console.error("[WebSocket] Error:", err.message);
-    });
   });
+}
 
-  wsServer.on("error", (err) => {
-    console.error("[WebSocket] Server error:", err.message);
-  });
+/** Mode 3: Spawn proxy, then connect as upstream */
+async function spawnProxyAndConnect(): Promise<boolean> {
+  console.error("[WebSocket] Spawning proxy...");
+  try {
+    const thisFile = fileURLToPath(import.meta.url);
+    const proxyPath = path.join(path.dirname(thisFile), "proxy.js");
+    const child = spawn(process.execPath, [proxyPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    console.error(`[WebSocket] Proxy spawned (pid ${child.pid})`);
+
+    // Wait for proxy to be ready
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 200));
+      if (await connectToProxy()) return true;
+    }
+    console.error("[WebSocket] Proxy spawned but failed to connect");
+    return false;
+  } catch (e) {
+    console.error("[WebSocket] Failed to spawn proxy:", (e as Error).message);
+    return false;
+  }
+}
+
+/** Startup sequence: connect to proxy → spawn proxy → direct fallback → degraded */
+async function startConnection() {
+  // 1. Try connecting to existing proxy
+  if (await connectToProxy()) {
+    console.error("[WebSocket] Mode: proxy client");
+    return;
+  }
+
+  // 2. No proxy — spawn one, then connect
+  if (await spawnProxyAndConnect()) {
+    console.error("[WebSocket] Mode: proxy client (spawned)");
+    return;
+  }
+
+  // 3. Proxy failed — fall back to direct server (single instance, no multi-session)
+  if (await startDirectServer()) {
+    console.error("[WebSocket] Mode: direct server (fallback)");
+    return;
+  }
+
+  // 4. Degraded — no Figma connection
+  console.error("[WebSocket] Mode: degraded (no Figma connection)");
 }
 
 // Start the server
 async function main() {
-  // Start WebSocket server for plugin communication
-  startWebSocketServer();
+  await startConnection();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

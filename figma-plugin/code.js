@@ -21,7 +21,32 @@
   var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
 
   // code.ts
-  figma.showUI(__html__, { width: 320, height: 280 });
+  figma.showUI(__html__, { width: 320, height: 280, themeColors: true });
+  var _a;
+  figma.ui.postMessage({
+    type: "file-context",
+    fileKey: (_a = figma.fileKey) != null ? _a : null,
+    fileName: figma.root.name,
+    pageName: figma.currentPage.name
+  });
+  figma.on("selectionchange", () => {
+    const sel = figma.currentPage.selection;
+    figma.ui.postMessage({
+      type: "selection-changed",
+      count: sel.length,
+      nodes: sel.slice(0, 20).map((n) => {
+        var _a2, _b;
+        return {
+          id: n.id,
+          name: n.name,
+          type: n.type,
+          width: "width" in n ? Math.round(n.width) : null,
+          height: "height" in n ? Math.round(n.height) : null,
+          parent: (_b = (_a2 = n.parent) == null ? void 0 : _a2.name) != null ? _b : null
+        };
+      })
+    });
+  });
   var COLORS = {
     bg: { r: 0.06, g: 0.06, b: 0.1 },
     // Dark blue-black background
@@ -197,7 +222,7 @@
     return container;
   }
   async function addContentToParent(parent, slide) {
-    var _a;
+    var _a2;
     const c = slide.content;
     switch (slide.archetype) {
       case "title":
@@ -394,7 +419,7 @@
       case "chart":
         if (c.headline) await addText(parent, c.headline, 200, 150, 56, true, COLORS.headline, void 0, "headline");
         addRect(parent, 200, 280, 1520, 500, { r: 0.1, g: 0.1, b: 0.13 }, COLORS.dimmed, true);
-        await addText(parent, `[Chart: ${((_a = c.chart) == null ? void 0 : _a.type) || "data"}]`, 860, 500, 28, false, COLORS.muted, void 0, "chart-placeholder");
+        await addText(parent, `[Chart: ${((_a2 = c.chart) == null ? void 0 : _a2.type) || "data"}]`, 860, 500, 28, false, COLORS.muted, void 0, "chart-placeholder");
         if (c.takeaway) await addText(parent, c.takeaway, 200, 820, 28, false, COLORS.muted, void 0, "takeaway");
         break;
       case "video":
@@ -1352,7 +1377,7 @@
     return [];
   }
   function analyzeSlideContent(directTextNodes, parent) {
-    var _a, _b, _c, _d, _e;
+    var _a2, _b, _c, _d, _e;
     if (parent) {
       const children = parent.children || [];
       const frameNodes = children.filter((n) => n.type === "FRAME");
@@ -1518,13 +1543,13 @@
         const stageDescs = directTextNodes.filter((t) => t.name.match(/^stage-\d+-desc$/));
         const stages = [];
         stageLabels.sort((a, b) => {
-          var _a2, _b2;
-          const aNum = parseInt(((_a2 = a.name.match(/stage-(\d+)/)) == null ? void 0 : _a2[1]) || "0");
+          var _a3, _b2;
+          const aNum = parseInt(((_a3 = a.name.match(/stage-(\d+)/)) == null ? void 0 : _a3[1]) || "0");
           const bNum = parseInt(((_b2 = b.name.match(/stage-(\d+)/)) == null ? void 0 : _b2[1]) || "0");
           return aNum - bNum;
         });
         for (const label of stageLabels) {
-          const idx = (_a = label.name.match(/stage-(\d+)/)) == null ? void 0 : _a[1];
+          const idx = (_a2 = label.name.match(/stage-(\d+)/)) == null ? void 0 : _a2[1];
           const desc = stageDescs.find((d) => d.name === `stage-${idx}-desc`);
           stages.push({
             label: label.characters,
@@ -1705,10 +1730,10 @@
         stageGroups.get(bucket).push(t);
       }
       const stages = Array.from(stageGroups.values()).map((group) => {
-        var _a2, _b2;
+        var _a3, _b2;
         group.sort((a, b) => a.y - b.y);
         return {
-          label: ((_a2 = group[0]) == null ? void 0 : _a2.text) || "",
+          label: ((_a3 = group[0]) == null ? void 0 : _a3.text) || "",
           description: (_b2 = group[1]) == null ? void 0 : _b2.text
         };
       });
@@ -1754,7 +1779,7 @@
     };
   }
   async function applyPatches(patches) {
-    var _a, _b, _c;
+    var _a2, _b, _c;
     let updated = 0;
     let added = 0;
     let deleted = 0;
@@ -1830,7 +1855,7 @@
             newText.resize(sibling.width, newText.height);
             newText.textAutoResize = "HEIGHT";
           }
-          const bulletMatch = (_a = textSiblings[0]) == null ? void 0 : _a.name.match(/^bullet-(\d+)$/);
+          const bulletMatch = (_a2 = textSiblings[0]) == null ? void 0 : _a2.name.match(/^bullet-(\d+)$/);
           const itemMatch = (_b = textSiblings[0]) == null ? void 0 : _b.name.match(/^item-(\d+)$/);
           if (bulletMatch) {
             newText.name = `bullet-${textSiblings.length}`;
@@ -1924,7 +1949,7 @@
     return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
   }
   figma.ui.onmessage = async (msg) => {
-    var _a, _b, _c, _d, _e, _f;
+    var _a2, _b, _c, _d, _e, _f;
     try {
       if (msg.type === "apply-ir") {
         if (!msg.ir) {
@@ -2105,7 +2130,7 @@
         console.log("[Plugin] Selection:", selection[0].type, selection[0].name);
         let node = selection[0];
         const nodeType = node.type;
-        console.log("[Plugin] Node type:", nodeType, "Parent type:", (_a = node.parent) == null ? void 0 : _a.type);
+        console.log("[Plugin] Node type:", nodeType, "Parent type:", (_a2 = node.parent) == null ? void 0 : _a2.type);
         if (nodeType === "SLIDE" || nodeType === "FRAME" && ((_b = node.parent) == null ? void 0 : _b.type) === "PAGE") {
           const ref = `Slide: "${node.name || "Untitled"}" (${node.id})`;
           figma.notify(ref, { timeout: 3e3 });
@@ -2224,8 +2249,8 @@
           containers: allContainers.length > 0 ? allContainers : void 0
         };
         const richSlides = slides.filter((s) => {
-          var _a2;
-          return (((_a2 = s.elements) == null ? void 0 : _a2.length) || 0) > 0;
+          var _a3;
+          return (((_a3 = s.elements) == null ? void 0 : _a3.length) || 0) > 0;
         }).length;
         const diagramSlides = slides.filter((s) => s.has_diagram).length;
         const containerCount = allContainers.length;
@@ -2315,31 +2340,31 @@
         const ds = msg.designSystem;
         try {
           const getBgColor = () => {
-            var _a2;
-            if ((_a2 = ds == null ? void 0 : ds.background) == null ? void 0 : _a2.color) return ds.background.color;
+            var _a3;
+            if ((_a3 = ds == null ? void 0 : ds.background) == null ? void 0 : _a3.color) return ds.background.color;
             return COLORS.bg;
           };
           const getAccentColor = () => {
-            var _a2;
-            const accent = (_a2 = ds == null ? void 0 : ds.colors) == null ? void 0 : _a2.find((c) => {
-              var _a3, _b2;
-              return ((_a3 = c.name) == null ? void 0 : _a3.includes("accent")) || ((_b2 = c.name) == null ? void 0 : _b2.includes("green"));
+            var _a3;
+            const accent = (_a3 = ds == null ? void 0 : ds.colors) == null ? void 0 : _a3.find((c) => {
+              var _a4, _b2;
+              return ((_a4 = c.name) == null ? void 0 : _a4.includes("accent")) || ((_b2 = c.name) == null ? void 0 : _b2.includes("green"));
             });
             if (accent == null ? void 0 : accent.rgb) return accent.rgb;
             return { r: 0.8, g: 1, b: 0.24 };
           };
           const getTextColor = () => {
-            var _a2;
-            const light = (_a2 = ds == null ? void 0 : ds.colors) == null ? void 0 : _a2.find((c) => c.name === "light" || c.hex === "#ffffff");
+            var _a3;
+            const light = (_a3 = ds == null ? void 0 : ds.colors) == null ? void 0 : _a3.find((c) => c.name === "light" || c.hex === "#ffffff");
             if (light == null ? void 0 : light.rgb) return light.rgb;
             return COLORS.white;
           };
           const getHeadlineFont = () => {
-            var _a2;
-            const headlineFont2 = (_a2 = ds == null ? void 0 : ds.fonts) == null ? void 0 : _a2.find(
+            var _a3;
+            const headlineFont2 = (_a3 = ds == null ? void 0 : ds.fonts) == null ? void 0 : _a3.find(
               (f) => {
-                var _a3;
-                return (_a3 = f.usage) == null ? void 0 : _a3.some((u) => u.includes("headline") || u.includes("10"));
+                var _a4;
+                return (_a4 = f.usage) == null ? void 0 : _a4.some((u) => u.includes("headline") || u.includes("10"));
               }
             );
             if (headlineFont2) {
@@ -2352,11 +2377,11 @@
             return { family: "Inter", style: "Bold", size: 48 };
           };
           const getBodyFont = () => {
-            var _a2, _b2;
-            const bodyFont2 = (_a2 = ds == null ? void 0 : ds.fonts) == null ? void 0 : _a2.find(
+            var _a3, _b2;
+            const bodyFont2 = (_a3 = ds == null ? void 0 : ds.fonts) == null ? void 0 : _a3.find(
               (f) => {
-                var _a3;
-                return f.family === "Geist" || ((_a3 = f.usage) == null ? void 0 : _a3.some((u) => u.includes("Card")));
+                var _a4;
+                return f.family === "Geist" || ((_a4 = f.usage) == null ? void 0 : _a4.some((u) => u.includes("Card")));
               }
             );
             if (bodyFont2) {
@@ -2851,6 +2876,8 @@
           var resolveParent = resolveParent2, resolveColor = resolveColor2;
           const nodesByName = {};
           const createdNodes = [];
+          const warnings = [];
+          const MIN_FONT_SIZE = 24;
           let targetSlide;
           if (slideId) {
             const node = await figma.getNodeByIdAsync(slideId);
@@ -2949,7 +2976,12 @@
                 if (op.name) textNode.name = op.name;
                 const fontName = await getFontName(op.bold || false);
                 textNode.fontName = fontName;
-                textNode.fontSize = op.fontSize || 24;
+                const requestedSize = op.fontSize || 24;
+                if (requestedSize < MIN_FONT_SIZE) {
+                  const preview = (op.text || "").substring(0, 30) + ((op.text || "").length > 30 ? "..." : "");
+                  warnings.push(`Font size ${requestedSize}px is below minimum (${MIN_FONT_SIZE}px) for text: "${preview}"`);
+                }
+                textNode.fontSize = requestedSize;
                 textNode.fills = [{ type: "SOLID", color: resolveColor2(op.color) }];
                 textNode.characters = op.text || "";
                 if (op.width && op.height) {
@@ -3238,18 +3270,265 @@
           figma.viewport.scrollAndZoomIntoView([targetSlide]);
           const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"`;
           figma.notify(summary);
+          if (warnings.length > 0) {
+            figma.notify(`\u26A0\uFE0F ${warnings.length} design warning(s)`, { timeout: 3e3 });
+          }
           figma.ui.postMessage({
             type: "primitives-applied",
             success: true,
             slideId: targetSlide.id,
             slideName: targetSlide.name,
-            created: createdNodes
+            created: createdNodes,
+            warnings: warnings.length > 0 ? warnings : void 0
           });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           console.error("Primitives error:", errorMsg);
           figma.notify(`Failed: ${errorMsg}`, { error: true });
           figma.ui.postMessage({ type: "primitives-applied", success: false, error: errorMsg });
+        }
+      }
+      if (msg.type === "get-css") {
+        const nodeId = msg.nodeId;
+        let targetNode = null;
+        if (nodeId) {
+          targetNode = await figma.getNodeByIdAsync(nodeId);
+        } else if (figma.currentPage.selection.length > 0) {
+          targetNode = figma.currentPage.selection[0];
+        }
+        if (!targetNode) {
+          figma.ui.postMessage({ type: "css-extracted", success: false, error: nodeId ? `Node not found: ${nodeId}` : "No node selected" });
+          return;
+        }
+        try {
+          const css = await targetNode.getCSSAsync();
+          const raw = {
+            nodeId: targetNode.id,
+            name: targetNode.name,
+            type: targetNode.type,
+            width: targetNode.width,
+            height: targetNode.height
+          };
+          if ("fills" in targetNode && targetNode.fills !== figma.mixed) {
+            raw.fills = JSON.parse(JSON.stringify(targetNode.fills));
+          }
+          if ("strokes" in targetNode) {
+            raw.strokes = JSON.parse(JSON.stringify(targetNode.strokes));
+          }
+          if ("strokeWeight" in targetNode && targetNode.strokeWeight !== figma.mixed) {
+            raw.strokeWeight = targetNode.strokeWeight;
+          }
+          if ("strokeAlign" in targetNode) {
+            raw.strokeAlign = targetNode.strokeAlign;
+          }
+          if ("effects" in targetNode) {
+            raw.effects = JSON.parse(JSON.stringify(targetNode.effects));
+          }
+          if ("cornerRadius" in targetNode && targetNode.cornerRadius !== figma.mixed) {
+            raw.cornerRadius = targetNode.cornerRadius;
+          }
+          if ("opacity" in targetNode) {
+            raw.opacity = targetNode.opacity;
+          }
+          if ("blendMode" in targetNode) {
+            raw.blendMode = targetNode.blendMode;
+          }
+          figma.ui.postMessage({
+            type: "css-extracted",
+            success: true,
+            css,
+            raw
+          });
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          figma.ui.postMessage({ type: "css-extracted", success: false, error: errorMsg });
+        }
+      }
+      if (msg.type === "export-node") {
+        const nodeId = msg.nodeId;
+        const format = (msg.format || "SVG").toUpperCase();
+        const scale = msg.scale || 1;
+        let targetNode = null;
+        if (nodeId) {
+          targetNode = await figma.getNodeByIdAsync(nodeId);
+        } else if (figma.currentPage.selection.length > 0) {
+          targetNode = figma.currentPage.selection[0];
+        }
+        if (!targetNode) {
+          figma.ui.postMessage({
+            type: "node-exported",
+            success: false,
+            error: nodeId ? `Node not found: ${nodeId}` : "No node selected"
+          });
+          return;
+        }
+        try {
+          if (format === "SVG") {
+            const svgData = await targetNode.exportAsync({ format: "SVG" });
+            const chunks = [];
+            for (let i = 0; i < svgData.length; i += 8192) {
+              chunks.push(String.fromCharCode.apply(null, [...svgData.slice(i, i + 8192)]));
+            }
+            const svgString = chunks.join("");
+            figma.ui.postMessage({
+              type: "node-exported",
+              success: true,
+              nodeId: targetNode.id,
+              nodeName: targetNode.name,
+              format: "SVG",
+              data: svgString,
+              width: Math.round(targetNode.width),
+              height: Math.round(targetNode.height)
+            });
+          } else {
+            const pngData = await targetNode.exportAsync({
+              format: "PNG",
+              constraint: { type: "SCALE", value: scale }
+            });
+            const base64 = figma.base64Encode(pngData);
+            figma.ui.postMessage({
+              type: "node-exported",
+              success: true,
+              nodeId: targetNode.id,
+              nodeName: targetNode.name,
+              format: "PNG",
+              data: base64,
+              width: Math.round(targetNode.width * scale),
+              height: Math.round(targetNode.height * scale)
+            });
+          }
+          figma.notify(`Exported "${targetNode.name}" as ${format}`);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          figma.ui.postMessage({ type: "node-exported", success: false, error: errorMsg });
+        }
+      }
+      if (msg.type === "get-component-info") {
+        const nodeId = msg.nodeId;
+        let targetNode = null;
+        if (nodeId) {
+          targetNode = await figma.getNodeByIdAsync(nodeId);
+        } else if (figma.currentPage.selection.length > 0) {
+          targetNode = figma.currentPage.selection[0];
+        }
+        if (!targetNode) {
+          figma.ui.postMessage({
+            type: "component-info",
+            success: false,
+            error: nodeId ? `Node not found: ${nodeId}` : "No node selected"
+          });
+          return;
+        }
+        const result = {
+          type: "component-info",
+          success: true,
+          node: { id: targetNode.id, name: targetNode.name, type: targetNode.type }
+        };
+        if (targetNode.type === "INSTANCE") {
+          const inst = targetNode;
+          result.isInstance = true;
+          const main = inst.mainComponent;
+          if (main) {
+            result.mainComponent = {
+              id: main.id,
+              name: main.name,
+              description: main.description || void 0
+            };
+            if (main.parent && main.parent.type === "COMPONENT_SET") {
+              const cs = main.parent;
+              result.componentSet = { id: cs.id, name: cs.name, variantCount: cs.children.length };
+              result.variants = cs.children.map((v) => ({
+                id: v.id,
+                name: v.name,
+                properties: v.variantProperties || {}
+              }));
+            }
+          }
+          if ("componentProperties" in inst) {
+            result.componentProperties = {};
+            for (const [key, prop] of Object.entries(inst.componentProperties)) {
+              result.componentProperties[key] = {
+                type: prop.type,
+                value: String(prop.value)
+              };
+            }
+          }
+        } else if (targetNode.type === "COMPONENT") {
+          const comp = targetNode;
+          result.mainComponent = { id: comp.id, name: comp.name, description: comp.description || void 0 };
+          if (comp.parent && comp.parent.type === "COMPONENT_SET") {
+            const cs = comp.parent;
+            result.componentSet = { id: cs.id, name: cs.name, variantCount: cs.children.length };
+            result.variants = cs.children.map((v) => ({
+              id: v.id,
+              name: v.name,
+              properties: v.variantProperties || {}
+            }));
+          }
+        } else if (targetNode.type === "COMPONENT_SET") {
+          const cs = targetNode;
+          result.componentSet = { id: cs.id, name: cs.name, variantCount: cs.children.length };
+          result.variants = cs.children.map((v) => ({
+            id: v.id,
+            name: v.name,
+            properties: v.variantProperties || {}
+          }));
+        }
+        figma.ui.postMessage(result);
+      }
+      if (msg.type === "find-nodes") {
+        const nodeType = msg.nodeType;
+        const name = msg.name;
+        const parentId = msg.parentId;
+        const limit = Math.min(msg.limit || 20, 100);
+        try {
+          let searchRoot;
+          if (parentId) {
+            const parent = await figma.getNodeByIdAsync(parentId);
+            if (!parent || !("children" in parent)) {
+              figma.ui.postMessage({
+                type: "nodes-found",
+                success: false,
+                error: `Parent not found or has no children: ${parentId}`
+              });
+              return;
+            }
+            searchRoot = parent;
+          } else {
+            searchRoot = figma.currentPage;
+          }
+          const nameLower = name == null ? void 0 : name.toLowerCase();
+          const matches = searchRoot.findAll((node) => {
+            if (nodeType && node.type !== nodeType) return false;
+            if (nameLower && !node.name.toLowerCase().includes(nameLower)) return false;
+            return true;
+          });
+          const total = matches.length;
+          const results = matches.slice(0, limit).map((node) => {
+            var _a3, _b2, _c2, _d2;
+            return {
+              id: node.id,
+              name: node.name,
+              type: node.type,
+              x: "x" in node ? Math.round(node.x) : 0,
+              y: "y" in node ? Math.round(node.y) : 0,
+              width: "width" in node ? Math.round(node.width) : 0,
+              height: "height" in node ? Math.round(node.height) : 0,
+              parentId: (_b2 = (_a3 = node.parent) == null ? void 0 : _a3.id) != null ? _b2 : null,
+              parentName: (_d2 = (_c2 = node.parent) == null ? void 0 : _c2.name) != null ? _d2 : null
+            };
+          });
+          figma.ui.postMessage({
+            type: "nodes-found",
+            success: true,
+            nodes: results,
+            total,
+            truncated: total > limit
+          });
+          figma.notify(`Found ${total} nodes${total > limit ? ` (showing ${limit})` : ""}`);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          figma.ui.postMessage({ type: "nodes-found", success: false, error: errorMsg });
         }
       }
       if (msg.type === "close") {
