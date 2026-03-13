@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "monorail-mcp": "dist/index.js"
+    "monorail-mcp": "dist/src/index.js",
+    "monorail-proxy": "dist/src/proxy.js"
   },
   "scripts": {
     "build": "tsc",

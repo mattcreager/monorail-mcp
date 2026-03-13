@@ -362,6 +362,7 @@
       <span class="host">Disconnected</span>
     </div>
     <span class="status-uptime" id="status-uptime"></span>
+    <span style="font-size:9px;opacity:0.3;margin-left:auto;margin-right:4px">v2</span>
     <div class="status-gear" id="settings-toggle" title="Settings">&#9881;</div>
   </div>
 
@@ -656,6 +657,11 @@
               const desc = [msg.nodeType, msg.name].filter(Boolean).join(' ');
               addActivity('\u25c9', `Find ${desc || 'nodes'}`);
               parent.postMessage({ pluginMessage: { type: 'find-nodes', nodeType: msg.nodeType, name: msg.name, parentId: msg.parentId, limit: msg.limit } }, '*');
+            } else {
+              // Generic relay — forward any unrecognized message types to plugin
+              // This prevents needing ui.html updates for every new tool
+              addActivity('\u2192', `${msg.type}`);
+              parent.postMessage({ pluginMessage: msg }, '*');
             }
           } catch (e) {
             console.error('[WS] Parse error:', e);

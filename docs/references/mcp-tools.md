@@ -1,10 +1,10 @@
 # MCP Tools Reference
 
-> The 9 tools Claude uses to collaborate on decks via Figma.
+> The 14 tools Claude uses to collaborate on designs via Figma.
 
 ---
 
-## Core Loop: pull → patch
+## Core Loop: pull > patch
 
 The main workflow is **read what's there, update specific elements**. This preserves human styling and layout.
 
@@ -16,16 +16,18 @@ The main workflow is **read what's there, update specific elements**. This prese
 
 ---
 
-## Tools
+## Connection
 
 ### `monorail_status`
 Check if the Figma plugin is connected.
 
 ```
-Returns: Connection state, plugin name/version, timestamp
+Returns: Connection state, plugin name/version, timestamp, current selection
 ```
 
 ---
+
+## Deck Operations
 
 ### `monorail_pull`
 Get current deck state from Figma. Supports three modes for different use cases.
@@ -38,7 +40,7 @@ Parameters:
   - "summary": Just slide IDs, names, archetypes (compact overview)
 
 Returns:
-- deck.title — Actual Figma filename (not "Pulled Deck" anymore!)
+- deck.title — Actual Figma filename
 - slides[].elements[] — ALL text elements with Figma node IDs (for editing)
 - slides[].has_diagram — true if complex nested content
 - slides[].figma_id — Figma node ID for the slide
@@ -77,20 +79,6 @@ monorail_pull({ slide_id: "9:700" })
 { "deck": {...}, "slides": [/* just this slide */], ... }
 ```
 
-**Example: Full deck (default)**
-```
-monorail_pull()
-
-✓ Pulled "GTM Strategy" from Figma
-  8 slides, 3 addable containers
-
-## Addable Containers (use with action: "add")
-  • bullets-container (4:599) - 3 bullets in "Key Benefits"
-  ...
-
-Tip: For large decks, use mode:'summary' to see structure, then slide_id to pull specific slides.
-```
-
 ---
 
 ### `monorail_push`
@@ -108,7 +96,7 @@ Parameters:
 Returns: Success message or validation errors
 ```
 
-**Use when:** Bootstrapping a new deck or bulk updates. For surgical edits, prefer pull → patch.
+**Use when:** Bootstrapping a new deck or bulk updates. For surgical edits, prefer pull > patch.
 
 **Replace mode:** Use `mode: "replace"` when rewriting an entire deck. This deletes all existing slides first, preventing the "11 old + 8 new = 19 slides" problem.
 
@@ -117,24 +105,21 @@ Returns: Success message or validation errors
 ---
 
 ### `monorail_patch`
-Edit existing text OR add new elements to Auto Layout containers.
+Edit existing text, add new elements, or delete elements.
 
 ```
 Parameters:
 - patches.changes[]: Array of changes, each with:
   - target: string — Figma node ID (TEXT for edit, FRAME for add)
-  - text: string — New text content
-  - action?: "edit" | "add" — Default is "edit"
+  - text: string — New text content (required for edit/add, ignored for delete)
+  - action?: "edit" | "add" | "delete" — Default is "edit"
   - position?: number — For "add" only: insert position (-1 or omit = append)
 ```
 
-**Two modes:**
-1. **Edit (default):** Target a TEXT node ID → update its content
-2. **Add:** Target a FRAME container ID (like `bullets-container`) → create new element inside
-
-**Use when:** 
-- Modifying existing slides without destroying layout/styling (edit)
-- Adding bullets/items without deleting the slide (add)
+**Three modes:**
+1. **Edit (default):** Target a TEXT node ID > update its content
+2. **Add:** Target a FRAME container ID (like `bullets-container`) with action:`add` > create new element
+3. **Delete:** Target any element ID with action:`delete` > remove it
 
 **Edit example:**
 ```json
@@ -157,11 +142,147 @@ Parameters:
     ]
   }
 }
-// Returns: ✓ Patched: 1 added
-//          New elements: bullet-3 (28:95) in bullets-container
 ```
 
 **Limitations:** `action: "add"` only works for simple text elements (bullets, items). For compound elements (cards, columns), use delete + push or clone.
+
+---
+
+### `monorail_clone`
+Clone a slide and update its text content.
+
+```
+Parameters:
+- source_slide_id: string — Figma node ID to clone (from capture)
+- content_map?: object — { slot_id: "new text" }
+```
+
+**Use when:** Creating a new slide that matches an existing design. Preserves all styling, positioning, and structure.
+
+---
+
+## Visual
+
+### `monorail_screenshot`
+Export a slide as a PNG image. Gives the AI "eyes" to see what was rendered.
+
+```
+Parameters:
+- slide_id?: string — Figma node ID of slide to export (optional, defaults to first slide)
+- scale?: number — Export scale factor (default: 0.5 for 50% size)
+
+Returns: PNG image (base64-encoded) with dimensions
+```
+
+**Use when:**
+- Verifying layouts after push/patch
+- Checking alignment and spacing
+- Debugging visual issues
+- QA before presenting to user
+
+---
+
+### `monorail_export`
+Export any Figma node as SVG or PNG.
+
+```
+Parameters:
+- node_id?: string — Figma node ID to export (omit to use current selection)
+- format?: "SVG" | "PNG" — Export format (default: SVG)
+- scale?: number — Scale factor for PNG only (default: 1)
+
+Returns: SVG as UTF-8 string or PNG as base64, plus node name and dimensions
+```
+
+**Use when:** Exporting individual elements — vectors, components, icons. Unlike `monorail_screenshot` (slide-level PNG), this targets any node and supports SVG output.
+
+---
+
+### `monorail_css`
+Extract CSS and raw paint data from a Figma node.
+
+```
+Parameters:
+- node_id?: string — Figma node ID (omit to use current selection)
+
+Returns: Figma's getCSSAsync() output (same as "Copy as CSS")
+  plus raw fills, strokes, effects with gradient data and blend modes
+```
+
+**Use when:** Design-to-code translation. Extracting exact visual properties (colors, gradients, shadows, border radius) from existing Figma elements.
+
+---
+
+### `monorail_primitives`
+Low-level design tool for creating slide content from scratch.
+
+```
+Parameters:
+- slide_id?: string — Existing slide to add elements to (omit to create new slide)
+- operations: array — Primitive operations applied in sequence
+
+Operations:
+- background — Slide background (solid fill or gradient)
+- frame — Basic frame container
+- auto_layout_frame — Frame with Auto Layout
+- text — Text element (fontSize, bold, color, maxWidth)
+- rect — Rectangle (fill, stroke, cornerRadius)
+- ellipse — Ellipse/circle
+- line — Simple line with optional cap decorations
+- path — Multi-point path (smooth curves, closed shapes)
+- arrow — Directional arrow (up/down/left/right, bidirectional)
+
+Each operation supports: name, parent (for nesting), x, y, width, height,
+color/fill/stroke, gradient (for backgrounds). Operations can reference
+earlier operations by name for parent-child relationships.
+```
+
+**Use when:** Building custom layouts without archetypes, creating diagrams, adding design elements that don't fit standard slide templates.
+
+**Example: Simple layout**
+```json
+{
+  "operations": [
+    { "op": "background", "fill": "#1a1a2e" },
+    { "op": "text", "text": "Custom Slide", "fontSize": 48, "bold": true, "color": "white", "x": 100, "y": 100 },
+    { "op": "rect", "x": 100, "y": 200, "width": 400, "height": 300, "fill": "#16213e", "cornerRadius": 16 }
+  ]
+}
+```
+
+---
+
+## Discovery
+
+### `monorail_find`
+Search for nodes by type and/or name.
+
+```
+Parameters:
+- type?: string — Node type filter ("COMPONENT", "INSTANCE", "VECTOR", "TEXT", "FRAME")
+- name?: string — Name filter (substring match, case-insensitive)
+- parent_id?: string — Scope search to descendants of this node
+- limit?: number — Maximum results (default: 20, max: 100)
+
+Returns: Array of { id, name, type, x, y, width, height, parent } for each match
+```
+
+**Use when:** Discovering elements in the document — finding components, text nodes, vectors, or frames by name or type. Start broad, then narrow with `parent_id`.
+
+---
+
+### `monorail_component`
+Get component info for a Figma node.
+
+```
+Parameters:
+- node_id?: string — Figma node ID (omit to use current selection)
+
+Returns: Main component details, variant properties, component set info,
+  and sibling variants with their property values
+```
+
+**Use when:** Understanding component structure. Works on instances (returns source component), components, and component sets. Useful for finding variant options before cloning or pushing.
 
 ---
 
@@ -187,18 +308,7 @@ Returns:
 
 ---
 
-### `monorail_clone`
-Clone a slide and update its text content.
-
-```
-Parameters:
-- source_slide_id: string — Figma node ID to clone (from capture)
-- content_map?: object — { slot_id: "new text" }
-```
-
-**Use when:** Creating a new slide that matches an existing design. Preserves all styling, positioning, and structure.
-
----
+## Deck Management
 
 ### `monorail_delete`
 Delete slides from the deck by Figma node ID.
@@ -228,33 +338,6 @@ Returns: Success/failure with count
 
 ---
 
-### `monorail_screenshot`
-Export a slide as a PNG image. Gives the AI "eyes" to see what was rendered.
-
-```
-Parameters:
-- slide_id?: string — Figma node ID of slide to export (optional, defaults to first slide)
-- scale?: number — Export scale factor (default: 0.5 for 50% size)
-
-Returns: PNG image (base64-encoded) with dimensions
-```
-
-**Use when:** 
-- Verifying layouts after push/patch
-- Checking alignment and spacing
-- Debugging visual issues
-- QA before presenting to user
-
-**Example:**
-```json
-{
-  "slide_id": "9:666",
-  "scale": 0.5
-}
-```
-
----
-
 ## Workflow Patterns
 
 ### Edit existing content (most common)
@@ -277,6 +360,34 @@ Returns: PNG image (base64-encoded) with dimensions
 2. monorail_clone         — create copy with new content
 ```
 
+### Visual QA
+```
+1. monorail_push          — create/update slides
+2. monorail_screenshot    — see the result as an image
+3. (iterate if needed)
+```
+
+### Design-to-code extraction
+```
+1. monorail_find          — locate the element by type/name
+2. monorail_css           — get exact CSS properties
+3. monorail_export        — export as SVG or PNG
+```
+
+### Custom slide design
+```
+1. monorail_primitives    — build layout from scratch (frames, text, shapes)
+2. monorail_screenshot    — verify the result
+3. (iterate)
+```
+
+### Component exploration
+```
+1. monorail_find          — find components by type/name
+2. monorail_component     — inspect variant properties
+3. monorail_clone         — use as basis for new slides
+```
+
 ### Extract design system
 ```
 1. monorail_capture       — returns colors, fonts, spacing
@@ -297,7 +408,7 @@ Returns: PNG image (base64-encoded) with dimensions
 
 ### Replace entire deck
 ```
-1. monorail_push with mode: "replace" — deletes all existing slides, creates new ones
+1. monorail_push with mode: "replace" — deletes all existing, creates new
 ```
 
 ### Reorder deck
@@ -306,31 +417,9 @@ Returns: PNG image (base64-encoded) with dimensions
 2. monorail_reorder       — pass IDs in desired order
 ```
 
-### Visual QA (see what you rendered)
-```
-1. monorail_push          — create/update slides
-2. monorail_screenshot    — see the result as an image
-3. (iterate if needed)
-```
-
 ### Add bullet/item to existing slide
 ```
-1. monorail_capture       — get container ID (e.g., "bullets-container")
+1. monorail_pull          — get container IDs from containers array
 2. monorail_patch with action: "add" — append new element
    { target: "container-id", text: "• New bullet", action: "add" }
 ```
-
----
-
-## Removed Tools (Session 15)
-
-These tools were consolidated or removed:
-
-| Old Tool | Replacement |
-|----------|-------------|
-| `create_deck`, `update_slides`, `get_deck` | Use `push`/`pull` |
-| `validate_ir` | Inlined into `push` |
-| `preview` | Removed (rarely used) |
-| `extract_template`, `extract_design_system` | Merged into `capture` |
-| `instantiate_template` | Renamed to `clone` |
-| `create_styled_slide` | Deferred |

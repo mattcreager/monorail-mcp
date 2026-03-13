@@ -231,6 +231,24 @@ These are infrastructure improvements that compound but aren't blocking current 
 
 ## Session Log
 
+### Session 35 (2026-01-15)
+**Dogfood: Design Iteration Principles (Generalizable)**
+
+Applied the new design principles to multiple complex slides (GRAVITY, WHAT WE'RE TESTING, THE MOMENT, THE GRIDLOCK/THE UNLOCK) and extracted generalizable heuristics beyond pixel-specific rules.
+
+**What we learned (broad principles):**
+- **Breathing room between sections** — distinct sections should not touch
+- **Visual balance** — distribute weight across the canvas, avoid top‑heavy layouts
+- **Hierarchy via proximity** — related things close, unrelated things farther apart
+- **Closer stands alone** — the final punchline gets centered emphasis and separation
+- **Bridge alignment** — central connector (KEY CARD) should align to narrative pivot points on both sides
+- **Avoid over-rotating on size** — larger type helps readability, but can crowd layout
+
+**DX note from dogfood:**
+- Copy Slide Reference button should be subtle (quiet placement/label), not visually dominant
+
+---
+
 ### Session 34 (2026-01-15)
 **Design Principles: 24px Minimum + Vertical Zone Planning + Copy Slide Reference**
 

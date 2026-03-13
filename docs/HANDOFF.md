@@ -96,19 +96,24 @@ Claude: "I see 8 slides. The narrative arc goes...
 
 ---
 
-## The 9 Tools
+## The 14 Tools
 
 | Tool | What It Does |
 |------|--------------|
 | `monorail_status` | Check WebSocket connection to Figma |
 | `monorail_pull` | Read current deck state (slides, text, Figma IDs) |
 | `monorail_push` | Create/replace slides from IR specification |
-| `monorail_patch` | Update specific text by Figma node ID |
+| `monorail_patch` | Edit, add, or delete elements by Figma node ID |
 | `monorail_capture` | Get full structure of a slide (for cloning) |
+| `monorail_css` | Extract CSS and raw paint data from a node |
 | `monorail_clone` | Clone a slide with new content |
 | `monorail_delete` | Delete slides by ID |
 | `monorail_reorder` | Reorder slides |
 | `monorail_screenshot` | Export slide as PNG (AI visual QA) |
+| `monorail_primitives` | Low-level design: frames, text, shapes, paths, arrows |
+| `monorail_export` | Export any node as SVG or PNG |
+| `monorail_component` | Get component info, variant properties, siblings |
+| `monorail_find` | Search for nodes by type and/or name |
 
 ---
 

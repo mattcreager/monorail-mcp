@@ -123,11 +123,17 @@ Key fields:
 | `monorail_status` | Check if plugin is connected |
 | `monorail_pull` | Get deck state (slides, elements, IDs) |
 | `monorail_push` | Create/replace slides from IR |
-| `monorail_patch` | Update specific text by node ID |
+| `monorail_patch` | Edit, add, or delete elements by node ID |
 | `monorail_capture` | Full node tree + design system + slots |
+| `monorail_css` | Extract CSS and raw paint data |
 | `monorail_clone` | Clone slide + update content |
 | `monorail_delete` | Delete slides by ID |
 | `monorail_reorder` | Reorder slides |
+| `monorail_screenshot` | Export slide as PNG for visual QA |
+| `monorail_primitives` | Low-level design primitives |
+| `monorail_export` | Export any node as SVG or PNG |
+| `monorail_component` | Get component info and variants |
+| `monorail_find` | Search nodes by type/name |
 
 **Why custom MCP?** The official Figma MCP doesn't support Slides, and REST API is read-only for design content. WebSocket bridge connects directly to the Figma plugin.
 

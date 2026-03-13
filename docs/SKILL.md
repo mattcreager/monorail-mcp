@@ -185,8 +185,80 @@ Discovering at slide 8 that your spine is weak means the process worked. You fou
 
 ---
 
+---
+
+## Monorail Workflow Patterns
+
+Practical patterns learned from real deck-building sessions.
+
+### The Ralph Wiggum Loop
+
+Screenshot after every change. Don't trust that it worked—verify visually.
+
+```
+1. Make change (push, primitives, patch)
+2. Screenshot immediately (scale 0.4-0.55)
+3. Evaluate: Does it look right?
+4. If not: iterate
+```
+
+**Screenshot scale:** Use 0.4-0.55. Smaller is unreadable, larger overwhelms context.
+
+### Delete + Recreate > Patch
+
+`monorail_patch` is unreliable. When you need to change content on a slide:
+
+```
+1. Pull the slide to see current structure
+2. Delete the slide with monorail_delete
+3. Recreate with monorail_primitives (copy structure, change content)
+```
+
+This is more reliable than debugging patch argument formats.
+
+### Primitives Positioning Guide
+
+Standard 1920x1080 slide coordinates:
+
+| Element | X | Y | Width | Notes |
+|---------|---|---|-------|-------|
+| Left margin | 60 | - | - | Standard content start |
+| Headline | 60 | 30-50 | - | Top of slide |
+| Subhead | 60 | 90-110 | - | Below headline |
+| Full-width box | 60 | - | 1200 | Spans most of slide |
+| Left column | 60 | - | 580 | For two-column |
+| Right column | 680 | - | 580 | For two-column |
+| Bottom bar | 60 | 430-500 | 1200 | Footer/summary |
+
+**Corner radius:** 8-16px for boxes. Use consistent radius within a slide.
+
+### Full-Slide Rebuild Pattern
+
+For complex slides with diagrams, custom layouts, or many elements—build from scratch with `monorail_primitives` rather than fighting archetypes.
+
+Primitives give you:
+- Exact positioning control
+- Custom color schemes
+- Mixed element types (text + rect + line)
+- Visual hierarchy through layering
+
+### Reordering for Narrative
+
+Use `monorail_reorder` freely. It's reliable and lets you restructure the deck without touching content.
+
+Pattern:
+```
+1. Build slides in any order
+2. Pull summary to see current order
+3. Reorder to match narrative flow
+4. Screenshot key slides to verify
+```
+
+---
+
 ## References
 
 - `references/archetypes.md` — Detailed specs per archetype
 - `references/narrative.md` — Theory: stakes, tension, turns
 - `references/critics.md` — Expanded QA heuristics
+- `discovery/sales-deck-patterns.md` — Patterns for sales/pitch decks

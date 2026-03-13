@@ -58,3 +58,29 @@ Priority order for fixes:
 2. **Archetype detection** — quick fix for round-trip fidelity
 3. **Callout support** — adds visual richness
 4. **Loop/diagram** — harder, needs Figma arrows research
+
+---
+
+## Design Dogfood Learnings (2026-01-15)
+
+These are **general layout principles** extracted from multiple slide redesigns (not tied to a single layout):
+
+1. **Breathing room between sections**  
+   Distinct sections should not touch. Use visible separation so the eye can reset.
+
+2. **Visual balance across the canvas**  
+   Distribute weight top-to-bottom and left-to-right. Avoid layouts that feel top‑heavy or bottom‑empty.
+
+3. **Hierarchy via proximity**  
+   Related items cluster together. Unrelated items get extra distance. This is more powerful than extra labels.
+
+4. **Closer stands alone**  
+   The final punchline should be visually distinct (centered or isolated) and separated from body content.
+
+5. **Bridge alignment**  
+   If a slide has a "bridge" element (e.g. KEY CARD), align it to the narrative pivot points on both sides.
+
+6. **Avoid over-rotating on size**  
+   Larger type improves readability, but can crowd the layout. Balance size with spacing.
+
+**DX note:** UI affordances should be subtle. The "Copy Slide Reference" button should be quiet, not visually dominant.

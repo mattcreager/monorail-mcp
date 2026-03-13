@@ -30,6 +30,7 @@ We're building tools for an AI collaborator. What makes a good "developer experi
 - When should Claude pull vs push vs patch?
 - How to handle errors gracefully?
 - What's the expected iteration loop?
+- How can a user point Claude at a specific slide with zero ambiguity?
 
 **3. Error Recovery**
 - Errors say what failed but not how to fix
@@ -68,6 +69,7 @@ Better:  "✓ Pushed 5 slides to Figma
 - Auto-include archetypes resource when pushing?
 - Surface skill resource at conversation start?
 - Tool-specific tips in error messages?
+- Provide a one-click "Copy Slide Reference" in the plugin UI (quiet, non-dominant)
 
 ### Compact Output Modes
 ```json
@@ -133,6 +135,28 @@ How would we know AI DX is good?
 - `hint` — Usage guidance
 
 **Key insight:** Building a feature isn't enough. Ask: "Can Claude discover how to use this without human help?" If not, the feature has an AI DX bug.
+
+### Session: Patch Reliability (2026-01-21)
+
+**Problem:** `monorail_patch` repeatedly fails with "No patches provided" error, even when patches are provided in the arguments. Tried multiple argument formats:
+- `{ "patches": [...] }`
+- `{ "changes": [...] }`
+- `{ "node_id": "...", "text": "..." }`
+
+All returned the same error.
+
+**Workaround:** Delete the slide with `monorail_delete` and recreate it with `monorail_primitives`. This is 100% reliable.
+
+**Pattern documented in SKILL.md:**
+```
+1. Pull the slide to see current structure
+2. Delete the slide with monorail_delete
+3. Recreate with monorail_primitives (copy structure, change content)
+```
+
+**Key insight:** When a tool is unreliable, document the workaround prominently. Claude will use what works, not what's "supposed to" work.
+
+**TODO:** Debug the patch argument parsing in `src/index.ts` — the argument schema may not match what the handler expects.
 
 ## Next Steps
 
