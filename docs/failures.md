@@ -687,3 +687,27 @@ Splitting the identical payload into three calls of ~15 ops each succeeded first
 **Impact:** Two compounding problems. The batch is not atomic, so the ops before the failure are already on the canvas — you're left with a half-built slide that has to be deleted before retrying. And the error text sends you looking for a network fault or a bug in the named op, neither of which exists.
 
 **Path forward:** Guidance is in `docs/references/mcp-tools.md` — keep batches to ~20-30 ops, delete-and-retry rather than patching over a partial slide, and pass `slide_id` to continue onto the same slide. Worth considering in the tool itself: retry `setVectorNetworkAsync` once before failing, and report the failure with the op index and a message that doesn't blame the network.
+
+---
+
+### 2026-07-30 - A tool parameter has THREE hops, not two, and the third drops unknown fields
+
+**What we found:** `min_font_size` was implemented on the server (`src/index.ts` reads `args.min_font_size`, sends `minFontSize`) and consumed in the plugin (`code.ts` reads `msg.minFontSize`). Both sides built, both sides correct, MCP client restarted, plugin re-run — and it still had no effect.
+
+The missing hop is `figma-plugin/ui.html`. The UI owns the WebSocket; the plugin sandbox cannot open one. So every message is relayed UI → plugin via `parent.postMessage`, and that relay **reconstructs the payload field by field**:
+
+```js
+parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations } }, '*');
+```
+
+Anything not named there is silently dropped. `minFontSize` arrived at the UI and never reached the plugin.
+
+**Impact:** A new tool parameter needs edits in **three** files, not two, and the failure mode is the familiar one — no error, the parameter simply does nothing, and both places you'd think to look are correct. It also can't be caught by rebuilding: `ui.html` is loaded by Figma directly and is not part of the esbuild bundle, so `check:bundle` passes and the plugin still behaves as before until it is re-run.
+
+**Path forward:** Adding a parameter to `monorail_primitives` (or any tool) means:
+
+1. `src/index.ts` — declare it in the tool's inputSchema, read it from `args`, include it in the `connectedPlugin.send(...)` payload.
+2. `figma-plugin/ui.html` — add it to the `parent.postMessage` relay for that message type.
+3. `figma-plugin/code.ts` — read it off `msg` and use it.
+
+Then rebuild the server, rebuild the bundle, restart the MCP client, AND re-run the plugin. A relay that forwarded `...msg` instead of naming fields would remove this whole class of bug, and is worth doing next time the relay is touched.

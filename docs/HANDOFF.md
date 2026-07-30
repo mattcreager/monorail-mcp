@@ -41,7 +41,7 @@ cd figma-plugin && npm install && npm run build && cd ..
   "mcpServers": {
     "monorail": {
       "command": "node",
-      "args": ["/full/path/to/monorail-mcp/dist/index.js"]
+      "args": ["/full/path/to/monorail-mcp/dist/src/index.js"]
     }
   }
 }
@@ -234,9 +234,13 @@ because a stale bundle looks exactly like a code bug:
   watch` only rewrites the file on disk.
 - **Server change** (including tool schemas) → restart your MCP client, which
   owns the server process.
-- **A new tool parameter needs both.** The server has to pass it through and the
-  plugin has to act on it, so a parameter that appears silently ignored is
-  usually one of the two sides being stale rather than a bug.
+- **A new tool parameter needs THREE files, not two.** `src/index.ts` (schema,
+  read from args, include in the send payload), `figma-plugin/ui.html` (the
+  `parent.postMessage` relay names fields individually and silently drops
+  anything it doesn't list), and `figma-plugin/code.ts` (read it off `msg`).
+  Miss the middle one and both sides you'd inspect are correct while the
+  parameter does nothing. `ui.html` is loaded by Figma directly rather than
+  bundled, so `check:bundle` won't tell you either — the plugin must be re-run.
 
 ---
 

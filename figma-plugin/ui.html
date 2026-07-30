@@ -643,7 +643,7 @@
               const count = msg.operations?.length || 0;
               const target = msg.slideId ? ` on ${msg.slideId}` : '';
               addActivity('\u25a0', `${count} primitives${target}`);
-              parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations, minFontSize: msg.minFontSize } }, '*');
             } else if (msg.type === 'get-css') {
               addActivity('\u25a1', msg.nodeId ? `CSS for ${msg.nodeId}` : 'CSS for selection');
               parent.postMessage({ pluginMessage: { type: 'get-css', nodeId: msg.nodeId } }, '*');
