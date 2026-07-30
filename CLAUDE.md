@@ -39,3 +39,22 @@ MCP server for real-time design collaboration in Figma. 14 tools across 5 catego
 Named after The Simpsons' "Marge vs. the Monorail."
 See `PLAN.md` for current state and session history.
 See `docs/HANDOFF.md` for team onboarding.
+
+<!-- WORKBENCH:START -->
+## Board State
+
+Managed by Agent Workbench. Use `workbench` CLI:
+- `workbench status` — view board
+- `workbench ws list` — list workstreams
+- `workbench add <ws-id> "title"` — add task to workstream
+- `workbench move <task-id> <stage>` — move task (planning/running/done)
+- `workbench done <task-id>` — mark done
+
+### ○ tasks f0973110 `f0973110`
+Orphan task group
+- **planning**: `1` Fix monorail MCP plugin routing to correct Claude instance — ## Problem
+
+### ○ team 0fdae258 `0fdae258`
+*(no tasks)*
+
+<!-- WORKBENCH:END -->

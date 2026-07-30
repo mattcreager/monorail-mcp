@@ -836,6 +836,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description:
                 "Optional Figma node ID of an existing slide to add elements to. If omitted, creates a new slide.",
             },
+            min_font_size: {
+              type: "number",
+              description:
+                "Warning threshold for text size, default 24 (presentation body copy). Diagram labels legitimately sit at 12-20px; set this to stop dozens of expected warnings from burying real ones.",
+            },
             operations: {
               type: "array",
               description: "Array of primitive operations to apply in sequence",
@@ -862,24 +867,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   width: { type: "number", description: "Width (for rect, ellipse, frame)" },
                   height: { type: "number", description: "Height (for rect, ellipse, frame)" },
                   length: { type: "number", description: "Length (for line, arrow)" },
-                  rotation: { type: "number", description: "Rotation in degrees (for line)" },
+                  rotation: { type: "number", description: "Rotation in degrees (line, text). Positive reads clockwise on screen." },
                   // Arrow properties
-                  direction: { type: "string", description: "Arrow direction: 'right', 'left', 'up', 'down', or degrees (for arrow). Also used for Auto Layout: 'VERTICAL', 'HORIZONTAL'" },
+                  direction: { type: "string", description: "Direction for arrow AND line: 'right', 'left', 'up', 'down', or degrees. Also used for Auto Layout: 'VERTICAL', 'HORIZONTAL'" },
                   headSize: { type: "number", description: "Arrowhead size in pixels (default: 12)" },
                   bidirectional: { type: "boolean", description: "If true, arrow has heads on both ends" },
                   // Text properties
                   text: { type: "string", description: "Text content (for text op)" },
-                  fontSize: { type: "number", description: "Font size in pixels (for text op). MINIMUM 24px for readability at presentation distance. Sizes below 24px will trigger a warning." },
+                  fontSize: { type: "number", description: "Font size in pixels (for text op). Below the batch minimum (24px by default) triggers a warning — see the top-level min_font_size for diagram work." },
                   bold: { type: "boolean", description: "Bold font (for text op)" },
+                  fontFamily: { type: "string", description: "Font family for this text node, e.g. 'PP Supply Sans' or 'Geist'. Omit to use the plugin's fallback chain (Supply → Inter → SF Pro Display → Helvetica Neue → Arial). Set this when matching an existing deck's typography — the chain will NOT find 'PP Supply Sans' on its own and silently lands on Inter. An unavailable family falls back to the chain rather than failing." },
                   maxWidth: { type: "number", description: "Maximum width before wrapping (for text op)" },
                   // Colors (named: 'headline', 'body', 'muted', 'cyan', 'orange', 'green', 'pink', 'red', 'yellow', hex '#1a1a2e', or {r,g,b})
                   color: { type: "string", description: "Color for text, line, or arrow" },
-                  fill: { type: "string", description: "Fill color for solid backgrounds and shapes" },
+                  fill: { type: "string", description: "Fill color for solid backgrounds and shapes. Omitting fill while setting stroke gives an OUTLINE (transparent interior) rather than a white box." },
                   stroke: { type: "string", description: "Stroke color for shapes" },
                   // Gradient (for background op only)
                   gradient: {
                     type: "object",
-                    description: "Gradient fill (for background op). Use instead of 'fill' for gradient backgrounds.",
+                    description: "Gradient fill for background, rect, ellipse, frame, or a closed path. Use instead of 'fill'.",
                     properties: {
                       type: { type: "string", enum: ["linear", "radial"], description: "Gradient type (default: linear)" },
                       angle: { type: "number", description: "Angle in degrees. 0=left-to-right, 90=top-to-bottom (default: 90)" },
@@ -898,7 +904,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     },
                     required: ["stops"]
                   },
-                  strokeWeight: { type: "number", description: "Stroke width (for line)" },
+                  strokeWeight: { type: "number", description: "Stroke width. Applies to line, path, rect, ellipse and frame (default 2)." },
+                  dash: {
+                    description: "Dashed stroke. A number gives an even pattern (6 → 6 on, 6 off); an array is explicit ([8, 4]). Works on rect, ellipse, frame, line and path.",
+                    oneOf: [
+                      { type: "number" },
+                      { type: "array", items: { type: "number" } }
+                    ]
+                  },
                   // Line caps (for line op - simpler than vector arrow)
                   startCap: { 
                     type: "string", 
@@ -913,7 +926,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   // Path properties
                   points: {
                     type: "array",
-                    description: "Array of {x, y} points for path op. Minimum 2 points.",
+                    description: "Array of {x, y} points for path op. Minimum 2 points. Points may be given in slide coordinates — the path is placed where the points say. Any x/y on the op is added as an extra offset, so relative points still work.",
                     items: {
                       type: "object",
                       properties: {
@@ -925,7 +938,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                   smooth: { type: "boolean", description: "For path: auto-generate smooth bezier curves between points" },
                   closed: { type: "boolean", description: "For path: connect last point back to first (creates a closed shape)" },
-                  cornerRadius: { type: "number", description: "Corner radius (for rect)" },
+                  cornerRadius: { type: "number", description: "Corner radius (rect, frame)" },
+                  clipsContent: { type: "boolean", description: "For frame: clip children to bounds (default false, so connectors may overhang)" },
                   // Auto Layout properties
                   spacing: { type: "number", description: "Item spacing in Auto Layout (default: 24)" },
                   padding: { type: "number", description: "Uniform padding in Auto Layout" },
@@ -2199,6 +2213,7 @@ The new slide has been selected in Figma.`,
 
       const slideId = args?.slide_id as string | undefined;
       const operations = args?.operations as any[];
+      const minFontSize = args?.min_font_size as number | undefined;
 
       if (!operations || operations.length === 0) {
         return {
@@ -2241,6 +2256,7 @@ The new slide has been selected in Figma.`,
           type: 'apply-primitives',
           slideId,
           operations,
+          minFontSize,
         }));
 
         // Wait for response
@@ -2264,7 +2280,7 @@ The new slide has been selected in Figma.`,
         // Format warnings if any
         let warningsText = '';
         if (result.warnings && result.warnings.length > 0) {
-          warningsText = `\n\n**⚠️ Design Warnings (${result.warnings.length}):**\n${result.warnings.map(w => `  - ${w}`).join('\n')}\n\n_Minimum font size is 24px for readability at presentation distance._`;
+          warningsText = `\n\n**⚠️ Design Warnings (${result.warnings.length}):**\n${result.warnings.map(w => `  - ${w}`).join('\n')}\n\n_Minimum font size is ${minFontSize ?? 24}px for readability at presentation distance. Diagram work can lower it with min_font_size._`;
         }
         
         return {

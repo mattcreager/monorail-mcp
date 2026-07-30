@@ -89,15 +89,21 @@
   }
   var FONT_FALLBACKS = ["Supply", "Inter", "SF Pro Display", "Helvetica Neue", "Arial"];
   var loadedFontCache = null;
-  async function tryLoadFont(family) {
+  async function tryLoadFont(family, requireBold = true) {
+    const regular = { family, style: "Regular" };
     try {
-      const regular = { family, style: "Regular" };
-      const bold = { family, style: "Bold" };
       await figma.loadFontAsync(regular);
-      await figma.loadFontAsync(bold);
-      return { family, regular, bold };
     } catch (e) {
       return null;
+    }
+    const boldName = { family, style: "Bold" };
+    try {
+      await figma.loadFontAsync(boldName);
+      return { family, regular, bold: boldName };
+    } catch (e) {
+      if (requireBold) return null;
+      console.log(`Font has no Bold weight, using Regular for bold: ${family}`);
+      return { family, regular, bold: regular };
     }
   }
   async function loadFontWithFallback() {
@@ -114,18 +120,29 @@
     }
     throw new Error(`No fonts available from fallback chain: ${FONT_FALLBACKS.join(", ")}`);
   }
-  async function getFontName(bold = false) {
+  var requestedFontCache = {};
+  async function getFontName(bold = false, family) {
+    if (family) {
+      if (requestedFontCache[family] === void 0) {
+        requestedFontCache[family] = await tryLoadFont(family, false);
+        if (!requestedFontCache[family]) {
+          console.log(`Requested font not available, falling back: ${family}`);
+        }
+      }
+      const requested = requestedFontCache[family];
+      if (requested) return bold ? requested.bold : requested.regular;
+    }
     const font = await loadFontWithFallback();
     return bold ? font.bold : font.regular;
   }
-  async function addText(parent, text, x, y, fontSize, bold = false, color = COLORS.white, maxWidth, nodeName) {
+  async function addText(parent, text, x, y, fontSize, bold = false, color = COLORS.white, maxWidth, nodeName, fontFamily) {
     const textNode = figma.createText();
     textNode.x = x;
     textNode.y = y;
     if (nodeName) {
       textNode.name = nodeName;
     }
-    const fontName = await getFontName(bold);
+    const fontName = await getFontName(bold, fontFamily);
     textNode.fontName = fontName;
     textNode.fontSize = fontSize;
     textNode.fills = [{ type: "SOLID", color }];
@@ -1949,7 +1966,7 @@
     return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
   }
   figma.ui.onmessage = async (msg) => {
-    var _a2, _b, _c, _d, _e, _f;
+    var _a2, _b, _c, _d, _e, _f, _g, _h;
     try {
       if (msg.type === "apply-ir") {
         if (!msg.ir) {
@@ -2872,12 +2889,57 @@
             if (namedColor) return namedColor;
             console.warn(`Unknown color: ${colorRef}, defaulting to white`);
             return COLORS.white;
+          }, resolveDirection2 = function(dir) {
+            if (typeof dir === "number") return dir;
+            switch (dir) {
+              case "down":
+                return 90;
+              case "left":
+                return 180;
+              case "up":
+                return -90;
+              case "right":
+              default:
+                return 0;
+            }
+          }, buildGradientPaint2 = function(gradient) {
+            var _a3;
+            const angle = ((_a3 = gradient.angle) != null ? _a3 : 90) * Math.PI / 180;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const gradientTransform = [
+              [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+              [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+            ];
+            const gradientStops = (gradient.stops || []).map((stop) => ({
+              position: stop.position,
+              color: __spreadProps(__spreadValues({}, resolveColor2(stop.color)), { a: 1 })
+            }));
+            return {
+              type: gradient.type === "radial" ? "GRADIENT_RADIAL" : "GRADIENT_LINEAR",
+              gradientTransform,
+              gradientStops
+            };
+          }, buildFills2 = function(op, defaultFill = "white") {
+            if (op.gradient) return [buildGradientPaint2(op.gradient)];
+            if (op.fill) return [{ type: "SOLID", color: resolveColor2(op.fill) }];
+            if (op.stroke) return [];
+            return defaultFill === "none" ? [] : [{ type: "SOLID", color: COLORS.white }];
+          }, applyStroke2 = function(node, op, defaultWeight = 2) {
+            var _a3;
+            if (op.stroke) {
+              node.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
+              node.strokeWeight = (_a3 = op.strokeWeight) != null ? _a3 : defaultWeight;
+            }
+            if (op.dash !== void 0) {
+              node.dashPattern = Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
+            }
           };
-          var resolveParent = resolveParent2, resolveColor = resolveColor2;
+          var resolveParent = resolveParent2, resolveColor = resolveColor2, resolveDirection = resolveDirection2, buildGradientPaint = buildGradientPaint2, buildFills = buildFills2, applyStroke = applyStroke2;
           const nodesByName = {};
           const createdNodes = [];
           const warnings = [];
-          const MIN_FONT_SIZE = 24;
+          const MIN_FONT_SIZE = (_e = msg.minFontSize) != null ? _e : 24;
           let targetSlide;
           if (slideId) {
             const node = await figma.getNodeByIdAsync(slideId);
@@ -2902,7 +2964,7 @@
               if (op.op === "background") {
                 if ("fills" in targetSlide) {
                   if (op.gradient) {
-                    const angle = ((_e = op.gradient.angle) != null ? _e : 90) * Math.PI / 180;
+                    const angle = ((_f = op.gradient.angle) != null ? _f : 90) * Math.PI / 180;
                     const cos = Math.cos(angle);
                     const sin = Math.sin(angle);
                     const gradientTransform = [
@@ -2939,7 +3001,12 @@
                 frame.x = op.x || 0;
                 frame.y = op.y || 0;
                 if (op.width) frame.resize(op.width, op.height || 100);
-                frame.fills = [];
+                frame.fills = buildFills2(op, "none");
+                applyStroke2(frame, op);
+                if (op.cornerRadius) {
+                  frame.cornerRadius = op.cornerRadius;
+                }
+                frame.clipsContent = (_g = op.clipsContent) != null ? _g : false;
                 resolveParent2(op.parent).appendChild(frame);
                 if (op.name) nodesByName[op.name] = frame;
                 createdNodes.push({ name: op.name || "frame", id: frame.id, type: "FRAME" });
@@ -2949,7 +3016,7 @@
                 frame.layoutMode = op.direction || "VERTICAL";
                 frame.primaryAxisSizingMode = "AUTO";
                 frame.counterAxisSizingMode = "AUTO";
-                frame.itemSpacing = (_f = op.spacing) != null ? _f : 24;
+                frame.itemSpacing = (_h = op.spacing) != null ? _h : 24;
                 if (op.padding) {
                   frame.paddingTop = op.padding;
                   frame.paddingBottom = op.padding;
@@ -2974,7 +3041,7 @@
               } else if (op.op === "text") {
                 const textNode = figma.createText();
                 if (op.name) textNode.name = op.name;
-                const fontName = await getFontName(op.bold || false);
+                const fontName = await getFontName(op.bold || false, op.fontFamily);
                 textNode.fontName = fontName;
                 const requestedSize = op.fontSize || 24;
                 if (requestedSize < MIN_FONT_SIZE) {
@@ -3001,6 +3068,9 @@
                 parent.appendChild(textNode);
                 if (op.x !== void 0) textNode.x = op.x;
                 if (op.y !== void 0) textNode.y = op.y;
+                if (op.rotation) {
+                  textNode.rotation = -op.rotation;
+                }
                 if (op.name) {
                   nodesByName[op.name] = textNode;
                   createdNodes.push({ name: op.name, id: textNode.id, type: "TEXT" });
@@ -3011,11 +3081,8 @@
                 rect.x = op.x || 0;
                 rect.y = op.y || 0;
                 rect.resize(op.width || 100, op.height || 100);
-                rect.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
-                if (op.stroke) {
-                  rect.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
-                  rect.strokeWeight = 2;
-                }
+                rect.fills = buildFills2(op);
+                applyStroke2(rect, op);
                 if (op.cornerRadius) {
                   rect.cornerRadius = op.cornerRadius;
                 }
@@ -3030,10 +3097,10 @@
                 ellipse.x = op.x || 0;
                 ellipse.y = op.y || 0;
                 ellipse.resize(op.width || 100, op.height || 100);
-                ellipse.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
-                if (op.stroke) {
-                  ellipse.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
-                  ellipse.strokeWeight = 2;
+                ellipse.fills = buildFills2(op);
+                applyStroke2(ellipse, op);
+                if (op.cornerRadius !== void 0 && "cornerRadius" in ellipse) {
+                  ellipse.cornerRadius = op.cornerRadius;
                 }
                 resolveParent2(op.parent).appendChild(ellipse);
                 if (op.name) {
@@ -3044,7 +3111,9 @@
                 const length = op.length || 100;
                 const color = resolveColor2(op.color);
                 const strokeWeight = op.strokeWeight || 2;
-                const rotation = op.rotation || 0;
+                const dirRotation = -resolveDirection2(op.direction);
+                const rotation = op.rotation !== void 0 ? op.rotation : dirRotation;
+                const capRotation = op.rotation !== void 0 ? -op.rotation : dirRotation;
                 if (op.startCap || op.endCap) {
                   const vector = figma.createVector();
                   if (op.name) vector.name = op.name;
@@ -3062,10 +3131,14 @@
                   });
                   vector.strokes = [{ type: "SOLID", color }];
                   vector.strokeWeight = strokeWeight;
+                  if (op.dash !== void 0) {
+                    const d = op.dash;
+                    vector.dashPattern = Array.isArray(d) ? d : [d, d];
+                  }
                   vector.fills = [];
                   vector.x = op.x || 0;
                   vector.y = op.y || 0;
-                  vector.rotation = -rotation;
+                  vector.rotation = capRotation;
                   resolveParent2(op.parent).appendChild(vector);
                   const lineType = "LINE_ARROW";
                   if (op.name) {
@@ -3083,6 +3156,10 @@
                   line.rotation = rotation;
                   line.strokes = [{ type: "SOLID", color }];
                   line.strokeWeight = strokeWeight;
+                  if (op.dash !== void 0) {
+                    const d = op.dash;
+                    line.dashPattern = Array.isArray(d) ? d : [d, d];
+                  }
                   resolveParent2(op.parent).appendChild(line);
                   if (op.name) {
                     nodesByName[op.name] = line;
@@ -3102,8 +3179,10 @@
                 const closed = op.closed || false;
                 const vector = figma.createVector();
                 if (op.name) vector.name = op.name;
+                const minX = Math.min(...points.map((pt) => pt.x));
+                const minY = Math.min(...points.map((pt) => pt.y));
                 const vertices = points.map((pt, i) => {
-                  const vertex = { x: pt.x, y: pt.y };
+                  const vertex = { x: pt.x - minX, y: pt.y - minY };
                   if (!closed) {
                     if (i === 0 && op.startCap) {
                       vertex.strokeCap = op.startCap;
@@ -3160,13 +3239,18 @@
                 });
                 vector.strokes = [{ type: "SOLID", color }];
                 vector.strokeWeight = strokeWeight;
-                if (closed && op.fill) {
-                  vector.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
+                vector.strokeJoin = "ROUND";
+                if (op.dash !== void 0) {
+                  const d = op.dash;
+                  vector.dashPattern = Array.isArray(d) ? d : [d, d];
+                }
+                if (closed && (op.gradient || op.fill)) {
+                  vector.fills = op.gradient ? [buildGradientPaint2(op.gradient)] : [{ type: "SOLID", color: resolveColor2(op.fill) }];
                 } else {
                   vector.fills = [];
                 }
-                vector.x = op.x || 0;
-                vector.y = op.y || 0;
+                vector.x = (op.x || 0) + minX;
+                vector.y = (op.y || 0) + minY;
                 resolveParent2(op.parent).appendChild(vector);
                 const pathType = closed ? "PATH_CLOSED" : smooth ? "PATH_CURVED" : "PATH";
                 if (op.name) {

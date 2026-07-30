@@ -91,21 +91,38 @@ interface LoadedFont {
 let loadedFontCache: LoadedFont | null = null;
 
 /**
- * Try to load a font family with both Regular and Bold styles.
- * Returns the font names if successful, null if not available.
+ * Try to load a font family.
+ *
+ * `requireBold` exists because an all-or-nothing check silently disqualifies
+ * display faces that ship no Bold weight. Measured case: these decks use
+ * 'PP Supply Sans' style 'Regular', with no Bold installed. Demanding both
+ * weights made `loadFontAsync` reject, which returned null, which fell through
+ * to Inter — the brand face was available the whole time and never used, with
+ * no error to say so.
+ *
+ * Chain resolution keeps requireBold=true so the default font for existing
+ * decks does not change. An explicitly requested family passes false: it
+ * degrades bold→regular for that family rather than abandoning the family, on
+ * the reasoning that the right typeface without a bold weight beats the wrong
+ * typeface with one.
  */
-async function tryLoadFont(family: string): Promise<LoadedFont | null> {
+async function tryLoadFont(family: string, requireBold: boolean = true): Promise<LoadedFont | null> {
+  const regular: FontName = { family, style: 'Regular' };
   try {
-    const regular: FontName = { family, style: 'Regular' };
-    const bold: FontName = { family, style: 'Bold' };
-    
     await figma.loadFontAsync(regular);
-    await figma.loadFontAsync(bold);
-    
-    return { family, regular, bold };
   } catch {
-    // Font not available
-    return null;
+    return null;  // no Regular → family genuinely unusable
+  }
+
+  const boldName: FontName = { family, style: 'Bold' };
+  try {
+    await figma.loadFontAsync(boldName);
+    return { family, regular, bold: boldName };
+  } catch {
+    if (requireBold) return null;
+    // Family has no Bold. Degrade bold→regular rather than lose the family.
+    console.log(`Font has no Bold weight, using Regular for bold: ${family}`);
+    return { family, regular, bold: regular };
   }
 }
 
@@ -134,9 +151,40 @@ async function loadFontWithFallback(): Promise<LoadedFont> {
 }
 
 /**
- * Get the appropriate FontName for the current style.
+ * Per-family cache for explicitly requested fonts.
+ *
+ * Separate from loadedFontCache, which memoises the single winner of the
+ * FONT_FALLBACKS chain. A caller asking for a specific family must not be
+ * served that winner, and must not overwrite it either.
  */
-async function getFontName(bold: boolean = false): Promise<FontName> {
+const requestedFontCache: { [family: string]: LoadedFont | null } = {};
+
+/**
+ * Get the appropriate FontName, optionally for an explicitly named family.
+ *
+ * Why this exists: FONT_FALLBACKS leads with 'Supply', but the family
+ * actually installed for these decks is 'PP Supply Sans'. Those names never
+ * matched, so every primitives-created text node silently fell through to
+ * Inter — layout correct, typography wrong, and no error anywhere to say so.
+ * A single global chain also cannot serve a deck that uses two families
+ * (PP Supply Sans for display, Geist for body), so family has to be a
+ * per-node decision rather than a plugin-wide one.
+ *
+ * An unavailable family degrades to the fallback chain rather than throwing,
+ * so a typo yields readable text instead of a failed slide.
+ */
+async function getFontName(bold: boolean = false, family?: string): Promise<FontName> {
+  if (family) {
+    if (requestedFontCache[family] === undefined) {
+      // requireBold=false: an explicit request keeps the family even with no Bold
+      requestedFontCache[family] = await tryLoadFont(family, false);
+      if (!requestedFontCache[family]) {
+        console.log(`Requested font not available, falling back: ${family}`);
+      }
+    }
+    const requested = requestedFontCache[family];
+    if (requested) return bold ? requested.bold : requested.regular;
+  }
   const font = await loadFontWithFallback();
   return bold ? font.bold : font.regular;
 }
@@ -151,19 +199,20 @@ async function addText(
   bold: boolean = false,
   color: RGB = COLORS.white,
   maxWidth?: number,
-  nodeName?: string
+  nodeName?: string,
+  fontFamily?: string
 ): Promise<TextNode> {
   const textNode = figma.createText();
   textNode.x = x;
   textNode.y = y;
-  
+
   // Set node name for update-in-place (allows finding node later)
   if (nodeName) {
     textNode.name = nodeName;
   }
-  
-  // Use font fallback chain
-  const fontName = await getFontName(bold);
+
+  // Explicit family when asked for, else the fallback chain
+  const fontName = await getFontName(bold, fontFamily);
   
   textNode.fontName = fontName;
   textNode.fontSize = fontSize;
@@ -3852,6 +3901,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         fontSize?: number;
         color?: string | RGB;
         bold?: boolean;
+        fontFamily?: string;
         maxWidth?: number;
         alignment?: 'LEFT' | 'CENTER' | 'RIGHT';
         verticalAlignment?: 'TOP' | 'CENTER' | 'BOTTOM';
@@ -3888,8 +3938,12 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         const createdNodes: Array<{ name: string; id: string; type: string }> = [];
         const warnings: string[] = [];
         
-        // Design system constants
-        const MIN_FONT_SIZE = 24;
+        // Design system constants. 24px is the floor for presentation body copy,
+        // but diagram labels legitimately live at 12–20px — and warning on every
+        // one of them buried the warnings that mattered (a 60-op diagram produced
+        // 40 font-size warnings and nothing else was readable). Callers doing
+        // diagram work can lower the floor for the batch.
+        const MIN_FONT_SIZE = (msg as any).minFontSize ?? 24;
 
         // Find or create target slide
         let targetSlide: SceneNode & ChildrenMixin;
@@ -3955,6 +4009,74 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           return COLORS.white;
         }
 
+        // Resolve a direction token to an angle in SCREEN degrees (y grows down).
+        // Matches the `arrow` op's mapping so every op that takes a direction
+        // agrees on what 'down' means.
+        function resolveDirection(dir?: string | number): number {
+          if (typeof dir === 'number') return dir;
+          switch (dir) {
+            case 'down': return 90;
+            case 'left': return 180;
+            case 'up': return -90;
+            case 'right':
+            default: return 0;
+          }
+        }
+
+        // Build a gradient paint from an op's `gradient` field.
+        function buildGradientPaint(gradient: any): Paint {
+          const angle = (gradient.angle ?? 90) * Math.PI / 180;  // default: top-to-bottom
+          const cos = Math.cos(angle);
+          const sin = Math.sin(angle);
+          // gradientTransform is a 2x3 matrix [[a,b,tx],[c,d,ty]] mapping gradient
+          // space to node space.
+          const gradientTransform: Transform = [
+            [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+            [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+          ];
+          const gradientStops: ColorStop[] = (gradient.stops || []).map((stop: any) => ({
+            position: stop.position,
+            color: { ...resolveColor(stop.color), a: 1 }
+          }));
+          return {
+            type: gradient.type === 'radial' ? 'GRADIENT_RADIAL' : 'GRADIENT_LINEAR',
+            gradientTransform,
+            gradientStops
+          } as Paint;
+        }
+
+        /**
+         * Fills for a shape.
+         *
+         * An op that asks for a stroke and no fill wants an OUTLINE. It used to get
+         * `resolveColor(undefined)` — an opaque WHITE box that buried whatever it
+         * was drawn over, so outlined boxes and their labels vanished. Now a
+         * stroke-only op is transparent.
+         *
+         * `defaultFill` keeps the legacy default for shapes with neither fill nor
+         * stroke ('white'), while containers pass 'none' so a bare grouping frame
+         * stays transparent.
+         */
+        function buildFills(op: any, defaultFill: 'white' | 'none' = 'white'): Paint[] {
+          if (op.gradient) return [buildGradientPaint(op.gradient)];
+          if (op.fill) return [{ type: 'SOLID', color: resolveColor(op.fill) }];
+          if (op.stroke) return [];
+          return defaultFill === 'none' ? [] : [{ type: 'SOLID', color: COLORS.white }];
+        }
+
+        // Stroke colour, weight and dash. `dash: 6` is an even 6/6 pattern;
+        // `dash: [8, 4]` is explicit. strokeWeight was previously hardcoded to 2 on
+        // rects and ellipses, so hairlines were impossible.
+        function applyStroke(node: any, op: any, defaultWeight: number = 2): void {
+          if (op.stroke) {
+            node.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
+            node.strokeWeight = op.strokeWeight ?? defaultWeight;
+          }
+          if (op.dash !== undefined) {
+            node.dashPattern = Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
+          }
+        }
+
         // Process each operation
         for (const op of operations) {
           try {
@@ -4007,7 +4129,19 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               frame.x = op.x || 0;
               frame.y = op.y || 0;
               if (op.width) frame.resize(op.width, op.height || 100);
-              frame.fills = [];
+              // `fill`, `gradient`, `stroke` and `cornerRadius` used to be dropped
+              // on the floor here — a frame was always transparent, so anyone
+              // grouping a diagram column into a frame had to draw a separate rect
+              // behind it. Default stays transparent when nothing is asked for.
+              frame.fills = buildFills(op, 'none');
+              applyStroke(frame, op);
+              if (op.cornerRadius) {
+                frame.cornerRadius = op.cornerRadius;
+              }
+              // Diagram children are frequently positioned to overhang their
+              // container (connectors, badges), and silently clipping them is more
+              // surprising than letting them show.
+              frame.clipsContent = (op as any).clipsContent ?? false;
               resolveParent(op.parent).appendChild(frame);
               if (op.name) nodesByName[op.name] = frame;
               createdNodes.push({ name: op.name || 'frame', id: frame.id, type: 'FRAME' });
@@ -4044,7 +4178,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
             } else if (op.op === 'text') {
               const textNode = figma.createText();
               if (op.name) textNode.name = op.name;
-              const fontName = await getFontName(op.bold || false);
+              const fontName = await getFontName(op.bold || false, op.fontFamily);
               textNode.fontName = fontName;
               
               // Font size validation
@@ -4083,6 +4217,13 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               parent.appendChild(textNode);
               if (op.x !== undefined) textNode.x = op.x;
               if (op.y !== undefined) textNode.y = op.y;
+              // Rotation, so vertical axis labels and rotated callouts are possible
+              // at all. Sign matches the arrow/line ops: positive degrees read
+              // clockwise on screen. Applied after positioning so x/y stay the
+              // pre-rotation anchor.
+              if ((op as any).rotation) {
+                textNode.rotation = -(op as any).rotation;
+              }
               if (op.name) {
                 nodesByName[op.name] = textNode;
                 createdNodes.push({ name: op.name, id: textNode.id, type: 'TEXT' });
@@ -4094,11 +4235,8 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               rect.x = op.x || 0;
               rect.y = op.y || 0;
               rect.resize(op.width || 100, op.height || 100);
-              rect.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
-              if (op.stroke) {
-                rect.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
-                rect.strokeWeight = 2;
-              }
+              rect.fills = buildFills(op);
+              applyStroke(rect, op);
               if (op.cornerRadius) {
                 rect.cornerRadius = op.cornerRadius;
               }
@@ -4114,10 +4252,10 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               ellipse.x = op.x || 0;
               ellipse.y = op.y || 0;
               ellipse.resize(op.width || 100, op.height || 100);
-              ellipse.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
-              if (op.stroke) {
-                ellipse.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
-                ellipse.strokeWeight = 2;
+              ellipse.fills = buildFills(op);
+              applyStroke(ellipse, op);
+              if (op.cornerRadius !== undefined && 'cornerRadius' in ellipse) {
+                (ellipse as any).cornerRadius = op.cornerRadius;
               }
               resolveParent(op.parent).appendChild(ellipse);
               if (op.name) {
@@ -4129,8 +4267,14 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               const length = op.length || 100;
               const color = resolveColor(op.color);
               const strokeWeight = op.strokeWeight || 2;
-              const rotation = op.rotation || 0;
-              
+              // `direction` was silently ignored here, so `direction: 'down'` drew a
+              // HORIZONTAL line — the caller got no error, just a wrong diagram.
+              // Explicit `rotation` still wins, and keeps its original sign
+              // convention; direction now matches the `arrow` op exactly.
+              const dirRotation = -resolveDirection((op as any).direction);
+              const rotation = op.rotation !== undefined ? op.rotation : dirRotation;
+              const capRotation = op.rotation !== undefined ? -op.rotation : dirRotation;
+
               // If caps are specified, use a vector for per-vertex control
               if (op.startCap || op.endCap) {
                 const vector = figma.createVector();
@@ -4154,11 +4298,15 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 
                 vector.strokes = [{ type: 'SOLID', color }];
                 vector.strokeWeight = strokeWeight;
+                if ((op as any).dash !== undefined) {
+                  const d = (op as any).dash;
+                  vector.dashPattern = Array.isArray(d) ? d : [d, d];
+                }
                 vector.fills = [];
                 vector.x = op.x || 0;
                 vector.y = op.y || 0;
-                vector.rotation = -rotation;  // Figma rotation is counter-clockwise
-                
+                vector.rotation = capRotation;  // Figma rotation is counter-clockwise
+
                 resolveParent(op.parent).appendChild(vector);
                 const lineType = 'LINE_ARROW';
                 if (op.name) {
@@ -4177,6 +4325,10 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 line.rotation = rotation;
                 line.strokes = [{ type: 'SOLID', color }];
                 line.strokeWeight = strokeWeight;
+                if ((op as any).dash !== undefined) {
+                  const d = (op as any).dash;
+                  line.dashPattern = Array.isArray(d) ? d : [d, d];
+                }
                 resolveParent(op.parent).appendChild(line);
                 if (op.name) {
                   nodesByName[op.name] = line;
@@ -4201,9 +4353,24 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               const vector = figma.createVector();
               if (op.name) vector.name = op.name;
 
+              /**
+               * Vertices live in the vector's LOCAL space, so points have to be
+               * normalised against their own bounding box and the node moved to
+               * compensate. Without this, points given in slide coordinates —
+               * the natural way to describe a connector between two known boxes —
+               * produced a vector whose geometry sat far from its origin while the
+               * node itself was pinned to (0, 0), i.e. every such path landed in
+               * the top-left corner of the slide.
+               *
+               * Relative points (starting at 0,0) with an explicit x/y are
+               * unaffected: minX/minY are 0, so the offset is the caller's x/y.
+               */
+              const minX = Math.min(...points.map((pt) => pt.x));
+              const minY = Math.min(...points.map((pt) => pt.y));
+
               // Build vertices with optional caps on first/last
               const vertices: VectorVertex[] = points.map((pt, i) => {
-                const vertex: any = { x: pt.x, y: pt.y };
+                const vertex: any = { x: pt.x - minX, y: pt.y - minY };
                 // Apply caps to endpoints (not for closed paths)
                 if (!closed) {
                   if (i === 0 && op.startCap) {
@@ -4276,16 +4443,24 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
 
               vector.strokes = [{ type: 'SOLID', color }];
               vector.strokeWeight = strokeWeight;
-              
-              // Fill for closed paths
-              if (closed && op.fill) {
-                vector.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
+              // Elbowed connectors read badly with mitred corners.
+              vector.strokeJoin = 'ROUND';
+              if ((op as any).dash !== undefined) {
+                const d = (op as any).dash;
+                vector.dashPattern = Array.isArray(d) ? d : [d, d];
+              }
+
+              // Fill for closed paths — a closed path with a `gradient` gets one too.
+              if (closed && ((op as any).gradient || op.fill)) {
+                vector.fills = (op as any).gradient
+                  ? [buildGradientPaint((op as any).gradient)]
+                  : [{ type: 'SOLID', color: resolveColor(op.fill) }];
               } else {
                 vector.fills = [];
               }
 
-              vector.x = op.x || 0;
-              vector.y = op.y || 0;
+              vector.x = (op.x || 0) + minX;
+              vector.y = (op.y || 0) + minY;
 
               resolveParent(op.parent).appendChild(vector);
               const pathType = closed ? 'PATH_CLOSED' : (smooth ? 'PATH_CURVED' : 'PATH');

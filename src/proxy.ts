@@ -25,6 +25,8 @@ interface Downstream {
   fileKey: string | null;
   fileName: string | null;
   pageName: string | null;
+  pluginName: string | null;
+  pluginVersion: string | null;
   connectedAt: number;
 }
 
@@ -102,6 +104,7 @@ downstreamServer.on("connection", (ws) => {
   const id = genId("ds");
   const downstream: Downstream = {
     ws, id, fileKey: null, fileName: null, pageName: null,
+    pluginName: null, pluginVersion: null,
     connectedAt: Date.now(),
   };
   downstreams.set(id, downstream);
@@ -112,10 +115,12 @@ downstreamServer.on("connection", (ws) => {
       const msg = JSON.parse(data.toString());
 
       if (msg.type === "hello") {
-        // Store file identity
+        // Store file identity and plugin info
         downstream.fileKey = msg.fileKey || null;
         downstream.fileName = msg.fileName || null;
         downstream.pageName = msg.pageName || null;
+        downstream.pluginName = msg.plugin || null;
+        downstream.pluginVersion = msg.version || null;
         console.error(`[Proxy] Plugin ${id} hello: file=${downstream.fileName} key=${downstream.fileKey}`);
 
         // Respond with hello-ack
@@ -216,6 +221,22 @@ upstreamServer.on("connection", (ws) => {
         if (!activeUpstreamId) activeUpstreamId = id;
         console.error(`[Proxy] MCP server registered: ${id} (${upstream.label})`);
         ws.send(JSON.stringify({ type: "registered", id }));
+
+        // If a downstream is already connected, forward its hello so the
+        // new upstream gets pluginInfo immediately (avoids race condition
+        // where plugin connected before this upstream registered).
+        if (activeUpstreamId === id) {
+          const ds = findDownstream();
+          if (ds) {
+            ws.send(JSON.stringify({
+              type: "hello",
+              plugin: ds.pluginName || "monorail-figma",
+              version: ds.pluginVersion || "0.1.0",
+              fileKey: ds.fileKey,
+              fileName: ds.fileName,
+            }));
+          }
+        }
         return;
       }
 
