@@ -207,6 +207,25 @@ npm run dev       # Watch mode — rebuilds dist/
 npm run watch     # Watch mode — rebuilds code.js on save
 ```
 
+### `figma-plugin/code.js` is committed on purpose
+
+Figma loads that bundle directly, so tracking it means you can import the plugin
+manifest and start working without installing esbuild or running a build. The
+cost is that it can go stale against `code.ts` — and a stale committed bundle is
+worse than no bundle, because it looks like working code.
+
+```bash
+cd figma-plugin
+npm run check:bundle   # verifies code.js matches code.ts
+```
+
+Run that before committing a `code.ts` change, or just run `npm run build` and
+commit the result alongside it. If `code.js` ever conflicts on a merge, don't
+hand-resolve it — take either side and rebuild. It's marked
+`linguist-generated` in `.gitattributes` so it collapses in GitHub diffs.
+
+### Reloading
+
 **Neither watch mode reloads anything for you**, and this trips everyone up
 because a stale bundle looks exactly like a code bug:
 

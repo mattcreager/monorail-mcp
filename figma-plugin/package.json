@@ -6,9 +6,15 @@
     "build": "npm run typecheck && npm run bundle",
     "typecheck": "tsc",
     "bundle": "esbuild code.ts --bundle --outfile=code.js --target=es2017",
-    "watch": "esbuild code.ts --bundle --outfile=code.js --target=es2017 --watch"
+    "watch": "esbuild code.ts --bundle --outfile=code.js --target=es2017 --watch",
+    "check:bundle": "esbuild code.ts --bundle --outfile=code.check.js --target=es2017 && node -e \"const fs=require('fs');const a=fs.readFileSync('code.js','utf8'),b=fs.readFileSync('code.check.js','utf8');fs.unlinkSync('code.check.js');if(a!==b){console.error('code.js is STALE \u2014 run npm run build and commit the result');process.exit(1)}console.log('code.js matches code.ts')\""
   },
-  "keywords": ["figma", "plugin", "monorail", "slides"],
+  "keywords": [
+    "figma",
+    "plugin",
+    "monorail",
+    "slides"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {

@@ -4,7 +4,12 @@ node_modules/
 # Build output
 dist/
 shared/*.js
-figma-plugin/code.js
+
+# NOTE: figma-plugin/code.js is deliberately NOT ignored. Figma loads that file
+# directly, so committing it means a teammate can import the plugin manifest and
+# start working without installing esbuild or running a build. It was listed here
+# while also being tracked, which meant the rule did nothing and only misled.
+# See docs/HANDOFF.md — it must be rebuilt before committing a code.ts change.
 
 # IDE
 .idea/

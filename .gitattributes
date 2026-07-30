@@ -1,0 +1,7 @@
+# code.js is a generated esbuild bundle that is tracked on purpose (Figma loads
+# it directly). Mark it generated so GitHub collapses it in diffs and it stops
+# dominating review, and suppress the textual diff locally for the same reason.
+#
+# If it ever conflicts on a merge, do NOT hand-resolve it: take either side and
+# re-run `npm run build` in figma-plugin/ to regenerate from code.ts.
+figma-plugin/code.js linguist-generated=true -diff
