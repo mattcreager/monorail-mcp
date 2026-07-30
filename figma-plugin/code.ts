@@ -3,6 +3,16 @@
 
 // Import shared types (type-only imports are erased at compile time by esbuild)
 import type { SlideContent, Slide, DeckIR, ElementInfo, AddableContainer } from '../shared/types';
+// Pure geometry, factored out so test/geometry.test.js can pin it without Figma.
+// esbuild bundles this in; keep it free of Figma API calls.
+import {
+  normalisePath,
+  resolveDash as resolveDashPattern,
+  resolveDirectionDegrees,
+  autoLayoutSizing,
+  crossAxisSizingProp,
+  mainAxisSizingProp,
+} from '../shared/geometry';
 
 // Show the UI
 figma.showUI(__html__, { width: 320, height: 280, themeColors: true });
@@ -4013,21 +4023,9 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         // Matches the `arrow` op's mapping so every op that takes a direction
         // agrees on what 'down' means.
         function resolveDirection(dir?: string | number): number {
-          if (typeof dir === 'number') return dir;
-          switch (dir) {
-            case 'down': return 90;
-            case 'left': return 180;
-            case 'up': return -90;
-            case 'right':
-            case undefined:
-              return 0;
-            default:
-              // Don't quietly mean 'right'. `direction` is overloaded across ops
-              // ('VERTICAL'/'HORIZONTAL' for auto layout), so a copy-pasted value
-              // lands here and would otherwise draw a confidently wrong line.
-              warnings.push(`Unrecognised direction "${dir}" — expected up/down/left/right or degrees`);
-              return 0;
-          }
+          const { degrees, warning } = resolveDirectionDegrees(dir);
+          if (warning) warnings.push(warning);
+          return degrees;
         }
 
         // Build a gradient paint from an op's `gradient` field.
@@ -4076,8 +4074,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         // rects and ellipses, so hairlines were impossible.
         // `dash: 6` is an even 6/6 pattern; `dash: [8, 4]` is explicit.
         function resolveDash(op: any): number[] | undefined {
-          if (op.dash === undefined) return undefined;
-          return Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
+          return resolveDashPattern(op.dash);
         }
 
         function applyStroke(node: any, op: any, defaultWeight: number = 2): void {
@@ -4108,10 +4105,10 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           if (!parent || !parent.layoutMode || parent.layoutMode === 'NONE') return;
           const parentIsVertical = parent.layoutMode === 'VERTICAL';
           if (op.stretch) {
-            node[parentIsVertical ? 'layoutSizingHorizontal' : 'layoutSizingVertical'] = 'FILL';
+            node[crossAxisSizingProp(parentIsVertical)] = 'FILL';
           }
           if (op.grow) {
-            node[parentIsVertical ? 'layoutSizingVertical' : 'layoutSizingHorizontal'] = 'FILL';
+            node[mainAxisSizingProp(parentIsVertical)] = 'FILL';
           }
         }
 
@@ -4168,16 +4165,14 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               // height now fixes that axis; children opt into filling it with
               // `stretch: true`.
               if (op.width || op.height) {
-                const isVertical = frame.layoutMode === 'VERTICAL';
-                const crossSize = isVertical ? op.width : op.height;
-                const mainSize = isVertical ? op.height : op.width;
                 // resize() touches BOTH axes and can flip the resized axis to
                 // FIXED, so the sizing modes are asserted afterwards — otherwise a
                 // frame given only a width could end up height-pinned at the size
                 // it had while still empty, and never grow for its children.
                 frame.resize(op.width || frame.width, op.height || frame.height);
-                frame.counterAxisSizingMode = crossSize ? 'FIXED' : 'AUTO';
-                frame.primaryAxisSizingMode = mainSize ? 'FIXED' : 'AUTO';
+                const sizing = autoLayoutSizing(frame.layoutMode as 'VERTICAL' | 'HORIZONTAL', op.width, op.height);
+                frame.counterAxisSizingMode = sizing.counterAxisSizingMode;
+                frame.primaryAxisSizingMode = sizing.primaryAxisSizingMode;
               }
               frame.itemSpacing = op.spacing ?? 24;
               if (op.padding) {
@@ -4399,12 +4394,11 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                * Relative points (starting at 0,0) with an explicit x/y are
                * unaffected: minX/minY are 0, so the offset is the caller's x/y.
                */
-              const minX = Math.min(...points.map((pt) => pt.x));
-              const minY = Math.min(...points.map((pt) => pt.y));
+              const normalised = normalisePath(points, op.x || 0, op.y || 0);
 
               // Build vertices with optional caps on first/last
               const vertices: VectorVertex[] = points.map((pt, i) => {
-                const vertex: any = { x: pt.x - minX, y: pt.y - minY };
+                const vertex: any = { x: normalised.vertices[i].x, y: normalised.vertices[i].y };
                 // Apply caps to endpoints (not for closed paths)
                 if (!closed) {
                   if (i === 0 && op.startCap) {
@@ -4496,8 +4490,8 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               // tangents can push the rendered curve outside that hull — see
               // docs/failures.md for the measurement showing whether Figma's
               // reported x/y absorbs that overshoot.
-              vector.x = (op.x || 0) + minX;
-              vector.y = (op.y || 0) + minY;
+              vector.x = normalised.x;
+              vector.y = normalised.y;
 
               resolveParent(op.parent).appendChild(vector);
               applyLayoutChild(vector, op);

@@ -222,20 +222,28 @@ upstreamServer.on("connection", (ws) => {
         console.error(`[Proxy] MCP server registered: ${id} (${upstream.label})`);
         ws.send(JSON.stringify({ type: "registered", id }));
 
-        // If a downstream is already connected, forward its hello so the
-        // new upstream gets pluginInfo immediately (avoids race condition
-        // where plugin connected before this upstream registered).
-        if (activeUpstreamId === id) {
-          const ds = findDownstream();
-          if (ds) {
-            ws.send(JSON.stringify({
-              type: "hello",
-              plugin: ds.pluginName || "monorail-figma",
-              version: ds.pluginVersion || "0.1.0",
-              fileKey: ds.fileKey,
-              fileName: ds.fileName,
-            }));
-          }
+        // If a downstream is already connected, forward its hello so this
+        // upstream gets pluginInfo immediately, rather than waiting for a plugin
+        // that connected before it registered to say hello again.
+        //
+        // This deliberately runs for EVERY upstream, not just the active one. It
+        // was gated on `activeUpstreamId === id`, which is only ever true for the
+        // first server to register — so the second Claude instance, the whole
+        // reason this proxy exists, still saw "Plugin: unknown". The gate bought
+        // nothing: the hello goes out on `ws`, this upstream's own socket, so
+        // there is no cross-talk to prevent.
+        const ds = findDownstream();
+        if (ds) {
+          ws.send(JSON.stringify({
+            type: "hello",
+            // Pass these through as-is. Fabricating a name and version meant
+            // reporting a confidently wrong version, which is worse than the
+            // "unknown" it was trying to avoid.
+            plugin: ds.pluginName,
+            version: ds.pluginVersion,
+            fileKey: ds.fileKey,
+            fileName: ds.fileName,
+          }));
         }
         return;
       }

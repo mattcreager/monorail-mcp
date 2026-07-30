@@ -223,7 +223,27 @@ npm install
 npm run build        # Build once
 npm run dev          # Watch mode
 npm run start        # Run directly
+npm test             # Build, then run the unit tests
 ```
+
+### Tests
+
+```bash
+npm test             # build + node --test
+npm run test:only    # skip the build (dist/ already current)
+```
+
+Node's built-in runner, no test dependencies. Coverage is deliberately narrow:
+the pure geometry behind `monorail_primitives` — path coordinate normalisation,
+auto-layout axis mapping, direction and dash resolution — lives in
+`shared/geometry.ts` precisely so it can be tested without Figma. The plugin
+imports it, so these tests exercise shipped code.
+
+Each test names the bug it prevents, and all of them are regressions that
+actually shipped. Reverting the path fix turns 4 of them red.
+
+For anything that needs the canvas, use `examples/primitives-smoke.json` — 13
+labelled visual checks, one per behaviour, each stating what PASS looks like.
 
 ### Figma Plugin
 
@@ -245,6 +265,10 @@ monorail-mcp/
 │   ├── ui.html               # Plugin UI (WebSocket client)
 │   ├── manifest.json         # Figma plugin manifest
 │   └── src/                  # Extracted modules
+├── shared/
+│   ├── types.ts              # Shared TypeScript types
+│   └── geometry.ts           # Pure primitives geometry (unit-tested)
+├── test/                     # node:test unit tests
 ├── docs/
 │   ├── ARCHITECTURE.md       # System design
 │   ├── SKILL.md              # Narrative thinking toolkit
