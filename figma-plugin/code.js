@@ -2937,8 +2937,31 @@
           }, applyLayoutChild2 = function(node, op) {
             const parent = node.parent;
             if (!parent || !parent.layoutMode || parent.layoutMode === "NONE") return;
-            if (op.stretch) node.layoutAlign = "STRETCH";
-            if (op.grow) node.layoutGrow = 1;
+            const parentIsVertical = parent.layoutMode === "VERTICAL";
+            if (op.stretch) {
+              const crossProp = parentIsVertical ? "layoutSizingHorizontal" : "layoutSizingVertical";
+              try {
+                if (crossProp in node) {
+                  node[crossProp] = "FILL";
+                } else {
+                  node.layoutAlign = "STRETCH";
+                }
+              } catch (e) {
+                node.layoutAlign = "STRETCH";
+              }
+            }
+            if (op.grow) {
+              const mainProp = parentIsVertical ? "layoutSizingVertical" : "layoutSizingHorizontal";
+              try {
+                if (mainProp in node) {
+                  node[mainProp] = "FILL";
+                } else {
+                  node.layoutGrow = 1;
+                }
+              } catch (e) {
+                node.layoutGrow = 1;
+              }
+            }
           };
           var resolveParent = resolveParent2, resolveColor = resolveColor2, resolveDirection = resolveDirection2, buildGradientPaint = buildGradientPaint2, buildFills = buildFills2, applyStroke = applyStroke2, applyLayoutChild = applyLayoutChild2;
           const nodesByName = {};

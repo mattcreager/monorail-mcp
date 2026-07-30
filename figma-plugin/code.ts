@@ -4083,8 +4083,29 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         function applyLayoutChild(node: any, op: any): void {
           const parent: any = node.parent;
           if (!parent || !parent.layoutMode || parent.layoutMode === 'NONE') return;
-          if (op.stretch) node.layoutAlign = 'STRETCH';
-          if (op.grow) node.layoutGrow = 1;
+          const parentIsVertical = parent.layoutMode === 'VERTICAL';
+
+          // layoutSizing* is the current API and the only thing that beats a
+          // child's own hug sizing — setting layoutAlign = 'STRETCH' on an
+          // auto-layout child that hugs its text leaves it hugging, so a list of
+          // rows stays ragged. layoutAlign/layoutGrow remain the fallback for
+          // node types that don't expose layoutSizing.
+          if (op.stretch) {
+            const crossProp = parentIsVertical ? 'layoutSizingHorizontal' : 'layoutSizingVertical';
+            try {
+              if (crossProp in node) { node[crossProp] = 'FILL'; } else { node.layoutAlign = 'STRETCH'; }
+            } catch (e) {
+              node.layoutAlign = 'STRETCH';
+            }
+          }
+          if (op.grow) {
+            const mainProp = parentIsVertical ? 'layoutSizingVertical' : 'layoutSizingHorizontal';
+            try {
+              if (mainProp in node) { node[mainProp] = 'FILL'; } else { node.layoutGrow = 1; }
+            } catch (e) {
+              node.layoutGrow = 1;
+            }
+          }
         }
 
         // Process each operation
