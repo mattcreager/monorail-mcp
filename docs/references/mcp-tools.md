@@ -220,24 +220,68 @@ Low-level design tool for creating slide content from scratch.
 Parameters:
 - slide_id?: string — Existing slide to add elements to (omit to create new slide)
 - operations: array — Primitive operations applied in sequence
+- min_font_size?: number — Warning threshold for text size (default 24). Diagram
+    labels legitimately sit at 12-20px; lower it so expected warnings don't bury
+    real ones.
 
 Operations:
 - background — Slide background (solid fill or gradient)
-- frame — Basic frame container
-- auto_layout_frame — Frame with Auto Layout
-- text — Text element (fontSize, bold, color, maxWidth)
-- rect — Rectangle (fill, stroke, cornerRadius)
-- ellipse — Ellipse/circle
-- line — Simple line with optional cap decorations
-- path — Multi-point path (smooth curves, closed shapes)
+- frame — Frame container (fill, gradient, stroke, dash, cornerRadius, clipsContent)
+- auto_layout_frame — Frame with Auto Layout (width/height fix an axis instead of hugging)
+- text — Text element (fontSize, bold, color, maxWidth, rotation)
+- rect — Rectangle (fill, gradient, stroke, strokeWeight, dash, cornerRadius)
+- ellipse — Ellipse/circle (same paint options as rect)
+- line — Straight line (direction or rotation, dash, optional cap decorations)
+- path — Multi-point path (smooth curves, closed shapes, dash)
 - arrow — Directional arrow (up/down/left/right, bidirectional)
 
 Each operation supports: name, parent (for nesting), x, y, width, height,
-color/fill/stroke, gradient (for backgrounds). Operations can reference
-earlier operations by name for parent-child relationships.
+color/fill/stroke. Operations can reference earlier operations by name for
+parent-child relationships.
 ```
 
 **Use when:** Building custom layouts without archetypes, creating diagrams, adding design elements that don't fit standard slide templates.
+
+### Things worth knowing
+
+**Outlines.** A shape with `stroke` and no `fill` is transparent. Give it a
+`fill` only when you want one — a fill matching the panel behind it also works
+and is sometimes easier to reason about.
+
+**Paths take slide coordinates.** Points are placed where they say, so a
+connector between two boxes can be described with the same numbers used to
+position those boxes. An `x`/`y` on the op is added on top as an offset, so
+relative points still work.
+
+```json
+{ "op": "path",
+  "points": [{"x": 996, "y": 328}, {"x": 1030, "y": 328}, {"x": 1030, "y": 404}, {"x": 1080, "y": 404}],
+  "endCap": "ARROW_EQUILATERAL", "strokeWeight": 2, "color": "#9FB3B0" }
+```
+
+**Dashes** take a number for an even pattern (`"dash": 6`) or an array for an
+explicit one (`"dash": [8, 4]`). Works on rect, ellipse, frame, line and path —
+useful for optional or inactive regions of a diagram.
+
+**Gradients** work on rect, ellipse, frame and closed paths, not just
+backgrounds. Same shape as the background gradient: `{ type, angle, stops }`.
+
+**Auto Layout that doesn't go ragged.** Give the container a `width` to fix that
+axis, and each child `stretch: true` to fill it. Without both, every row hugs
+its own text and a list of differently-worded items comes out uneven.
+
+```json
+{ "operations": [
+  { "op": "auto_layout_frame", "name": "svc-list", "x": 648, "y": 300, "width": 344,
+    "direction": "VERTICAL", "spacing": 2, "padding": 0 },
+  { "op": "auto_layout_frame", "name": "row-org", "parent": "svc-list", "direction": "HORIZONTAL",
+    "padding": 16, "fill": "#000000", "cornerRadius": 2, "stretch": true },
+  { "op": "text", "parent": "row-org", "text": "Org Management", "fontSize": 20, "color": "#E9E9F2" }
+]}
+```
+
+Rows authored this way reflow when one is added, removed or reordered — which is
+the difference between a diagram a designer can edit and a picture they can't.
 
 **Example: Simple layout**
 ```json

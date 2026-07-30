@@ -31,7 +31,7 @@ Claude pushes changes  →  You see them instantly in Figma
 
 ```bash
 # 1. Clone and build
-git clone <repo-url>
+git clone git@github.com:mattcreager/monorail-mcp.git
 cd monorail-mcp
 npm install && npm run build
 cd figma-plugin && npm install && npm run build && cd ..
@@ -201,11 +201,23 @@ kill <PID>  # Kill the one that's NOT Cursor's
 
 ```bash
 # MCP server (in root)
-npm run dev       # Watch mode
+npm run dev       # Watch mode — rebuilds dist/
 
 # Figma plugin (in figma-plugin/)
-npm run watch     # Watch mode — hot reloads in Figma!
+npm run watch     # Watch mode — rebuilds code.js on save
 ```
+
+**Neither watch mode reloads anything for you**, and this trips everyone up
+because a stale bundle looks exactly like a code bug:
+
+- **Plugin change** → re-run the plugin in Figma (Plugins > Development >
+  Monorail). The running plugin holds the old `code.js` in memory; `npm run
+  watch` only rewrites the file on disk.
+- **Server change** (including tool schemas) → restart your MCP client, which
+  owns the server process.
+- **A new tool parameter needs both.** The server has to pass it through and the
+  plugin has to act on it, so a parameter that appears silently ignored is
+  usually one of the two sides being stale rather than a bug.
 
 ---
 

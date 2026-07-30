@@ -15,7 +15,7 @@ MCP server for real-time design collaboration in Figma. Claude and humans work i
 ### Build
 
 ```bash
-git clone https://github.com/anthropics/monorail-mcp.git
+git clone git@github.com:mattcreager/monorail-mcp.git
 cd monorail-mcp
 npm install && npm run build
 
@@ -23,6 +23,10 @@ cd figma-plugin
 npm install && npm run build
 cd ..
 ```
+
+Both builds are required: the first produces the MCP server in `dist/`, the
+second bundles the Figma plugin to `figma-plugin/code.js`, which is what Figma
+actually loads.
 
 ### Configure your MCP client
 
@@ -285,6 +289,19 @@ Your MCP client will restart its process automatically.
 2. Check that the MCP config has the correct absolute path
 3. Restart the client after config changes
 4. Re-run the Monorail plugin in Figma
+
+### I changed the code and nothing changed
+
+Two separate reload paths, and neither is automatic:
+
+| Changed | Rebuild | Reload |
+|---------|---------|--------|
+| `figma-plugin/code.ts` | `cd figma-plugin && npm run build` | **Re-run the plugin in Figma** (Plugins > Development > Monorail) — the running plugin holds the old bundle in memory |
+| `src/index.ts` (server, tool schemas) | `npm run build` | **Restart your MCP client** — it owns the server process |
+
+A new tool parameter needs *both*: the server has to accept it and the plugin
+has to act on it. If a new parameter appears to be silently ignored, this is
+almost always why.
 
 ### Slides look wrong or text overlapping
 

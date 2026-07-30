@@ -641,3 +641,27 @@ The result was dense and hard to use. The user asked: "What conversation are we 
 **Impact:** Redesigned from 1 packed canvas to 4 focused slides. Each has a clear purpose and update cadence.
 
 **Path forward:** This is a content/strategy insight, not a tool issue. But worth documenting as a pattern for future GTM/operating canvas work.
+
+---
+
+### 2026-07-30 - Primitives ops that silently drew the wrong thing
+
+**What we found:** Rebuilding an architecture diagram natively surfaced a cluster of primitives bugs that share one property: they fail without an error. You get a wrong picture and no signal, which is the worst failure mode for a tool an agent drives blind — the agent has no way to tell "I described this badly" from "the tool did something else".
+
+| Symptom | Cause |
+|---|---|
+| Every `path` connector piled up in the slide's top-left corner | Vector vertices live in the node's LOCAL space, but the op set them straight from `points` and then pinned the node to (0, 0). Describing a connector in slide coordinates — the only natural way — put the geometry far from an origin that was itself parked at 0,0. |
+| Outlined boxes appeared as opaque white blocks that buried their own labels | `fills` was unconditionally `resolveColor(op.fill)`, and `resolveColor(undefined)` returns white. Asking for stroke-and-no-fill got you a white rectangle. |
+| `direction: 'down'` on a `line` drew a horizontal line | `line` only ever honoured `rotation`. `direction` was accepted and ignored. |
+| Frames were always transparent | `frame.fills` was hardcoded to `[]`, so `fill`/`gradient`/`stroke`/`cornerRadius` were dropped. This is why so much older output is flat rects instead of structured frames — grouping into a frame meant drawing a separate rect behind it. |
+| Auto Layout lists came out ragged | `auto_layout_frame` hardcoded AUTO sizing on both axes, so every row hugged its own text. This is the exact point where you give up on auto layout and hand-place rectangles. |
+| `stretch: true` did nothing at first | `layoutAlign = 'STRETCH'` does NOT beat a child's own hug sizing. `layoutSizingHorizontal = 'FILL'` is the current API and does. Caught only because the first fix visibly didn't work. |
+
+**Impact:** Diagrams were being hand-assembled out of absolutely-positioned rects with no dashes and no gradients, because the ops that would have done it properly appeared broken. Slide 2 of the roadmap deck is a scaled SVG import for the same reason — font sizes like `19.72165870666504`, four different sizes doing one job, and layer names left over from a previous diagram.
+
+**Path forward:** Fixed in 961765f, 65a1ac4, 8598999, each verified against a live test slide rather than assumed. Two habits worth keeping:
+
+1. **Verify with a scratch slide that asserts one thing per row.** A single slide exercising outline / dash / gradient / frame fill / line direction / absolute path / rotated text reads pass-fail at a glance and takes one call. It found the `stretch` bug immediately after the "fix".
+2. **Silent-wrong is the bug class to hunt here.** When adding an op field, check what happens if it is accepted and ignored. Prefer failing loudly over drawing something plausible.
+
+Reload discipline, since three of these looked like code bugs and were stale bundles: plugin changes need the plugin re-run in Figma; server changes need the MCP client restarted; a new tool parameter needs both.
