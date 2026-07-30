@@ -2899,7 +2899,10 @@
               case "up":
                 return -90;
               case "right":
+              case void 0:
+                return 0;
               default:
+                warnings.push(`Unrecognised direction "${dir}" \u2014 expected up/down/left/right or degrees`);
                 return 0;
             }
           }, buildGradientPaint2 = function(gradient) {
@@ -2925,45 +2928,29 @@
             if (op.fill) return [{ type: "SOLID", color: resolveColor2(op.fill) }];
             if (op.stroke) return [];
             return defaultFill === "none" ? [] : [{ type: "SOLID", color: COLORS.white }];
+          }, resolveDash2 = function(op) {
+            if (op.dash === void 0) return void 0;
+            return Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
           }, applyStroke2 = function(node, op, defaultWeight = 2) {
             var _a3;
             if (op.stroke) {
               node.strokes = [{ type: "SOLID", color: resolveColor2(op.stroke) }];
               node.strokeWeight = (_a3 = op.strokeWeight) != null ? _a3 : defaultWeight;
             }
-            if (op.dash !== void 0) {
-              node.dashPattern = Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
-            }
+            const dash = resolveDash2(op);
+            if (dash) node.dashPattern = dash;
           }, applyLayoutChild2 = function(node, op) {
             const parent = node.parent;
             if (!parent || !parent.layoutMode || parent.layoutMode === "NONE") return;
             const parentIsVertical = parent.layoutMode === "VERTICAL";
             if (op.stretch) {
-              const crossProp = parentIsVertical ? "layoutSizingHorizontal" : "layoutSizingVertical";
-              try {
-                if (crossProp in node) {
-                  node[crossProp] = "FILL";
-                } else {
-                  node.layoutAlign = "STRETCH";
-                }
-              } catch (e) {
-                node.layoutAlign = "STRETCH";
-              }
+              node[parentIsVertical ? "layoutSizingHorizontal" : "layoutSizingVertical"] = "FILL";
             }
             if (op.grow) {
-              const mainProp = parentIsVertical ? "layoutSizingVertical" : "layoutSizingHorizontal";
-              try {
-                if (mainProp in node) {
-                  node[mainProp] = "FILL";
-                } else {
-                  node.layoutGrow = 1;
-                }
-              } catch (e) {
-                node.layoutGrow = 1;
-              }
+              node[parentIsVertical ? "layoutSizingVertical" : "layoutSizingHorizontal"] = "FILL";
             }
           };
-          var resolveParent = resolveParent2, resolveColor = resolveColor2, resolveDirection = resolveDirection2, buildGradientPaint = buildGradientPaint2, buildFills = buildFills2, applyStroke = applyStroke2, applyLayoutChild = applyLayoutChild2;
+          var resolveParent = resolveParent2, resolveColor = resolveColor2, resolveDirection = resolveDirection2, buildGradientPaint = buildGradientPaint2, buildFills = buildFills2, resolveDash = resolveDash2, applyStroke = applyStroke2, applyLayoutChild = applyLayoutChild2;
           const nodesByName = {};
           const createdNodes = [];
           const warnings = [];
@@ -2992,30 +2979,7 @@
               if (op.op === "background") {
                 if ("fills" in targetSlide) {
                   if (op.gradient) {
-                    const angle = ((_f = op.gradient.angle) != null ? _f : 90) * Math.PI / 180;
-                    const cos = Math.cos(angle);
-                    const sin = Math.sin(angle);
-                    const gradientTransform = [
-                      [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
-                      [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
-                    ];
-                    const gradientStops = op.gradient.stops.map((stop) => ({
-                      position: stop.position,
-                      color: __spreadProps(__spreadValues({}, resolveColor2(stop.color)), { a: 1 })
-                    }));
-                    if (op.gradient.type === "radial") {
-                      targetSlide.fills = [{
-                        type: "GRADIENT_RADIAL",
-                        gradientTransform,
-                        gradientStops
-                      }];
-                    } else {
-                      targetSlide.fills = [{
-                        type: "GRADIENT_LINEAR",
-                        gradientTransform,
-                        gradientStops
-                      }];
-                    }
+                    targetSlide.fills = [buildGradientPaint2(op.gradient)];
                     createdNodes.push({ name: "background", id: targetSlide.id, type: "GRADIENT" });
                   } else {
                     const color = resolveColor2(op.fill || op.color);
@@ -3034,7 +2998,7 @@
                 if (op.cornerRadius) {
                   frame.cornerRadius = op.cornerRadius;
                 }
-                frame.clipsContent = (_g = op.clipsContent) != null ? _g : false;
+                frame.clipsContent = (_f = op.clipsContent) != null ? _f : false;
                 resolveParent2(op.parent).appendChild(frame);
                 applyLayoutChild2(frame, op);
                 if (op.name) nodesByName[op.name] = frame;
@@ -3049,26 +3013,23 @@
                   const isVertical = frame.layoutMode === "VERTICAL";
                   const crossSize = isVertical ? op.width : op.height;
                   const mainSize = isVertical ? op.height : op.width;
-                  if (crossSize) frame.counterAxisSizingMode = "FIXED";
-                  if (mainSize) frame.primaryAxisSizingMode = "FIXED";
                   frame.resize(op.width || frame.width, op.height || frame.height);
+                  frame.counterAxisSizingMode = crossSize ? "FIXED" : "AUTO";
+                  frame.primaryAxisSizingMode = mainSize ? "FIXED" : "AUTO";
                 }
-                frame.itemSpacing = (_h = op.spacing) != null ? _h : 24;
+                frame.itemSpacing = (_g = op.spacing) != null ? _g : 24;
                 if (op.padding) {
                   frame.paddingTop = op.padding;
                   frame.paddingBottom = op.padding;
                   frame.paddingLeft = op.padding;
                   frame.paddingRight = op.padding;
                 }
-                if (op.fill) {
-                  frame.fills = [{ type: "SOLID", color: resolveColor2(op.fill) }];
-                } else {
-                  frame.fills = [];
-                }
+                frame.fills = buildFills2(op, "none");
+                applyStroke2(frame, op);
                 if (op.cornerRadius) {
                   frame.cornerRadius = op.cornerRadius;
                 }
-                frame.clipsContent = false;
+                frame.clipsContent = (_h = op.clipsContent) != null ? _h : false;
                 const parent = resolveParent2(op.parent);
                 parent.appendChild(frame);
                 applyLayoutChild2(frame, op);
@@ -3152,9 +3113,7 @@
                 const length = op.length || 100;
                 const color = resolveColor2(op.color);
                 const strokeWeight = op.strokeWeight || 2;
-                const dirRotation = -resolveDirection2(op.direction);
-                const rotation = op.rotation !== void 0 ? op.rotation : dirRotation;
-                const capRotation = op.rotation !== void 0 ? -op.rotation : dirRotation;
+                const rotation = -(op.rotation !== void 0 ? op.rotation : resolveDirection2(op.direction));
                 if (op.startCap || op.endCap) {
                   const vector = figma.createVector();
                   if (op.name) vector.name = op.name;
@@ -3172,15 +3131,14 @@
                   });
                   vector.strokes = [{ type: "SOLID", color }];
                   vector.strokeWeight = strokeWeight;
-                  if (op.dash !== void 0) {
-                    const d = op.dash;
-                    vector.dashPattern = Array.isArray(d) ? d : [d, d];
-                  }
+                  const capDash = resolveDash2(op);
+                  if (capDash) vector.dashPattern = capDash;
                   vector.fills = [];
                   vector.x = op.x || 0;
                   vector.y = op.y || 0;
-                  vector.rotation = capRotation;
+                  vector.rotation = rotation;
                   resolveParent2(op.parent).appendChild(vector);
+                  applyLayoutChild2(vector, op);
                   const lineType = "LINE_ARROW";
                   if (op.name) {
                     nodesByName[op.name] = vector;
@@ -3197,11 +3155,10 @@
                   line.rotation = rotation;
                   line.strokes = [{ type: "SOLID", color }];
                   line.strokeWeight = strokeWeight;
-                  if (op.dash !== void 0) {
-                    const d = op.dash;
-                    line.dashPattern = Array.isArray(d) ? d : [d, d];
-                  }
+                  const plainDash = resolveDash2(op);
+                  if (plainDash) line.dashPattern = plainDash;
                   resolveParent2(op.parent).appendChild(line);
+                  applyLayoutChild2(line, op);
                   if (op.name) {
                     nodesByName[op.name] = line;
                     createdNodes.push({ name: op.name, id: line.id, type: "LINE" });
@@ -3281,10 +3238,8 @@
                 vector.strokes = [{ type: "SOLID", color }];
                 vector.strokeWeight = strokeWeight;
                 vector.strokeJoin = "ROUND";
-                if (op.dash !== void 0) {
-                  const d = op.dash;
-                  vector.dashPattern = Array.isArray(d) ? d : [d, d];
-                }
+                const pathDash = resolveDash2(op);
+                if (pathDash) vector.dashPattern = pathDash;
                 if (closed && (op.gradient || op.fill)) {
                   vector.fills = op.gradient ? [buildGradientPaint2(op.gradient)] : [{ type: "SOLID", color: resolveColor2(op.fill) }];
                 } else {
@@ -3293,6 +3248,7 @@
                 vector.x = (op.x || 0) + minX;
                 vector.y = (op.y || 0) + minY;
                 resolveParent2(op.parent).appendChild(vector);
+                applyLayoutChild2(vector, op);
                 const pathType = closed ? "PATH_CLOSED" : smooth ? "PATH_CURVED" : "PATH";
                 if (op.name) {
                   nodesByName[op.name] = vector;
@@ -3381,6 +3337,7 @@
                 arrow.y = op.y || 0;
                 arrow.rotation = -angle;
                 parent.appendChild(arrow);
+                applyLayoutChild2(arrow, op);
                 if (op.name) {
                   nodesByName[op.name] = arrow;
                 }

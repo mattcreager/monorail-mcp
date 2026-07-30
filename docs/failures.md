@@ -665,3 +665,25 @@ The result was dense and hard to use. The user asked: "What conversation are we 
 2. **Silent-wrong is the bug class to hunt here.** When adding an op field, check what happens if it is accepted and ignored. Prefer failing loudly over drawing something plausible.
 
 Reload discipline, since three of these looked like code bugs and were stale bundles: plugin changes need the plugin re-run in Figma; server changes need the MCP client restarted; a new tool parameter needs both.
+
+---
+
+### 2026-07-30 - Large primitives batches fail on Figma's async vector API, and fail dirty
+
+**What we found:** A 45-op `monorail_primitives` batch failed twice in a row with:
+
+```
+Error: Operation "line" failed: Unable to establish connection to Figma after 10 seconds.
+```
+
+Three things about that message are misleading:
+
+1. **It isn't monorail's timeout.** `REQUEST_TIMEOUT_MS` is 30s (`src/index.ts:2896`); the 10-second text comes from Figma, raised inside `setVectorNetworkAsync` — the call used by capped lines, paths and arrows.
+2. **It names the wrong op.** The op reported is whichever was in flight, not the cause. The same `line` op ran fine on its own immediately afterwards.
+3. **It isn't a connection problem.** The plugin stayed connected throughout; `monorail_status` was green before and after.
+
+Splitting the identical payload into three calls of ~15 ops each succeeded first time, every time.
+
+**Impact:** Two compounding problems. The batch is not atomic, so the ops before the failure are already on the canvas — you're left with a half-built slide that has to be deleted before retrying. And the error text sends you looking for a network fault or a bug in the named op, neither of which exists.
+
+**Path forward:** Guidance is in `docs/references/mcp-tools.md` — keep batches to ~20-30 ops, delete-and-retry rather than patching over a partial slide, and pass `slide_id` to continue onto the same slide. Worth considering in the tool itself: retry `setVectorNetworkAsync` once before failing, and report the failure with the op index and a message that doesn't blame the network.

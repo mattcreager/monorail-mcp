@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "Smoke payload for monorail_primitives. One row per behaviour, each labelled with",
+    "what PASS looks like, so the result reads pass/fail from a single screenshot.",
+    "",
+    "Run it, then screenshot the slide it creates:",
+    "  monorail_primitives({ operations: <this file's `operations`>, min_font_size: 12 })",
+    "  monorail_screenshot({ slide_id: <returned id> })",
+    "",
+    "Every behaviour here is one that previously failed SILENTLY — drawing something",
+    "plausible instead of erroring. That is the bug class this file exists to catch.",
+    "See docs/failures.md, 2026-07-30."
+  ],
+  "min_font_size": 12,
+  "operations": [
+    { "op": "background", "name": "bg", "fill": "#0B0B10" },
+
+    { "op": "text", "name": "l1", "text": "1  OUTLINE — 'UNDERNEATH' must be readable through the box", "x": 60, "y": 48, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "text", "name": "l1-under", "text": "UNDERNEATH", "x": 110, "y": 104, "fontSize": 26, "bold": true, "color": "#FFD166" },
+    { "op": "rect", "name": "t1-outline", "x": 60, "y": 88, "width": 380, "height": 62, "stroke": "#4FBFB0", "strokeWeight": 1, "cornerRadius": 4 },
+
+    { "op": "text", "name": "l2", "text": "2  DASH + HAIRLINE — dashed edge, 1px not 2px", "x": 60, "y": 178, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "rect", "name": "t2-dashed", "x": 60, "y": 218, "width": 380, "height": 62, "stroke": "#7FD9CE", "strokeWeight": 1, "dash": 8, "cornerRadius": 4 },
+
+    { "op": "text", "name": "l3", "text": "3  GRADIENT ON A SHAPE — purple to pink, not flat", "x": 60, "y": 308, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "rect", "name": "t3-grad", "x": 60, "y": 348, "width": 380, "height": 62, "cornerRadius": 6,
+      "gradient": { "type": "linear", "angle": 0, "stops": [ { "position": 0, "color": "#8B5CF6" }, { "position": 1, "color": "#EC4899" } ] } },
+
+    { "op": "text", "name": "l4", "text": "4  FRAME PAINT — filled navy, dashed blue edge", "x": 60, "y": 438, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "frame", "name": "t4-frame", "x": 60, "y": 478, "width": 380, "height": 62, "fill": "#101A34", "stroke": "#2563EB", "strokeWeight": 2, "dash": [10, 6], "cornerRadius": 8 },
+
+    { "op": "text", "name": "l5", "text": "5  LINE DIRECTION — teal DOWN, amber RIGHT, pink UP", "x": 60, "y": 568, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "line", "name": "t5-down", "x": 90, "y": 608, "length": 90, "direction": "down", "color": "#4FBFB0", "strokeWeight": 3 },
+    { "op": "line", "name": "t5-right", "x": 140, "y": 608, "length": 120, "direction": "right", "color": "#FFD166", "strokeWeight": 3 },
+    { "op": "line", "name": "t5-up", "x": 300, "y": 698, "length": 90, "direction": "up", "color": "#EC4899", "strokeWeight": 3 },
+
+    { "op": "text", "name": "l6", "text": "6  LINE ROTATION — rotation:90 must match direction:'down' (both DOWN)", "x": 60, "y": 728, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "line", "name": "t6-rot", "x": 90, "y": 768, "length": 90, "rotation": 90, "color": "#A78BFA", "strokeWeight": 3 },
+    { "op": "line", "name": "t6-rot-capped", "x": 150, "y": 768, "length": 90, "rotation": 90, "endCap": "ARROW_EQUILATERAL", "color": "#A78BFA", "strokeWeight": 3 },
+
+    { "op": "text", "name": "l7", "text": "7  PATH IN SLIDE COORDS — elbow must join the two dots", "x": 640, "y": 48, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "ellipse", "name": "t7-a", "x": 660, "y": 96, "width": 14, "height": 14, "fill": "#FFD166" },
+    { "op": "ellipse", "name": "t7-b", "x": 1180, "y": 206, "width": 14, "height": 14, "fill": "#FFD166" },
+    { "op": "path", "name": "t7-elbow", "points": [ { "x": 667, "y": 103 }, { "x": 920, "y": 103 }, { "x": 920, "y": 213 }, { "x": 1180, "y": 213 } ], "color": "#FFFFFF", "strokeWeight": 2, "endCap": "ARROW_EQUILATERAL" },
+
+    { "op": "text", "name": "l8", "text": "8  SMOOTH PATH — curve must start ON the dot (tests overshoot)", "x": 640, "y": 258, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "ellipse", "name": "t8-a", "x": 660, "y": 306, "width": 14, "height": 14, "fill": "#4FBFB0" },
+    { "op": "ellipse", "name": "t8-b", "x": 1180, "y": 306, "width": 14, "height": 14, "fill": "#4FBFB0" },
+    { "op": "path", "name": "t8-curve", "points": [ { "x": 667, "y": 313 }, { "x": 840, "y": 400 }, { "x": 1010, "y": 240 }, { "x": 1187, "y": 313 } ], "smooth": true, "color": "#4FBFB0", "strokeWeight": 2 },
+
+    { "op": "text", "name": "l9", "text": "9  DASHED PATH", "x": 640, "y": 438, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "path", "name": "t9-dashed", "points": [ { "x": 660, "y": 488 }, { "x": 900, "y": 488 }, { "x": 900, "y": 546 }, { "x": 1140, "y": 546 } ], "color": "#7FD9CE", "strokeWeight": 2, "dash": 6, "endCap": "ARROW_EQUILATERAL" },
+
+    { "op": "text", "name": "l10", "text": "10  AUTO LAYOUT — all four rows must share ONE width, and all four must fit", "x": 640, "y": 596, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "auto_layout_frame", "name": "t10-list", "x": 660, "y": 636, "width": 320, "direction": "VERTICAL", "spacing": 2, "padding": 0 },
+    { "op": "auto_layout_frame", "name": "t10-r1", "parent": "t10-list", "direction": "HORIZONTAL", "padding": 12, "fill": "#1D1B2E", "cornerRadius": 2, "stretch": true },
+    { "op": "text", "name": "t10-r1-t", "parent": "t10-r1", "text": "Org Management", "fontSize": 18, "color": "#E9E9F2" },
+    { "op": "auto_layout_frame", "name": "t10-r2", "parent": "t10-list", "direction": "HORIZONTAL", "padding": 12, "fill": "#1D1B2E", "cornerRadius": 2, "stretch": true },
+    { "op": "text", "name": "t10-r2-t", "parent": "t10-r2", "text": "Audit", "fontSize": 18, "color": "#E9E9F2" },
+    { "op": "auto_layout_frame", "name": "t10-r3", "parent": "t10-list", "direction": "HORIZONTAL", "padding": 12, "fill": "#1D1B2E", "cornerRadius": 2, "stretch": true },
+    { "op": "text", "name": "t10-r3-t", "parent": "t10-r3", "text": "A considerably longer service name", "fontSize": 18, "color": "#E9E9F2" },
+    { "op": "auto_layout_frame", "name": "t10-r4", "parent": "t10-list", "direction": "HORIZONTAL", "padding": 12, "fill": "#1D1B2E", "cornerRadius": 2, "stretch": true },
+    { "op": "text", "name": "t10-r4-t", "parent": "t10-r4", "text": "Billing", "fontSize": 18, "color": "#E9E9F2" },
+
+    { "op": "text", "name": "l11", "text": "11  AUTO LAYOUT PAINT — dashed amber edge on the container above", "x": 1020, "y": 636, "fontSize": 16, "color": "#9A9AB0", "maxWidth": 300 },
+    { "op": "auto_layout_frame", "name": "t11-painted", "x": 1020, "y": 700, "width": 300, "direction": "VERTICAL", "spacing": 4, "padding": 12, "stroke": "#FFD166", "strokeWeight": 1, "dash": 6, "cornerRadius": 4 },
+    { "op": "text", "name": "t11-t", "parent": "t11-painted", "text": "dashed auto-layout container", "fontSize": 16, "color": "#FFD166" },
+
+    { "op": "text", "name": "l12", "text": "12  ROTATED TEXT", "x": 1420, "y": 48, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "text", "name": "t12-rot", "text": "BYOC MANAGEMENT", "x": 1500, "y": 96, "fontSize": 18, "bold": true, "color": "#8A8AA0", "rotation": 90 },
+
+    { "op": "text", "name": "l13", "text": "13  BAD DIRECTION — must emit a WARNING, not a silent horizontal line", "x": 640, "y": 900, "fontSize": 20, "color": "#FFFFFF" },
+    { "op": "line", "name": "t13-bad", "x": 660, "y": 946, "length": 120, "direction": "VERTICAL", "color": "#F87171", "strokeWeight": 3 }
+  ]
+}

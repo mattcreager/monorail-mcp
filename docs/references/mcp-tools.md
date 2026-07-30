@@ -227,7 +227,8 @@ Parameters:
 Operations:
 - background — Slide background (solid fill or gradient)
 - frame — Frame container (fill, gradient, stroke, dash, cornerRadius, clipsContent)
-- auto_layout_frame — Frame with Auto Layout (width/height fix an axis instead of hugging)
+- auto_layout_frame — Frame with Auto Layout (width/height fix an axis instead of hugging;
+    same fill/gradient/stroke/dash options as frame)
 - text — Text element (fontSize, bold, color, maxWidth, rotation)
 - rect — Rectangle (fill, gradient, stroke, strokeWeight, dash, cornerRadius)
 - ellipse — Ellipse/circle (same paint options as rect)
@@ -248,10 +249,15 @@ parent-child relationships.
 `fill` only when you want one — a fill matching the panel behind it also works
 and is sometimes easier to reason about.
 
-**Paths take slide coordinates.** Points are placed where they say, so a
-connector between two boxes can be described with the same numbers used to
-position those boxes. An `x`/`y` on the op is added on top as an offset, so
-relative points still work.
+**Paths take slide coordinates** (or the parent's coordinates, if the op has a
+`parent`). Points are placed where they say, so a connector between two boxes can
+be described with the same numbers used to position those boxes. An `x`/`y` on
+the op is added on top as an offset, so relative points still work.
+
+One consequence worth knowing: a path's own `x`/`y`/`width`/`height` are now a
+tight bounding box around its points rather than being anchored at the op's
+`x`/`y`. Anything reading those back — `monorail_capture`, `monorail_find`,
+`monorail_patch` — will report the bbox.
 
 ```json
 { "op": "path",
@@ -282,6 +288,20 @@ its own text and a list of differently-worded items comes out uneven.
 
 Rows authored this way reflow when one is added, removed or reordered — which is
 the difference between a diagram a designer can edit and a picture they can't.
+
+**Batches are applied in order and are NOT atomic.** If an op fails partway, the
+ops before it have already been created. Figma's async vector API
+(`setVectorNetworkAsync`, used by capped lines and paths) intermittently fails
+with *"Unable to establish connection to Figma after 10 seconds"* when the
+document is busy — that message comes from Figma, not from monorail, and the
+error names whichever op was in flight rather than the real cause.
+
+Practical guidance:
+
+- Keep a batch to roughly 20-30 ops. A 45-op batch failed twice in a row and the
+  same ops split into three calls succeeded immediately.
+- On failure, delete the half-built slide and re-run rather than patching over it.
+- Pass `slide_id` on follow-up calls to keep adding to the same slide.
 
 **Example: Simple layout**
 ```json

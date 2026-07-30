@@ -867,9 +867,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   width: { type: "number", description: "Width (rect, ellipse, frame). On auto_layout_frame it fixes that axis instead of hugging." },
                   height: { type: "number", description: "Height (rect, ellipse, frame). On auto_layout_frame it fixes that axis instead of hugging." },
                   length: { type: "number", description: "Length (for line, arrow)" },
-                  rotation: { type: "number", description: "Rotation in degrees (line, text). Positive reads clockwise on screen." },
+                  rotation: { type: "number", description: "Rotation in degrees (line, text). Positive reads clockwise on screen, matching the arrow op. NOTE: before 2026-07-30 a plain line rotated counter-clockwise here while a capped one rotated clockwise; both are clockwise now." },
                   // Arrow properties
-                  direction: { type: "string", description: "Direction for arrow AND line: 'right', 'left', 'up', 'down', or degrees. Also used for Auto Layout: 'VERTICAL', 'HORIZONTAL'" },
+                  direction: { type: ["string", "number"], description: "Direction for arrow AND line: 'right', 'left', 'up', 'down', or a number of degrees. Also used for Auto Layout: 'VERTICAL', 'HORIZONTAL'. An unrecognised value warns rather than silently meaning 'right'." },
                   headSize: { type: "number", description: "Arrowhead size in pixels (default: 12)" },
                   bidirectional: { type: "boolean", description: "If true, arrow has heads on both ends" },
                   // Text properties
@@ -906,11 +906,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                   strokeWeight: { type: "number", description: "Stroke width. Applies to line, path, rect, ellipse and frame (default 2)." },
                   dash: {
-                    description: "Dashed stroke. A number gives an even pattern (6 → 6 on, 6 off); an array is explicit ([8, 4]). Works on rect, ellipse, frame, line and path.",
-                    oneOf: [
-                      { type: "number" },
-                      { type: "array", items: { type: "number" } }
-                    ]
+                    type: ["number", "array"],
+                    items: { type: "number" },
+                    description: "Dashed stroke. A number gives an even pattern (6 → 6 on, 6 off); an array is explicit ([8, 4]). Works on rect, ellipse, frame, auto_layout_frame, line and path.",
                   },
                   // Line caps (for line op - simpler than vector arrow)
                   startCap: { 
@@ -942,8 +940,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   clipsContent: { type: "boolean", description: "For frame: clip children to bounds (default false, so connectors may overhang)" },
                   // Auto Layout properties
                   spacing: { type: "number", description: "Item spacing in Auto Layout (default: 24)" },
-                  stretch: { type: "boolean", description: "For a child of an auto_layout_frame: fill the container's cross axis, so rows share one width instead of hugging their own text." },
-                  grow: { type: "boolean", description: "For a child of an auto_layout_frame: absorb leftover space along the main axis." },
+                  stretch: { type: "boolean", description: "For a child of an auto_layout_frame: fill the container's cross axis, so rows share one width instead of hugging their own text. Honoured on frame, auto_layout_frame, text, rect, ellipse, line, path and arrow." },
+                  grow: { type: "boolean", description: "For a child of an auto_layout_frame: fill the leftover space along the main axis. Boolean fill, not a flex-grow weight — there are no proportions." },
                   padding: { type: "number", description: "Uniform padding in Auto Layout" },
                 },
                 required: ["op"],

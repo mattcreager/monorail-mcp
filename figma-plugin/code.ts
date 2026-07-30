@@ -4019,7 +4019,14 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
             case 'left': return 180;
             case 'up': return -90;
             case 'right':
-            default: return 0;
+            case undefined:
+              return 0;
+            default:
+              // Don't quietly mean 'right'. `direction` is overloaded across ops
+              // ('VERTICAL'/'HORIZONTAL' for auto layout), so a copy-pasted value
+              // lands here and would otherwise draw a confidently wrong line.
+              warnings.push(`Unrecognised direction "${dir}" — expected up/down/left/right or degrees`);
+              return 0;
           }
         }
 
@@ -4067,44 +4074,44 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         // Stroke colour, weight and dash. `dash: 6` is an even 6/6 pattern;
         // `dash: [8, 4]` is explicit. strokeWeight was previously hardcoded to 2 on
         // rects and ellipses, so hairlines were impossible.
+        // `dash: 6` is an even 6/6 pattern; `dash: [8, 4]` is explicit.
+        function resolveDash(op: any): number[] | undefined {
+          if (op.dash === undefined) return undefined;
+          return Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
+        }
+
         function applyStroke(node: any, op: any, defaultWeight: number = 2): void {
           if (op.stroke) {
             node.strokes = [{ type: 'SOLID', color: resolveColor(op.stroke) }];
             node.strokeWeight = op.strokeWeight ?? defaultWeight;
           }
-          if (op.dash !== undefined) {
-            node.dashPattern = Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
-          }
+          const dash = resolveDash(op);
+          if (dash) node.dashPattern = dash;
         }
 
         // Children of an auto-layout parent: `stretch` fills the cross axis (so a
         // list of rows all share the container's width), `grow` absorbs slack along
         // the main axis. No-op when the parent isn't an auto-layout frame.
+        // Children of an auto-layout parent: `stretch` fills the cross axis (so a
+        // list of rows share one width instead of hugging their own text), `grow`
+        // absorbs slack along the main axis.
+        //
+        // layoutSizing* is the only thing that beats a child's own hug sizing —
+        // layoutAlign = 'STRETCH' leaves a hugging auto-layout child hugging, which
+        // is why the first attempt at this visibly did nothing. There is no fallback
+        // path: layoutSizing{Horizontal,Vertical} live on LayoutMixin, so every node
+        // type that can reach here has them, and the guard below excludes the only
+        // documented throw (a non-auto-layout parent). A genuine failure should
+        // surface through the per-op catch rather than be swallowed.
         function applyLayoutChild(node: any, op: any): void {
           const parent: any = node.parent;
           if (!parent || !parent.layoutMode || parent.layoutMode === 'NONE') return;
           const parentIsVertical = parent.layoutMode === 'VERTICAL';
-
-          // layoutSizing* is the current API and the only thing that beats a
-          // child's own hug sizing — setting layoutAlign = 'STRETCH' on an
-          // auto-layout child that hugs its text leaves it hugging, so a list of
-          // rows stays ragged. layoutAlign/layoutGrow remain the fallback for
-          // node types that don't expose layoutSizing.
           if (op.stretch) {
-            const crossProp = parentIsVertical ? 'layoutSizingHorizontal' : 'layoutSizingVertical';
-            try {
-              if (crossProp in node) { node[crossProp] = 'FILL'; } else { node.layoutAlign = 'STRETCH'; }
-            } catch (e) {
-              node.layoutAlign = 'STRETCH';
-            }
+            node[parentIsVertical ? 'layoutSizingHorizontal' : 'layoutSizingVertical'] = 'FILL';
           }
           if (op.grow) {
-            const mainProp = parentIsVertical ? 'layoutSizingVertical' : 'layoutSizingHorizontal';
-            try {
-              if (mainProp in node) { node[mainProp] = 'FILL'; } else { node.layoutGrow = 1; }
-            } catch (e) {
-              node.layoutGrow = 1;
-            }
+            node[parentIsVertical ? 'layoutSizingVertical' : 'layoutSizingHorizontal'] = 'FILL';
           }
         }
 
@@ -4115,36 +4122,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               // Set the slide's native background (solid color or gradient)
               if ('fills' in targetSlide) {
                 if (op.gradient) {
-                  // Gradient background
-                  const angle = (op.gradient.angle ?? 90) * Math.PI / 180;  // default: top-to-bottom
-                  const cos = Math.cos(angle);
-                  const sin = Math.sin(angle);
-
-                  // gradientTransform is a 2x3 matrix [[a,b,tx],[c,d,ty]]
-                  // For angle rotation: we map gradient space to node space
-                  const gradientTransform: Transform = [
-                    [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
-                    [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
-                  ];
-
-                  const gradientStops: ColorStop[] = op.gradient.stops.map(stop => ({
-                    position: stop.position,
-                    color: { ...resolveColor(stop.color), a: 1 }
-                  }));
-
-                  if (op.gradient.type === 'radial') {
-                    (targetSlide as any).fills = [{
-                      type: 'GRADIENT_RADIAL',
-                      gradientTransform,
-                      gradientStops
-                    }];
-                  } else {
-                    (targetSlide as any).fills = [{
-                      type: 'GRADIENT_LINEAR',
-                      gradientTransform,
-                      gradientStops
-                    }];
-                  }
+                  (targetSlide as any).fills = [buildGradientPaint(op.gradient)];
                   createdNodes.push({ name: 'background', id: targetSlide.id, type: 'GRADIENT' });
                 } else {
                   // Solid color background
@@ -4193,9 +4171,13 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 const isVertical = frame.layoutMode === 'VERTICAL';
                 const crossSize = isVertical ? op.width : op.height;
                 const mainSize = isVertical ? op.height : op.width;
-                if (crossSize) frame.counterAxisSizingMode = 'FIXED';
-                if (mainSize) frame.primaryAxisSizingMode = 'FIXED';
+                // resize() touches BOTH axes and can flip the resized axis to
+                // FIXED, so the sizing modes are asserted afterwards — otherwise a
+                // frame given only a width could end up height-pinned at the size
+                // it had while still empty, and never grow for its children.
                 frame.resize(op.width || frame.width, op.height || frame.height);
+                frame.counterAxisSizingMode = crossSize ? 'FIXED' : 'AUTO';
+                frame.primaryAxisSizingMode = mainSize ? 'FIXED' : 'AUTO';
               }
               frame.itemSpacing = op.spacing ?? 24;
               if (op.padding) {
@@ -4204,15 +4186,16 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 frame.paddingLeft = op.padding;
                 frame.paddingRight = op.padding;
               }
-              if (op.fill) {
-                frame.fills = [{ type: 'SOLID', color: resolveColor(op.fill) }];
-              } else {
-                frame.fills = [];
-              }
+              // Same paint surface as `frame`: gradient, stroke and dash were
+              // silently dropped here, so a dashed gradient-filled auto-layout
+              // container came out flat with no error — the bug class this whole
+              // effort is meant to remove.
+              frame.fills = buildFills(op, 'none');
+              applyStroke(frame, op);
               if (op.cornerRadius) {
                 frame.cornerRadius = op.cornerRadius;
               }
-              frame.clipsContent = false;
+              frame.clipsContent = (op as any).clipsContent ?? false;
               const parent = resolveParent(op.parent);
               parent.appendChild(frame);
               applyLayoutChild(frame, op);
@@ -4320,9 +4303,13 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               // HORIZONTAL line — the caller got no error, just a wrong diagram.
               // Explicit `rotation` still wins, and keeps its original sign
               // convention; direction now matches the `arrow` op exactly.
-              const dirRotation = -resolveDirection((op as any).direction);
-              const rotation = op.rotation !== undefined ? op.rotation : dirRotation;
-              const capRotation = op.rotation !== undefined ? -op.rotation : dirRotation;
+              // ONE convention: positive degrees read clockwise on screen, matching
+              // the text and arrow ops. Previously the capped and uncapped branches
+              // negated `rotation` differently, so `rotation: 90` pointed up on a
+              // plain line and down the moment you added a cap — and `direction` and
+              // `rotation` disagreed on the same op. PLAN.md records a prior session
+              // losing time to exactly that.
+              const rotation = -(op.rotation !== undefined ? op.rotation : resolveDirection((op as any).direction));
 
               // If caps are specified, use a vector for per-vertex control
               if (op.startCap || op.endCap) {
@@ -4347,16 +4334,15 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 
                 vector.strokes = [{ type: 'SOLID', color }];
                 vector.strokeWeight = strokeWeight;
-                if ((op as any).dash !== undefined) {
-                  const d = (op as any).dash;
-                  vector.dashPattern = Array.isArray(d) ? d : [d, d];
-                }
+                const capDash = resolveDash(op);
+                if (capDash) vector.dashPattern = capDash;
                 vector.fills = [];
                 vector.x = op.x || 0;
                 vector.y = op.y || 0;
-                vector.rotation = capRotation;  // Figma rotation is counter-clockwise
+                vector.rotation = rotation;
 
                 resolveParent(op.parent).appendChild(vector);
+                applyLayoutChild(vector, op);
                 const lineType = 'LINE_ARROW';
                 if (op.name) {
                   nodesByName[op.name] = vector;
@@ -4374,11 +4360,10 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 line.rotation = rotation;
                 line.strokes = [{ type: 'SOLID', color }];
                 line.strokeWeight = strokeWeight;
-                if ((op as any).dash !== undefined) {
-                  const d = (op as any).dash;
-                  line.dashPattern = Array.isArray(d) ? d : [d, d];
-                }
+                const plainDash = resolveDash(op);
+                if (plainDash) line.dashPattern = plainDash;
                 resolveParent(op.parent).appendChild(line);
+                applyLayoutChild(line, op);
                 if (op.name) {
                   nodesByName[op.name] = line;
                   createdNodes.push({ name: op.name, id: line.id, type: 'LINE' });
@@ -4494,10 +4479,8 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               vector.strokeWeight = strokeWeight;
               // Elbowed connectors read badly with mitred corners.
               vector.strokeJoin = 'ROUND';
-              if ((op as any).dash !== undefined) {
-                const d = (op as any).dash;
-                vector.dashPattern = Array.isArray(d) ? d : [d, d];
-              }
+              const pathDash = resolveDash(op);
+              if (pathDash) vector.dashPattern = pathDash;
 
               // Fill for closed paths — a closed path with a `gradient` gets one too.
               if (closed && ((op as any).gradient || op.fill)) {
@@ -4508,10 +4491,16 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 vector.fills = [];
               }
 
+              // minX/minY describe the VERTEX hull. For a polyline that is also the
+              // geometry, so this is exact. For `smooth: true` the Catmull-Rom
+              // tangents can push the rendered curve outside that hull — see
+              // docs/failures.md for the measurement showing whether Figma's
+              // reported x/y absorbs that overshoot.
               vector.x = (op.x || 0) + minX;
               vector.y = (op.y || 0) + minY;
 
               resolveParent(op.parent).appendChild(vector);
+              applyLayoutChild(vector, op);
               const pathType = closed ? 'PATH_CLOSED' : (smooth ? 'PATH_CURVED' : 'PATH');
               if (op.name) {
                 nodesByName[op.name] = vector;
@@ -4589,6 +4578,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               arrow.rotation = -angle;
 
               parent.appendChild(arrow);
+              applyLayoutChild(arrow, op);
               if (op.name) {
                 nodesByName[op.name] = arrow;
               }
