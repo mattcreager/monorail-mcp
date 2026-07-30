@@ -2934,8 +2934,13 @@
             if (op.dash !== void 0) {
               node.dashPattern = Array.isArray(op.dash) ? op.dash : [op.dash, op.dash];
             }
+          }, applyLayoutChild2 = function(node, op) {
+            const parent = node.parent;
+            if (!parent || !parent.layoutMode || parent.layoutMode === "NONE") return;
+            if (op.stretch) node.layoutAlign = "STRETCH";
+            if (op.grow) node.layoutGrow = 1;
           };
-          var resolveParent = resolveParent2, resolveColor = resolveColor2, resolveDirection = resolveDirection2, buildGradientPaint = buildGradientPaint2, buildFills = buildFills2, applyStroke = applyStroke2;
+          var resolveParent = resolveParent2, resolveColor = resolveColor2, resolveDirection = resolveDirection2, buildGradientPaint = buildGradientPaint2, buildFills = buildFills2, applyStroke = applyStroke2, applyLayoutChild = applyLayoutChild2;
           const nodesByName = {};
           const createdNodes = [];
           const warnings = [];
@@ -3008,6 +3013,7 @@
                 }
                 frame.clipsContent = (_g = op.clipsContent) != null ? _g : false;
                 resolveParent2(op.parent).appendChild(frame);
+                applyLayoutChild2(frame, op);
                 if (op.name) nodesByName[op.name] = frame;
                 createdNodes.push({ name: op.name || "frame", id: frame.id, type: "FRAME" });
               } else if (op.op === "auto_layout_frame") {
@@ -3016,6 +3022,14 @@
                 frame.layoutMode = op.direction || "VERTICAL";
                 frame.primaryAxisSizingMode = "AUTO";
                 frame.counterAxisSizingMode = "AUTO";
+                if (op.width || op.height) {
+                  const isVertical = frame.layoutMode === "VERTICAL";
+                  const crossSize = isVertical ? op.width : op.height;
+                  const mainSize = isVertical ? op.height : op.width;
+                  if (crossSize) frame.counterAxisSizingMode = "FIXED";
+                  if (mainSize) frame.primaryAxisSizingMode = "FIXED";
+                  frame.resize(op.width || frame.width, op.height || frame.height);
+                }
                 frame.itemSpacing = (_h = op.spacing) != null ? _h : 24;
                 if (op.padding) {
                   frame.paddingTop = op.padding;
@@ -3034,6 +3048,7 @@
                 frame.clipsContent = false;
                 const parent = resolveParent2(op.parent);
                 parent.appendChild(frame);
+                applyLayoutChild2(frame, op);
                 if (op.x !== void 0) frame.x = op.x;
                 if (op.y !== void 0) frame.y = op.y;
                 if (op.name) nodesByName[op.name] = frame;
@@ -3066,6 +3081,7 @@
                 }
                 const parent = resolveParent2(op.parent);
                 parent.appendChild(textNode);
+                applyLayoutChild2(textNode, op);
                 if (op.x !== void 0) textNode.x = op.x;
                 if (op.y !== void 0) textNode.y = op.y;
                 if (op.rotation) {
@@ -3087,6 +3103,7 @@
                   rect.cornerRadius = op.cornerRadius;
                 }
                 resolveParent2(op.parent).appendChild(rect);
+                applyLayoutChild2(rect, op);
                 if (op.name) {
                   nodesByName[op.name] = rect;
                   createdNodes.push({ name: op.name, id: rect.id, type: "RECTANGLE" });
@@ -3103,6 +3120,7 @@
                   ellipse.cornerRadius = op.cornerRadius;
                 }
                 resolveParent2(op.parent).appendChild(ellipse);
+                applyLayoutChild2(ellipse, op);
                 if (op.name) {
                   nodesByName[op.name] = ellipse;
                   createdNodes.push({ name: op.name, id: ellipse.id, type: "ELLIPSE" });

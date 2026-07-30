@@ -4077,6 +4077,16 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           }
         }
 
+        // Children of an auto-layout parent: `stretch` fills the cross axis (so a
+        // list of rows all share the container's width), `grow` absorbs slack along
+        // the main axis. No-op when the parent isn't an auto-layout frame.
+        function applyLayoutChild(node: any, op: any): void {
+          const parent: any = node.parent;
+          if (!parent || !parent.layoutMode || parent.layoutMode === 'NONE') return;
+          if (op.stretch) node.layoutAlign = 'STRETCH';
+          if (op.grow) node.layoutGrow = 1;
+        }
+
         // Process each operation
         for (const op of operations) {
           try {
@@ -4143,6 +4153,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               // surprising than letting them show.
               frame.clipsContent = (op as any).clipsContent ?? false;
               resolveParent(op.parent).appendChild(frame);
+              applyLayoutChild(frame, op);
               if (op.name) nodesByName[op.name] = frame;
               createdNodes.push({ name: op.name || 'frame', id: frame.id, type: 'FRAME' });
 
@@ -4152,6 +4163,19 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               frame.layoutMode = op.direction || 'VERTICAL';
               frame.primaryAxisSizingMode = 'AUTO';
               frame.counterAxisSizingMode = 'AUTO';
+              // Sizing was hardcoded to hug on both axes, so an auto-layout list of
+              // differently-worded items came out ragged — which is exactly when
+              // people give up and hand-place rects instead. Supplying width and/or
+              // height now fixes that axis; children opt into filling it with
+              // `stretch: true`.
+              if (op.width || op.height) {
+                const isVertical = frame.layoutMode === 'VERTICAL';
+                const crossSize = isVertical ? op.width : op.height;
+                const mainSize = isVertical ? op.height : op.width;
+                if (crossSize) frame.counterAxisSizingMode = 'FIXED';
+                if (mainSize) frame.primaryAxisSizingMode = 'FIXED';
+                frame.resize(op.width || frame.width, op.height || frame.height);
+              }
               frame.itemSpacing = op.spacing ?? 24;
               if (op.padding) {
                 frame.paddingTop = op.padding;
@@ -4170,6 +4194,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               frame.clipsContent = false;
               const parent = resolveParent(op.parent);
               parent.appendChild(frame);
+              applyLayoutChild(frame, op);
               if (op.x !== undefined) frame.x = op.x;
               if (op.y !== undefined) frame.y = op.y;
               if (op.name) nodesByName[op.name] = frame;
@@ -4215,6 +4240,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               
               const parent = resolveParent(op.parent);
               parent.appendChild(textNode);
+              applyLayoutChild(textNode, op);
               if (op.x !== undefined) textNode.x = op.x;
               if (op.y !== undefined) textNode.y = op.y;
               // Rotation, so vertical axis labels and rotated callouts are possible
@@ -4241,6 +4267,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 rect.cornerRadius = op.cornerRadius;
               }
               resolveParent(op.parent).appendChild(rect);
+              applyLayoutChild(rect, op);
               if (op.name) {
                 nodesByName[op.name] = rect;
                 createdNodes.push({ name: op.name, id: rect.id, type: 'RECTANGLE' });
@@ -4258,6 +4285,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
                 (ellipse as any).cornerRadius = op.cornerRadius;
               }
               resolveParent(op.parent).appendChild(ellipse);
+              applyLayoutChild(ellipse, op);
               if (op.name) {
                 nodesByName[op.name] = ellipse;
                 createdNodes.push({ name: op.name, id: ellipse.id, type: 'ELLIPSE' });

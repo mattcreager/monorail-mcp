@@ -864,8 +864,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   x: { type: "number", description: "X position (ignored for Auto Layout children)" },
                   y: { type: "number", description: "Y position (ignored for Auto Layout children)" },
                   // Dimensions
-                  width: { type: "number", description: "Width (for rect, ellipse, frame)" },
-                  height: { type: "number", description: "Height (for rect, ellipse, frame)" },
+                  width: { type: "number", description: "Width (rect, ellipse, frame). On auto_layout_frame it fixes that axis instead of hugging." },
+                  height: { type: "number", description: "Height (rect, ellipse, frame). On auto_layout_frame it fixes that axis instead of hugging." },
                   length: { type: "number", description: "Length (for line, arrow)" },
                   rotation: { type: "number", description: "Rotation in degrees (line, text). Positive reads clockwise on screen." },
                   // Arrow properties
@@ -942,6 +942,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   clipsContent: { type: "boolean", description: "For frame: clip children to bounds (default false, so connectors may overhang)" },
                   // Auto Layout properties
                   spacing: { type: "number", description: "Item spacing in Auto Layout (default: 24)" },
+                  stretch: { type: "boolean", description: "For a child of an auto_layout_frame: fill the container's cross axis, so rows share one width instead of hugging their own text." },
+                  grow: { type: "boolean", description: "For a child of an auto_layout_frame: absorb leftover space along the main axis." },
                   padding: { type: "number", description: "Uniform padding in Auto Layout" },
                 },
                 required: ["op"],
