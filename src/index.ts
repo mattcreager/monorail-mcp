@@ -841,6 +841,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description:
                 "Warning threshold for text size, default 24 (presentation body copy). Diagram labels legitimately sit at 12-20px; set this to stop dozens of expected warnings from burying real ones.",
             },
+            step_seconds: {
+              type: "number",
+              description: "Seconds between build steps for ops that carry 'reveal' (default 1.5). Step N lands at N × step_seconds on the slide's timeline.",
+            },
+            build_mode: {
+              type: "string",
+              enum: ["auto", "motion", "slides", "groups"],
+              description: "How reveals are realised. 'auto' (default): Motion object animations where the editor exposes them (Design); in Figma Slides (no object-animation API) one slide with a transparent frame per build step named 'Reveal N', so the presenter adds one Fade in / On click object animation per frame in the Animate panel. 'groups' forces that. 'slides' instead clones one slide per build state with a native SMART_ANIMATE transition (no manual step, but N slides per scene). 'motion' forces Motion and warns if unavailable.",
+            },
+            transition: {
+              type: "string",
+              enum: ["SMART_ANIMATE", "DISSOLVE", "NONE"],
+              description: "Slide transition between step slides (default SMART_ANIMATE — persisting layers hold still, arriving ones fade in). Only used when reveals become step slides.",
+            },
             operations: {
               type: "array",
               description: "Array of primitive operations to apply in sequence",
@@ -878,6 +892,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   bold: { type: "boolean", description: "Bold font (for text op)" },
                   fontFamily: { type: "string", description: "Font family for this text node, e.g. 'PP Supply Sans' or 'Geist'. Omit to use the plugin's fallback chain (Supply → Inter → SF Pro Display → Helvetica Neue → Arial). Set this when matching an existing deck's typography — the chain will NOT find 'PP Supply Sans' on its own and silently lands on Inter. An unavailable family falls back to the chain rather than failing." },
                   maxWidth: { type: "number", description: "Maximum width before wrapping (for text op)" },
+                  alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT"], description: "Horizontal text alignment (text op). With width+height set, the text box is fixed and the text aligns inside it — use for centred labels." },
+                  weight: { type: ["number", "string"], description: "Font weight for the text op: 400/500/600/700 (650 rounds to 600) or a name such as 'medium' / 'semibold'. Loads the family's matching style (Medium, SemiBold…) and degrades to a neighbour, then Bold/Regular, with a warning. Overrides 'bold'." },
+                  lineHeight: { type: ["number", "string"], description: "Line height for the text op. A number ≤ 3 is a CSS multiplier (1.04 → 104%), a larger number is pixels, or '120%' / '40px'. Omit for Figma's auto line height, which is looser than most CSS." },
+                  letterSpacing: { type: ["number", "string"], description: "Letter spacing for the text op: a number is pixels (already scaled), or '-0.035em' / '11%' as a percentage of the font size." },
+                  visible: { type: "boolean", description: "false hides the layer after creation (any named op). Use for speaker notes or reference text that should live on the slide without rendering." },
+                  verticalAlignment: { type: "string", enum: ["TOP", "CENTER", "BOTTOM"], description: "Vertical text alignment inside a fixed width+height text box (text op)." },
                   // Colors (named: 'headline', 'body', 'muted', 'cyan', 'orange', 'green', 'pink', 'red', 'yellow', hex '#1a1a2e', or {r,g,b})
                   color: { type: "string", description: "Color for text, line, or arrow" },
                   fill: { type: "string", description: "Fill color for solid backgrounds and shapes. Omitting fill while setting stroke gives an OUTLINE (transparent interior) rather than a white box." },
@@ -943,12 +963,92 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   stretch: { type: "boolean", description: "For a child of an auto_layout_frame: fill the container's cross axis, so rows share one width instead of hugging their own text. Honoured on frame, auto_layout_frame, text, rect, ellipse, line, path and arrow." },
                   grow: { type: "boolean", description: "For a child of an auto_layout_frame: fill the leftover space along the main axis. Boolean fill, not a flex-grow weight — there are no proportions." },
                   padding: { type: "number", description: "Uniform padding in Auto Layout" },
+                  // Native object animation
+                  reveal: {
+                    type: ["number", "object"],
+                    description: "Reveal this element as a build step using Figma's native object animations (one slide, no duplicates). A number is the step: 1 = first advance, 2 = second… 0 animates in as the slide opens. Object form: {step, offset, duration, style, props} — 'style' is an animation style name such as 'fade in' or 'slide in' (see monorail_motion list); 'offset' in seconds overrides step. Requires 'name' on the op. Steps map to timeline offsets of step × step_seconds; with no style match the element fades in via an opacity keyframe.",
+                    properties: {
+                      step: { type: "number", description: "Build step (non-negative integer). Default 1." },
+                      offset: { type: "number", description: "Timeline offset in seconds; overrides step." },
+                      duration: { type: "number", description: "Animation length in seconds (default 0.4)." },
+                      style: { type: "string", description: "Animation style id or (partial) name, e.g. 'fade in'." },
+                      props: { type: "object", description: "Style-specific props, e.g. {direction:'right', distance:120}." },
+                      until: { type: "number", description: "Last build step this element is visible at (step-slide builds). {step:1, until:1} shows it only on step 1." },
+                    },
+                  },
                 },
                 required: ["op"],
               },
             },
           },
           required: ["operations"],
+        },
+      },
+      {
+        name: "monorail_motion",
+        description:
+          "Reveals and builds with Figma's native animation. Actions: 'apply' reveals to existing nodes ([{target, step|offset, duration, style, props}]) — in the Design editor this applies Motion object animations on one slide; in Figma Slides (where the Plugin API exposes no object animations) it builds one slide per step with a Smart Animate transition, cloning the slide so persisting layers hold still and arriving ones fade in. 'list' the Motion animation styles (Design only); 'inspect' animations and slide transitions on slides/nodes; 'clear' Motion animations from nodes. Prefer the 'reveal' field on monorail_primitives ops when building from scratch; use this tool for slides that already exist.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            action: {
+              type: "string",
+              enum: ["list", "apply", "inspect", "clear"],
+              description: "What to do.",
+            },
+            targets: {
+              type: "array",
+              items: { type: "string" },
+              description: "For inspect/clear: slide IDs (their children are used) or node IDs.",
+            },
+            reveals: {
+              type: "array",
+              description: "For apply: one entry per node to animate.",
+              items: {
+                type: "object",
+                properties: {
+                  target: { type: "string", description: "Figma node ID (from monorail_pull or monorail_primitives output)." },
+                  step: { type: "number", description: "Build step (non-negative integer). Default 1." },
+                  offset: { type: "number", description: "Timeline offset in seconds; overrides step." },
+                  duration: { type: "number", description: "Animation length in seconds (default 0.4)." },
+                  style: { type: "string", description: "Animation style id or (partial) name, e.g. 'fade in'. Omit for the document's fade/appear style." },
+                  props: { type: "object", description: "Style-specific props passed through, e.g. {direction:'right'}." },
+                  until: { type: "number", description: "Last build step this element is visible at (step-slide builds only)." },
+                },
+                required: ["target"],
+              },
+            },
+            step_seconds: {
+              type: "number",
+              description: "Seconds between build steps (default 1.5).",
+            },
+            build_mode: {
+              type: "string",
+              enum: ["auto", "motion", "slides", "groups"],
+              description: "How reveals are realised. 'auto' (default): Motion object animations where the editor exposes them (Design); in Figma Slides (no object-animation API) one slide with a transparent frame per build step named 'Reveal N', so the presenter adds one Fade in / On click object animation per frame in the Animate panel. 'groups' forces that. 'slides' instead clones one slide per build state with a native SMART_ANIMATE transition (no manual step, but N slides per scene). 'motion' forces Motion and warns if unavailable.",
+            },
+            transition: {
+              type: "string",
+              enum: ["SMART_ANIMATE", "DISSOLVE", "NONE"],
+              description: "Slide transition between step slides (default SMART_ANIMATE — persisting layers hold still, arriving ones fade in). Only used when reveals become step slides.",
+            },
+          },
+          required: ["action"],
+        },
+      },
+      {
+        name: "monorail_probe",
+        description:
+          "Explore the live Figma Plugin API from inside the plugin sandbox — including undocumented surface. 'globals' lists every own property of `figma` and its namespaces plus non-standard globals; 'node' lists every property up a node's prototype chain with its current value (optional regex filter, e.g. 'anim|transition|reveal'); 'eval' runs an async JS function body with `figma`, `node` (nodeId or selection), `protoNames(obj)` and `safeJson(v)` in scope and returns what it returns. Development plugin only.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            action: { type: "string", enum: ["globals", "node", "eval"], description: "What to do." },
+            node_id: { type: "string", description: "For node/eval: Figma node ID. Defaults to the current selection." },
+            filter: { type: "string", description: "For node: case-insensitive regex on property names." },
+            code: { type: "string", description: "For eval: async function body. `return` a JSON-serialisable value." },
+          },
+          required: ["action"],
         },
       },
       {
@@ -2247,6 +2347,9 @@ The new slide has been selected in Figma.`,
           slideId?: string;
           slideName?: string;
           created?: Array<{ name: string; id: string; type: string }>;
+          animated?: RevealResult[];
+          stepSlides?: StepSlideResult[];
+          groups?: RevealGroupResult[];
           warnings?: string[];
           error?: string;
         }>('primitives', 'Primitives request timed out');
@@ -2257,6 +2360,9 @@ The new slide has been selected in Figma.`,
           slideId,
           operations,
           minFontSize,
+          stepSeconds: args?.step_seconds as number | undefined,
+          buildMode: args?.build_mode,
+          transition: args?.transition,
         }));
 
         // Wait for response
@@ -2276,6 +2382,7 @@ The new slide has been selected in Figma.`,
 
         // Build success response
         const createdList = result.created?.map(n => `  - ${n.name} (${n.type}): ${n.id}`).join('\n') || '';
+        const revealsText = formatReveals(result.animated) + formatStepSlides(result.stepSlides) + formatGroups(result.groups);
         
         // Format warnings if any
         let warningsText = '';
@@ -2290,7 +2397,7 @@ The new slide has been selected in Figma.`,
               text: `✓ Created ${result.created?.length || 0} elements on "${result.slideName}" (${result.slideId})
 
 **Created nodes:**
-${createdList}${warningsText}
+${createdList}${revealsText}${warningsText}
 
 **Tip:** Use \`monorail_screenshot\` to see the result, or \`monorail_patch\` to edit text nodes by ID.`,
             },
@@ -2309,10 +2416,144 @@ ${createdList}${warningsText}
       }
     }
 
+    // =========================================================================
+    // monorail_motion - Native object animations (reveals) on one slide
+    // =========================================================================
+    case "monorail_motion": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      if (!isConnected) {
+        return {
+          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first." }],
+          isError: true,
+        };
+      }
+      const action = args?.action as string;
+      if (!["list", "apply", "inspect", "clear"].includes(action)) {
+        return { content: [{ type: "text" as const, text: `Error: unknown action "${action}". Use list, apply, inspect or clear.` }], isError: true };
+      }
+      if (hasPendingRequest('motion')) {
+        return { content: [{ type: "text" as const, text: "Error: Another motion request is already in progress. Please wait." }], isError: true };
+      }
+      try {
+        const resultPromise = createPendingRequest<MotionResult>('motion', 'Motion request timed out');
+        connectedPlugin!.send(JSON.stringify({
+          type: 'apply-motion',
+          action,
+          targets: args?.targets,
+          reveals: args?.reveals,
+          stepSeconds: args?.step_seconds,
+          buildMode: args?.build_mode,
+          transition: args?.transition,
+        }));
+        const result = await resultPromise;
+        if (!result.success) {
+          return { content: [{ type: "text" as const, text: `Error: ${result.error || "Unknown error"}` }], isError: true };
+        }
+        return { content: [{ type: "text" as const, text: formatMotionResult(action, result) }] };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error in monorail_motion: ${e instanceof Error ? e.message : "unknown error"}` }],
+          isError: true,
+        };
+      }
+    }
+
+    // =========================================================================
+    // monorail_probe - explore the Plugin API from inside the sandbox
+    // =========================================================================
+    case "monorail_probe": {
+      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      if (!isConnected) {
+        return { content: [{ type: "text" as const, text: "Error: No Figma plugin connected." }], isError: true };
+      }
+      if (hasPendingRequest('probe')) {
+        return { content: [{ type: "text" as const, text: "Error: Another probe is in progress." }], isError: true };
+      }
+      try {
+        const resultPromise = createPendingRequest<Record<string, unknown> & { success: boolean; error?: string }>('probe', 'Probe timed out');
+        connectedPlugin!.send(JSON.stringify({
+          type: 'apply-probe', action: args?.action, nodeId: args?.node_id, filter: args?.filter, code: args?.code,
+        }));
+        const result = await resultPromise;
+        if (!result.success) return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
+        const { success, type, ...rest } = result as any;
+        return { content: [{ type: "text" as const, text: JSON.stringify(rest, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Error in monorail_probe: ${e instanceof Error ? e.message : "unknown error"}` }], isError: true };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 });
+
+// ── Motion result types + formatting ─────────────────────────────────────────
+interface RevealResult {
+  id: string; name: string; mode: 'style' | 'keyframe' | 'unavailable';
+  style?: string; step?: number; offset: number; duration: number;
+}
+interface StepSlideResult { id: string; name: string; step: number; transition: string }
+interface RevealGroupResult { id: string; name: string; step: number; until?: number; members: string[] }
+interface MotionResult {
+  success: boolean; action?: string; error?: string; mode?: 'motion' | 'slides' | 'groups' | 'none';
+  styles?: Array<{ styleId: string; name: string; description?: string; props?: Record<string, unknown> }>;
+  applied?: RevealResult[]; stepSlides?: StepSlideResult[]; groups?: RevealGroupResult[]; warnings?: string[];
+  nodes?: Array<Record<string, unknown>> | number; motionAvailable?: boolean; removed?: number;
+  slides?: Array<{ id: string; name: string; transition?: { style?: string; duration?: number; timing?: { type?: string } }; skipped?: boolean }>;
+  apiVersion?: string; editorType?: string;
+}
+
+function formatGroups(groups?: RevealGroupResult[]): string {
+  if (!groups || groups.length === 0) return '';
+  const rows = groups.map(g => `  - "${g.name}" — ${g.id}: ${g.members.join(', ')}`);
+  return `\n\n**Reveal groups (one slide):**\n${rows.join('\n')}\n\n_Figma Slides has no object-animation API, so finish in Figma: select each group in the Layers panel → Animate tab → Fade in, On click (an "exit after" group also gets an exit animation). One click per group._`;
+}
+
+function formatStepSlides(stepSlides?: StepSlideResult[]): string {
+  if (!stepSlides || stepSlides.length === 0) return '';
+  const rows = stepSlides.map(s => `  - step ${s.step}: "${s.name}" — ${s.id}${s.transition !== 'none' ? ` (enter: ${s.transition})` : ''}`);
+  return `\n\n**Build slides (native ${stepSlides[stepSlides.length - 1].transition} transition):**\n${rows.join('\n')}\n\n_Figma Slides exposes no object animations to plugins, so each build step is its own slide; the last one is the settled state. Present with Right/click to advance._`;
+}
+
+function formatReveals(animated?: RevealResult[]): string {
+  if (!animated || animated.length === 0) return '';
+  const rows = animated.map(a => {
+    const when = a.step !== undefined ? `step ${a.step} (${a.offset}s)` : `${a.offset}s`;
+    const how = a.mode === 'style' ? a.style : a.mode === 'keyframe' ? 'opacity keyframe' : 'not applied';
+    return `  - ${a.name}: ${when}, ${a.duration}s, ${how} — ${a.id}`;
+  });
+  return `\n\n**Reveals (native object animations):**\n${rows.join('\n')}\n\n_Steps are timeline offsets; open the slide's Object animations panel to confirm click grouping. Screenshot shows the settled end state._`;
+}
+
+function formatMotionResult(action: string, r: MotionResult): string {
+  const warn = r.warnings && r.warnings.length ? `\n\n**⚠️ Warnings:**\n${r.warnings.map(w => `  - ${w}`).join('\n')}` : '';
+  if (action === 'list') {
+    if (!r.styles || r.styles.length === 0) return 'No animation styles reported by Figma for this document.';
+    const rows = r.styles.map(s => `  - **${s.name}** \`${s.styleId}\`${s.description ? ` — ${s.description}` : ''}${s.props ? `\n    props: ${JSON.stringify(s.props)}` : ''}`);
+    return `✓ ${r.styles.length} animation style(s):\n${rows.join('\n')}\n\nUse a name (e.g. "fade in") as \`style\` in reveals.`;
+  }
+  if (action === 'apply') {
+    if (r.mode === 'slides') return `✓ Built ${r.stepSlides?.length || 0} step slide(s)${formatStepSlides(r.stepSlides)}${warn}`;
+    if (r.mode === 'groups') return `✓ Grouped ${r.groups?.length || 0} reveal step(s) on one slide${formatGroups(r.groups)}${warn}`;
+    return `✓ Applied ${r.applied?.length || 0} reveal(s)${formatReveals(r.applied)}${warn}`;
+  }
+  if (action === 'inspect') {
+    const nodes = Array.isArray(r.nodes) ? r.nodes : [];
+    const rows = nodes.map(n => {
+      const styles = (n.animationStyles as Array<{ name: string; timelineOffset?: number; duration?: number }>) || [];
+      const s = styles.length ? styles.map(x => `${x.name}@${x.timelineOffset ?? 0}s/${x.duration ?? '?'}s`).join(', ') : '';
+      const manual = (n.manualTracks as string[]) || [];
+      const tl = (n.timelines as Array<{ duration: number }>) || [];
+      const bits = [s, manual.length ? `manual: ${manual.join(',')}` : '', tl.length ? `timeline ${tl[0].duration}s` : ''].filter(Boolean).join('; ');
+      return `  - ${n.name} (${n.type}) ${n.id}: ${bits || 'no animation'}`;
+    });
+    const slideRows = (r.slides || []).map(s => `  - slide "${s.name}" ${s.id}: enter ${s.transition?.style ?? 'NONE'}${s.transition?.duration !== undefined ? ` ${s.transition.duration}s` : ''}${s.transition?.timing?.type ? ` on ${s.transition.timing.type}` : ''}${s.skipped ? ' (skipped)' : ''}`);
+    const head = `✓ Animation on ${nodes.length} node(s) — Motion API ${r.motionAvailable ? 'available' : 'unavailable'} in the ${r.editorType ?? '?'} editor`;
+    return `${head}${slideRows.length ? `\n${slideRows.join('\n')}` : ''}\n${rows.join('\n')}`;
+  }
+  return `✓ Cleared ${r.removed ?? 0} animation(s) across ${r.nodes ?? 0} node(s)${warn}`;
+}
 
 // List available resources
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
@@ -2888,7 +3129,7 @@ interface ComponentInfoResult { success: boolean; node: { id: string; name: stri
 interface FindResult { success: boolean; nodes?: Array<{ id: string; name: string; type: string; x: number; y: number; width: number; height: number; parentId: string | null; parentName: string | null }>; total?: number; truncated?: boolean; error?: string; }
 
 // Type-safe request type keys
-type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot' | 'primitives' | 'css' | 'export' | 'component' | 'find';
+type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot' | 'primitives' | 'css' | 'export' | 'component' | 'find' | 'motion' | 'probe';
 
 // Map of pending requests by type
 const pendingRequests = new Map<RequestType, PendingRequest<any>>();
@@ -3031,11 +3272,19 @@ function handlePluginMessage(data: string, sender: WebSocket) {
       resolvePendingRequest<{
         success: boolean; slideId?: string; slideName?: string;
         created?: Array<{ name: string; id: string; type: string }>;
+        animated?: RevealResult[]; stepSlides?: StepSlideResult[]; groups?: RevealGroupResult[];
         warnings?: string[]; error?: string;
       }>('primitives', {
         success: parsed.success, slideId: parsed.slideId, slideName: parsed.slideName,
-        created: parsed.created, warnings: parsed.warnings, error: parsed.error,
+        created: parsed.created, animated: parsed.animated, stepSlides: parsed.stepSlides, groups: parsed.groups,
+        warnings: parsed.warnings, error: parsed.error,
       });
+    } else if (parsed.type === "probe-result") {
+      console.error(`[WebSocket] Probe result: action=${parsed.action}, success=${parsed.success}`);
+      resolvePendingRequest('probe', parsed);
+    } else if (parsed.type === "motion-result") {
+      console.error(`[WebSocket] Motion result: action=${parsed.action}, success=${parsed.success}`);
+      resolvePendingRequest<MotionResult>('motion', parsed as MotionResult);
     } else if (parsed.type === "css-extracted") {
       console.error(`[WebSocket] CSS result: success=${parsed.success}, node=${parsed.raw?.name}`);
       resolvePendingRequest<CssResult>('css', {

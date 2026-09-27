@@ -60,14 +60,14 @@ const REQUEST_TYPES = new Set([
   "request-export", "push-ir", "patch-elements", "capture-template",
   "instantiate-template", "create-styled-slide", "delete-slides",
   "reorder-slides", "request-screenshot", "apply-primitives", "get-css",
-  "export-node", "get-component-info", "find-nodes",
+  "export-node", "get-component-info", "find-nodes", "apply-motion", "apply-probe",
 ]);
 
 const RESPONSE_TYPES = new Set([
   "exported", "applied", "patched", "template-captured", "instantiated",
   "styled-slide-created", "slides-deleted", "slides-reordered",
   "screenshot-exported", "primitives-applied", "css-extracted",
-  "node-exported", "component-info", "nodes-found",
+  "node-exported", "component-info", "nodes-found", "motion-result", "probe-result",
 ]);
 
 // --- Downstream routing ---

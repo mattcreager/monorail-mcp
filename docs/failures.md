@@ -711,3 +711,11 @@ Anything not named there is silently dropped. `minFontSize` arrived at the UI an
 3. `figma-plugin/code.ts` — read it off `msg` and use it.
 
 Then rebuild the server, rebuild the bundle, restart the MCP client, AND re-run the plugin. A relay that forwarded `...msg` instead of naming fields would remove this whole class of bug, and is worth doing next time the relay is touched.
+
+### 2026-09-14 - Figma Slides object animations are not reachable from the Plugin API
+
+**What we found:** Plugin API update 130 added `figma.motion` (animation styles, timelines, keyframe tracks — `@figma/plugin-typings` 1.138). In the **slides** editor `figma.motion` is `undefined` (checked live: Figma desktop 126.8.18, `figma.editorType === 'slides'`, `apiVersion` 1.0.0). Slides' own "Object animations" panel (On click / After previous / With previous) has no Plugin API surface at all — nothing in the typings, `SlideNode` only exposes `getSlideTransition`/`setSlideTransition`. Motion is a Design-editor feature; Figma's Motion docs list a Slides agent as "coming soon".
+
+**Impact:** Reveals inside a single slide cannot be authored by Monorail in Slides today. The only native mechanism is the one Figma's own help docs describe for builds: one slide per state with a Smart Animate transition.
+
+**Path forward:** `reveal` on primitives ops and `monorail_motion apply` take a build step and pick the path at runtime: Motion object animations where `figma.motion` exists (Design), otherwise clone-based step slides with `SMART_ANIMATE` (0.4s, ease in/out, on click). Clones keep layer names and order, so Smart Animate holds persisting layers still and fades arriving ones in. `build_mode: "motion"` will start working in Slides the day Figma exposes it — re-run apply to collapse the step slides. Also: the proxy (`src/proxy.ts`) allowlists message types; every new request/response type must be added there or the request silently times out.

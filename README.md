@@ -110,7 +110,8 @@ Inspect, export, and create visual content.
 | `monorail_screenshot` | Export a slide as PNG (gives AI "eyes" to see renders) |
 | `monorail_export` | Export any node as SVG or PNG (vectors, components, icons) |
 | `monorail_css` | Extract CSS and raw paint data from a node |
-| `monorail_primitives` | Low-level design: frames, text, shapes, paths, arrows, gradients |
+| `monorail_primitives` | Low-level design: frames, text, shapes, paths, arrows, gradients; `reveal` on any op for native build steps |
+| `monorail_motion` | Native object animations: list styles, apply/inspect/clear reveals on one slide |
 
 ### Discovery
 

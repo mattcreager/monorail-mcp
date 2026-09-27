@@ -19,6 +19,178 @@
     return a;
   };
   var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+  var __objRest = (source, exclude) => {
+    var target = {};
+    for (var prop in source)
+      if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+        target[prop] = source[prop];
+    if (source != null && __getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(source)) {
+        if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+          target[prop] = source[prop];
+      }
+    return target;
+  };
+
+  // ../shared/motion.ts
+  var DEFAULT_STEP_SECONDS = 1.5;
+  var DEFAULT_REVEAL_DURATION = 0.4;
+  function normaliseReveal(spec, stepSeconds = DEFAULT_STEP_SECONDS) {
+    var _a2, _b, _c;
+    if (spec === void 0 || spec === null || spec === false) return void 0;
+    const s = typeof spec === "number" ? { step: spec } : spec;
+    if (!(stepSeconds > 0)) throw new Error(`step_seconds must be > 0, got ${stepSeconds}`);
+    const duration = (_a2 = s.duration) != null ? _a2 : DEFAULT_REVEAL_DURATION;
+    if (!(duration > 0)) throw new Error(`reveal.duration must be > 0, got ${duration}`);
+    let offset;
+    if (s.offset !== void 0) {
+      if (!(s.offset >= 0)) throw new Error(`reveal.offset must be >= 0, got ${s.offset}`);
+      offset = s.offset;
+    } else {
+      const step2 = (_b = s.step) != null ? _b : 1;
+      if (!Number.isInteger(step2) || step2 < 0) throw new Error(`reveal.step must be a non-negative integer, got ${step2}`);
+      offset = step2 * stepSeconds;
+    }
+    const step = s.offset === void 0 ? (_c = s.step) != null ? _c : 1 : void 0;
+    if (s.until !== void 0) {
+      if (!Number.isInteger(s.until) || s.until < 0) throw new Error(`reveal.until must be a non-negative integer, got ${s.until}`);
+      const from = step != null ? step : Math.ceil(offset / stepSeconds);
+      if (s.until < from) throw new Error(`reveal.until (${s.until}) is before the step it appears at (${from})`);
+    }
+    return {
+      step,
+      offset,
+      duration,
+      style: s.style,
+      props: s.props,
+      until: s.until
+    };
+  }
+  var APPEAR_PATTERN = /fade\s*in|appear|fade/i;
+  function pickAnimationStyle(styles, wanted) {
+    var _a2, _b, _c, _d;
+    if (!styles || styles.length === 0) return void 0;
+    if (wanted && wanted.trim()) {
+      const w = wanted.trim().toLowerCase();
+      return (_c = (_b = (_a2 = styles.find((s) => s.styleId === wanted)) != null ? _a2 : styles.find((s) => s.name.toLowerCase() === w)) != null ? _b : styles.find((s) => s.name.toLowerCase().includes(w))) != null ? _c : styles.find((s) => w.includes(s.name.toLowerCase()));
+    }
+    return (_d = styles.find((s) => APPEAR_PATTERN.test(s.name))) != null ? _d : styles[0];
+  }
+  function revealEndsAt(reveal) {
+    return reveal.offset + reveal.duration;
+  }
+  function stepFromReveal(reveal, stepSeconds = DEFAULT_STEP_SECONDS) {
+    if (reveal.step !== void 0) return reveal.step;
+    if (!(stepSeconds > 0)) throw new Error(`step_seconds must be > 0, got ${stepSeconds}`);
+    return Math.ceil(reveal.offset / stepSeconds);
+  }
+  var BUILD_TRANSITIONS = ["SMART_ANIMATE", "DISSOLVE", "NONE"];
+  function normaliseTransition(t) {
+    if (!t) return "SMART_ANIMATE";
+    const u = t.toUpperCase().replace(/[\s-]+/g, "_");
+    if (BUILD_TRANSITIONS.includes(u)) return u;
+    throw new Error(`transition must be one of ${BUILD_TRANSITIONS.join(", ")}, got "${t}"`);
+  }
+
+  // ../shared/typography.ts
+  var WEIGHT_STYLES = [
+    [100, "Thin"],
+    [200, "ExtraLight"],
+    [300, "Light"],
+    [400, "Regular"],
+    [500, "Medium"],
+    [600, "SemiBold"],
+    [700, "Bold"],
+    [800, "ExtraBold"],
+    [900, "Black"]
+  ];
+  var WEIGHT_NAMES = {
+    thin: 100,
+    hairline: 100,
+    extralight: 200,
+    ultralight: 200,
+    light: 300,
+    normal: 400,
+    regular: 400,
+    book: 400,
+    medium: 500,
+    semibold: 600,
+    demibold: 600,
+    bold: 700,
+    extrabold: 800,
+    ultrabold: 800,
+    black: 900,
+    heavy: 900
+  };
+  function normaliseWeight(weight, bold) {
+    if (weight === void 0 || weight === null || weight === "") return bold ? 700 : void 0;
+    if (typeof weight === "string") {
+      const key = weight.trim().toLowerCase().replace(/[\s_-]/g, "");
+      if (key in WEIGHT_NAMES) return WEIGHT_NAMES[key];
+      const n = Number(weight);
+      if (!Number.isFinite(n)) throw new Error(`Unknown font weight "${weight}"`);
+      weight = n;
+    }
+    if (!Number.isFinite(weight) || weight < 1 || weight > 1e3) throw new Error(`Font weight out of range: ${weight}`);
+    return Math.min(900, Math.max(100, Math.round(weight / 100 - 0.01) * 100));
+  }
+  function styleCandidates(weight) {
+    var _a2;
+    const idx = WEIGHT_STYLES.findIndex(([w]) => w === weight);
+    if (idx < 0) return ["Regular"];
+    const out = [WEIGHT_STYLES[idx][1]];
+    for (let d = 1; d < WEIGHT_STYLES.length; d++) {
+      const order = weight >= 500 ? [idx + d, idx - d] : [idx - d, idx + d];
+      for (const j of order) if (j >= 0 && j < WEIGHT_STYLES.length) out.push(WEIGHT_STYLES[j][1]);
+    }
+    const aliases = { SemiBold: ["Semibold", "Demi Bold", "DemiBold"], ExtraBold: ["Extra Bold", "Heavy"], ExtraLight: ["Extra Light"] };
+    const expanded = [];
+    for (const s of out) {
+      expanded.push(s);
+      for (const a of (_a2 = aliases[s]) != null ? _a2 : []) expanded.push(a);
+    }
+    return Array.from(new Set(expanded));
+  }
+  function resolveLineHeight(v) {
+    if (v === void 0 || v === null || v === "") return void 0;
+    if (typeof v === "string") {
+      const s = v.trim().toLowerCase();
+      if (s === "auto" || s === "normal") return void 0;
+      if (s.endsWith("%")) return pct(parseFloat(s));
+      if (s.endsWith("px")) return px(parseFloat(s));
+      const n = Number(s);
+      if (!Number.isFinite(n)) throw new Error(`Bad lineHeight "${v}"`);
+      v = n;
+    }
+    if (!Number.isFinite(v) || v <= 0) throw new Error(`Bad lineHeight ${v}`);
+    return v <= 3 ? pct(v * 100) : px(v);
+  }
+  function resolveLetterSpacing(v) {
+    if (v === void 0 || v === null || v === "") return void 0;
+    if (typeof v === "string") {
+      const s = v.trim().toLowerCase();
+      if (s === "normal") return void 0;
+      if (s.endsWith("em")) return pct(parseFloat(s) * 100);
+      if (s.endsWith("%")) return pct(parseFloat(s));
+      if (s.endsWith("px")) return px(parseFloat(s));
+      const n = Number(s);
+      if (!Number.isFinite(n)) throw new Error(`Bad letterSpacing "${v}"`);
+      v = n;
+    }
+    if (!Number.isFinite(v)) throw new Error(`Bad letterSpacing ${v}`);
+    return px(v);
+  }
+  function pct(value) {
+    if (!Number.isFinite(value)) throw new Error("Bad percent value");
+    return { value: round(value), unit: "PERCENT" };
+  }
+  function px(value) {
+    if (!Number.isFinite(value)) throw new Error("Bad pixel value");
+    return { value: round(value), unit: "PIXELS" };
+  }
+  function round(n) {
+    return Math.round(n * 1e3) / 1e3;
+  }
 
   // ../shared/geometry.ts
   function resolveDirectionDegrees(dir) {
@@ -136,6 +308,266 @@
   async function saveMapping(mapping) {
     await figma.clientStorage.setAsync(MAPPING_KEY, mapping);
   }
+  function motionAvailable() {
+    const m = figma.motion;
+    return !!m && typeof m.figmaAnimationStyles === "function";
+  }
+  function listAnimationStyles() {
+    if (!motionAvailable()) return [];
+    try {
+      return figma.motion.figmaAnimationStyles();
+    } catch (e) {
+      console.error("figmaAnimationStyles failed:", e);
+      return [];
+    }
+  }
+  function ensureTimelineCovers(node, seconds) {
+    try {
+      const timelines = node.timelines;
+      const tl = timelines && timelines[0];
+      if (tl && tl.duration < seconds) node.setTimelineDuration(tl.id, seconds);
+    } catch (e) {
+      console.error("setTimelineDuration failed:", e);
+    }
+  }
+  function applyRevealToNode(node, reveal, styles, warnings) {
+    const base = {
+      id: node.id,
+      name: node.name,
+      mode: "unavailable",
+      step: reveal.step,
+      offset: reveal.offset,
+      duration: reveal.duration
+    };
+    const n = node;
+    if (typeof n.applyAnimationStyle !== "function" && typeof n.applyManualKeyframeTrack !== "function") {
+      warnings.push(`"${node.name}": this node type has no Motion API; reveal skipped`);
+      return base;
+    }
+    const style = pickAnimationStyle(styles, reveal.style);
+    if (reveal.style && !style) {
+      warnings.push(`"${node.name}": no animation style matches "${reveal.style}" (available: ${styles.map((s) => s.name).join(", ") || "none"}); using an opacity keyframe instead`);
+    }
+    if (style && typeof n.applyAnimationStyle === "function") {
+      try {
+        n.applyAnimationStyle(style.styleId, {
+          duration: reveal.duration,
+          timelineOffset: reveal.offset,
+          props: reveal.props
+        });
+        ensureTimelineCovers(node, revealEndsAt(reveal) + 0.1);
+        return __spreadProps(__spreadValues({}, base), { mode: "style", style: style.name });
+      } catch (e) {
+        warnings.push(`"${node.name}": applyAnimationStyle(${style.name}) failed: ${e instanceof Error ? e.message : String(e)}; using an opacity keyframe instead`);
+      }
+    }
+    n.applyManualKeyframeTrack(
+      { type: "PROPERTY", name: "OPACITY" },
+      {
+        baseValue: { type: "FLOAT", value: 0 },
+        keyframes: [
+          { timelinePosition: reveal.offset, value: { type: "FLOAT", value: 0 } },
+          { timelinePosition: revealEndsAt(reveal), value: { type: "FLOAT", value: 1 } }
+        ]
+      }
+    );
+    ensureTimelineCovers(node, revealEndsAt(reveal) + 0.1);
+    return __spreadProps(__spreadValues({}, base), { mode: "keyframe" });
+  }
+  function buildRevealGroups(slide, reveals, stepSeconds, warnings) {
+    var _a2;
+    const byKey = /* @__PURE__ */ new Map();
+    let lastStep = 0;
+    for (const r of reveals) lastStep = Math.max(lastStep, stepFromReveal(r.reveal, stepSeconds));
+    for (const r of reveals) {
+      if (r.node.parent !== slide) {
+        warnings.push(`"${r.node.name}" is not a direct child of the slide; reveal groups only take top-level elements`);
+        continue;
+      }
+      const step = stepFromReveal(r.reveal, stepSeconds);
+      const until = r.reveal.until !== void 0 && r.reveal.until < lastStep ? r.reveal.until : void 0;
+      if (step === 0 && until === void 0) continue;
+      const key = `${step}|${until != null ? until : ""}`;
+      const g = (_a2 = byKey.get(key)) != null ? _a2 : { step, until, nodes: [] };
+      g.nodes.push(r.node);
+      byKey.set(key, g);
+    }
+    const results = [];
+    const keys = Array.from(byKey.keys()).sort((a, b) => {
+      var _a3, _b;
+      const ga = byKey.get(a), gb = byKey.get(b);
+      return ga.step - gb.step || ((_a3 = ga.until) != null ? _a3 : 99) - ((_b = gb.until) != null ? _b : 99);
+    });
+    for (const key of keys) {
+      const g = byKey.get(key);
+      const children = slide.children;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, topIndex = -1;
+      for (const n of g.nodes) {
+        minX = Math.min(minX, n.x);
+        minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + n.width);
+        maxY = Math.max(maxY, n.y + n.height);
+        topIndex = Math.max(topIndex, children.indexOf(n));
+      }
+      const frame = figma.createFrame();
+      frame.name = (g.step > 0 ? `Reveal ${g.step}` : "Visible at start") + (g.until !== void 0 ? ` \xB7 exit after ${g.until}` : "");
+      frame.fills = [];
+      frame.clipsContent = false;
+      frame.resize(Math.max(1, maxX - minX), Math.max(1, maxY - minY));
+      slide.insertChild(Math.min(topIndex + 1, children.length), frame);
+      frame.x = minX;
+      frame.y = minY;
+      for (const n of g.nodes) {
+        const ax = n.x, ay = n.y;
+        frame.appendChild(n);
+        n.x = ax - minX;
+        n.y = ay - minY;
+      }
+      results.push({ id: frame.id, name: frame.name, step: g.step, until: g.until, members: g.nodes.map((n) => n.name) });
+    }
+    return results;
+  }
+  function setBuildTransition(slide, duration, style, warnings) {
+    const sl = slide;
+    if (typeof sl.setSlideTransition !== "function") {
+      warnings.push(`"${slide.name}": not a Slide node, no transition set`);
+      return;
+    }
+    try {
+      sl.setSlideTransition({ style, duration, curve: "EASE_IN_AND_OUT", timing: { type: "ON_CLICK" } });
+    } catch (e) {
+      warnings.push(`"${slide.name}": setSlideTransition(${style}) failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  function buildStepSlides(slide, stepOfChild, duration, transition, warnings) {
+    let maxStep = 0;
+    stepOfChild.forEach((v) => {
+      if (v.from > maxStep) maxStep = v.from;
+      if (v.until !== void 0 && v.until + 1 > maxStep) maxStep = v.until + 1;
+    });
+    if (maxStep === 0) return [];
+    const parent = slide.parent;
+    if (!parent || !("insertChild" in parent)) {
+      warnings.push("Cannot place step slides: the slide has no container");
+      return [];
+    }
+    const baseName = slide.name.replace(/ · \d+\/\d+$/, "");
+    const children = slide.children;
+    const rangeByIndex = children.map((c) => {
+      var _a2;
+      return (_a2 = stepOfChild.get(c.id)) != null ? _a2 : { from: 0 };
+    });
+    const visibleAt = (r, k) => k >= r.from && (r.until === void 0 || k <= r.until);
+    const results = [];
+    for (let k = 0; k < maxStep; k++) {
+      const clone = slide.clone();
+      const cloneChildren = clone.children;
+      for (let i = cloneChildren.length - 1; i >= 0; i--) {
+        if (!visibleAt(rangeByIndex[i], k)) cloneChildren[i].remove();
+      }
+      clone.name = `${baseName} \xB7 ${k}/${maxStep}`;
+      const idx = parent.children.indexOf(slide);
+      parent.insertChild(idx < 0 ? parent.children.length : idx, clone);
+      if (k > 0) setBuildTransition(clone, duration, transition, warnings);
+      results.push({ id: clone.id, name: clone.name, step: k, transition: k > 0 ? transition : "none" });
+    }
+    for (let i = children.length - 1; i >= 0; i--) {
+      if (!visibleAt(rangeByIndex[i], maxStep)) children[i].remove();
+    }
+    slide.name = `${baseName} \xB7 ${maxStep}/${maxStep}`;
+    setBuildTransition(slide, duration, transition, warnings);
+    results.push({ id: slide.id, name: slide.name, step: maxStep, transition });
+    return results;
+  }
+  function applyRevealsToNodes(slide, reveals, warnings, stepSeconds, buildMode, transition) {
+    const none = { animated: [], stepSlides: [], groups: [], mode: "none" };
+    if (reveals.length === 0) return none;
+    const canMotion = motionAvailable();
+    const useMotion = buildMode === "motion" ? true : buildMode === "slides" || buildMode === "groups" ? false : canMotion;
+    if (useMotion) {
+      if (!canMotion) {
+        warnings.push(`${reveals.length} reveal(s) ignored: Motion API unavailable here (figma.motion is undefined in the ${figma.editorType} editor). Use build_mode "slides" for step slides with Smart Animate.`);
+        return none;
+      }
+      const styles = listAnimationStyles();
+      const leaving = reveals.filter((r) => r.reveal.until !== void 0);
+      if (leaving.length) warnings.push(`${leaving.length} reveal(s) have 'until'; Motion styles only animate arrivals, so those elements stay visible`);
+      const animated = reveals.map((r) => applyRevealToNode(r.node, r.reveal, styles, warnings));
+      return { animated, stepSlides: [], groups: [], mode: "motion" };
+    }
+    if (!isInSlides()) {
+      warnings.push(`${reveals.length} reveal(s) ignored: step slides need the Slides editor and Motion is unavailable in this ${figma.editorType} file.`);
+      return none;
+    }
+    if (buildMode !== "slides") {
+      const groups = buildRevealGroups(slide, reveals, stepSeconds, warnings);
+      return { animated: [], stepSlides: [], groups, mode: "groups" };
+    }
+    const stepOfChild = /* @__PURE__ */ new Map();
+    let duration = 0;
+    for (const r of reveals) {
+      if (r.node.parent !== slide) {
+        warnings.push(`"${r.node.name}" is not a direct child of the slide; step slides only handle top-level elements`);
+        continue;
+      }
+      stepOfChild.set(r.node.id, { from: stepFromReveal(r.reveal, stepSeconds), until: r.reveal.until });
+      if (r.reveal.duration > duration) duration = r.reveal.duration;
+    }
+    const stepSlides = buildStepSlides(slide, stepOfChild, duration || 0.4, transition, warnings);
+    return { animated: [], stepSlides, groups: [], mode: "slides" };
+  }
+  function applyPrimitiveReveals(slide, operations, nodesByName, warnings, stepSeconds, buildMode = "auto", transition) {
+    const wanted = operations.filter((o) => o.reveal !== void 0 && o.reveal !== null);
+    if (wanted.length === 0) return { animated: [], stepSlides: [], groups: [], mode: "none" };
+    const reveals = [];
+    for (const o of wanted) {
+      if (o.op === "background") {
+        warnings.push("reveal on background ignored");
+        continue;
+      }
+      if (!o.name || !nodesByName[o.name]) {
+        warnings.push(`reveal needs a named op that created a node (op "${o.op}"${o.name ? ` named "${o.name}"` : ""})`);
+        continue;
+      }
+      const reveal = normaliseReveal(o.reveal, stepSeconds);
+      if (reveal) reveals.push({ node: nodesByName[o.name], reveal });
+    }
+    return applyRevealsToNodes(slide, reveals, warnings, stepSeconds, buildMode, normaliseTransition(transition));
+  }
+  function describeMotion(node) {
+    const n = node;
+    const styles = n.animationStyles || [];
+    const animations = n.animations ? Object.keys(n.animations) : [];
+    const manual = n.manualKeyframeTracks ? Object.keys(n.manualKeyframeTracks) : [];
+    const timelines = n.timelines || [];
+    return {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      animationStyles: styles.map((s) => ({ id: s.id, name: s.name, duration: s.duration, timelineOffset: s.timelineOffset, props: s.props })),
+      animatedProperties: animations,
+      manualTracks: manual,
+      timelines
+    };
+  }
+  function clearMotion(node) {
+    const n = node;
+    let removed = 0;
+    try {
+      for (const s of n.animationStyles || []) {
+        n.removeAnimationStyle(s.id);
+        removed++;
+      }
+      for (const field of Object.keys(n.manualKeyframeTracks || {})) {
+        if (field === "fills" || field === "strokes" || field === "effects") continue;
+        n.removeManualKeyframeTrack({ type: "PROPERTY", name: field });
+        removed++;
+      }
+    } catch (e) {
+      console.error("clearMotion failed:", e);
+    }
+    return removed;
+  }
   function isInSlides() {
     return figma.editorType === "slides";
   }
@@ -186,6 +618,28 @@
     }
     const font = await loadFontWithFallback();
     return bold ? font.bold : font.regular;
+  }
+  var styleFontCache = {};
+  async function getFontForWeight(family, weight, bold) {
+    const w = normaliseWeight(weight, bold);
+    if (w === void 0 || w === 400 || w === 700 && family === void 0) {
+      return { font: await getFontName(w === 700, family) };
+    }
+    const base = family ? await getFontName(false, family) : (await loadFontWithFallback()).regular;
+    for (const style of styleCandidates(w)) {
+      const key = `${base.family}::${style}`;
+      if (styleFontCache[key] === void 0) {
+        try {
+          await figma.loadFontAsync({ family: base.family, style });
+          styleFontCache[key] = { family: base.family, style };
+        } catch (e) {
+          styleFontCache[key] = null;
+        }
+      }
+      const f = styleFontCache[key];
+      if (f) return style === styleCandidates(w)[0] ? { font: f } : { font: f, degraded: `${base.family} has no ${styleCandidates(w)[0]}; used ${style}` };
+    }
+    return { font: await getFontName(w >= 600, family), degraded: `${base.family} has no weight ${w}; used ${w >= 600 ? "Bold" : "Regular"}` };
   }
   async function addText(parent, text, x, y, fontSize, bold = false, color = COLORS.white, maxWidth, nodeName, fontFamily) {
     const textNode = figma.createText();
@@ -2018,7 +2472,7 @@
     return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
   }
   figma.ui.onmessage = async (msg) => {
-    var _a2, _b, _c, _d, _e, _f, _g, _h;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _l, _m;
     try {
       if (msg.type === "apply-ir") {
         if (!msg.ir) {
@@ -3077,8 +3531,9 @@
               } else if (op.op === "text") {
                 const textNode = figma.createText();
                 if (op.name) textNode.name = op.name;
-                const fontName = await getFontName(op.bold || false, op.fontFamily);
-                textNode.fontName = fontName;
+                const resolved = await getFontForWeight(op.fontFamily, op.weight, op.bold || false);
+                textNode.fontName = resolved.font;
+                if (resolved.degraded && !warnings.includes(resolved.degraded)) warnings.push(resolved.degraded);
                 const requestedSize = op.fontSize || 24;
                 if (requestedSize < MIN_FONT_SIZE) {
                   const preview = (op.text || "").substring(0, 30) + ((op.text || "").length > 30 ? "..." : "");
@@ -3087,6 +3542,10 @@
                 textNode.fontSize = requestedSize;
                 textNode.fills = [{ type: "SOLID", color: resolveColor2(op.color) }];
                 textNode.characters = op.text || "";
+                const lh = resolveLineHeight(op.lineHeight);
+                if (lh) textNode.lineHeight = lh;
+                const ls = resolveLetterSpacing(op.letterSpacing);
+                if (ls) textNode.letterSpacing = ls;
                 if (op.width && op.height) {
                   textNode.resize(op.width, op.height);
                   textNode.textAutoResize = "NONE";
@@ -3384,9 +3843,26 @@
               throw new Error(`Operation "${op.op}" failed: ${opErr instanceof Error ? opErr.message : String(opErr)}`);
             }
           }
+          for (const o of operations) {
+            if (o.visible === false && o.name && nodesByName[o.name]) nodesByName[o.name].visible = false;
+            else if (o.visible === false) warnings.push(`visible:false needs a named op (op "${o.op}")`);
+          }
+          const stepSeconds = msg.stepSeconds;
+          const outcome = applyPrimitiveReveals(
+            targetSlide,
+            operations,
+            nodesByName,
+            warnings,
+            stepSeconds,
+            msg.buildMode || "auto",
+            msg.transition
+          );
+          const animated = outcome.animated;
+          const stepSlides = outcome.stepSlides;
+          const groups = outcome.groups;
           figma.currentPage.selection = [targetSlide];
           figma.viewport.scrollAndZoomIntoView([targetSlide]);
-          const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"`;
+          const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"` + (animated.length > 0 ? `, ${animated.length} with reveals` : "") + (stepSlides.length > 0 ? `, ${stepSlides.length} build slides` : "") + (groups.length > 0 ? `, ${groups.length} reveal groups` : "");
           figma.notify(summary);
           if (warnings.length > 0) {
             figma.notify(`\u26A0\uFE0F ${warnings.length} design warning(s)`, { timeout: 3e3 });
@@ -3397,6 +3873,9 @@
             slideId: targetSlide.id,
             slideName: targetSlide.name,
             created: createdNodes,
+            animated: animated.length > 0 ? animated : void 0,
+            stepSlides: stepSlides.length > 0 ? stepSlides : void 0,
+            groups: groups.length > 0 ? groups : void 0,
             warnings: warnings.length > 0 ? warnings : void 0
           });
         } catch (err) {
@@ -3593,6 +4072,185 @@
           }));
         }
         figma.ui.postMessage(result);
+      }
+      if (msg.type === "apply-motion") {
+        const action = msg.action;
+        const targets = msg.targets || [];
+        const reply = (payload) => figma.ui.postMessage(__spreadValues({ type: "motion-result", action }, payload));
+        try {
+          if ((action === "list" || action === "clear") && !motionAvailable()) {
+            const api = (_i = figma.apiVersion) != null ? _i : "unknown";
+            const editor = (_j = figma.editorType) != null ? _j : "unknown";
+            throw new Error(`Motion API unavailable here (figma.motion is ${typeof figma.motion}; apiVersion ${api}, editor ${editor}). It needs Plugin API 1.130+ and an editor that exposes Motion. Reveals fall back to separate slides.`);
+          }
+          if (action === "list") {
+            const styles = listAnimationStyles().map((s) => ({
+              styleId: s.styleId,
+              name: s.name,
+              description: s.description,
+              props: s.props
+            }));
+            reply({ success: true, styles });
+            return;
+          }
+          if (action === "apply") {
+            const requested = msg.reveals || [];
+            if (requested.length === 0) throw new Error("No reveals provided");
+            const stepSeconds = msg.stepSeconds;
+            const buildMode = msg.buildMode || "auto";
+            const transition = normaliseTransition(msg.transition);
+            const warnings = [];
+            const reveals = [];
+            let slide = null;
+            for (const r of requested) {
+              const node = await figma.getNodeByIdAsync(r.target);
+              if (!node) {
+                warnings.push(`Target not found: ${r.target}`);
+                continue;
+              }
+              const _k = r, { target } = _k, spec = __objRest(_k, ["target"]);
+              const reveal = normaliseReveal(spec, stepSeconds);
+              if (!reveal) continue;
+              let p = node.parent;
+              while (p && p.type !== "SLIDE" && !(p.type === "FRAME" && p.parent && p.parent.type === "PAGE")) p = p.parent;
+              if (!p) {
+                warnings.push(`"${node.name}" is not on a slide`);
+                continue;
+              }
+              if (slide && p.id !== slide.id) {
+                warnings.push(`"${node.name}" is on a different slide (${p.name}); one slide per apply`);
+                continue;
+              }
+              slide = p;
+              reveals.push({ node, reveal });
+            }
+            if (!slide) throw new Error("No valid targets on a slide");
+            const outcome = applyRevealsToNodes(slide, reveals, warnings, stepSeconds, buildMode, transition);
+            figma.notify(outcome.mode === "slides" ? `Built ${outcome.stepSlides.length} step slides (${transition})` : outcome.mode === "groups" ? `Grouped ${outcome.groups.length} reveal step(s) \u2014 add one object animation per group` : `Applied ${outcome.animated.length} reveal(s)`);
+            reply({ success: true, mode: outcome.mode, applied: outcome.animated, stepSlides: outcome.stepSlides, groups: outcome.groups, warnings: warnings.length ? warnings : void 0 });
+            return;
+          }
+          if (action === "inspect" || action === "clear") {
+            if (targets.length === 0) throw new Error("targets required: slide or node IDs");
+            const nodes = [];
+            const slides = [];
+            for (const id of targets) {
+              const n = await figma.getNodeByIdAsync(id);
+              if (!n) continue;
+              if ("children" in n && (n.type === "SLIDE" || n.type === "FRAME")) {
+                nodes.push(...n.children);
+                let transition;
+                try {
+                  transition = typeof n.getSlideTransition === "function" ? n.getSlideTransition() : void 0;
+                } catch (e) {
+                  transition = void 0;
+                }
+                slides.push({ id: n.id, name: n.name, transition, skipped: n.isSkippedSlide });
+              } else {
+                nodes.push(n);
+              }
+            }
+            if (action === "inspect") {
+              const report = nodes.map((n) => describeMotion(n));
+              reply({ success: true, nodes: report, slides, motionAvailable: motionAvailable(), apiVersion: figma.apiVersion, editorType: figma.editorType });
+              return;
+            }
+            let removed = 0;
+            for (const n of nodes) removed += clearMotion(n);
+            figma.notify(`Cleared ${removed} animation(s)`);
+            reply({ success: true, removed, nodes: nodes.length });
+            return;
+          }
+          throw new Error(`Unknown motion action: ${action}`);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error("Motion error:", errorMsg);
+          figma.notify(`Motion failed: ${errorMsg}`, { error: true });
+          reply({ success: false, error: errorMsg });
+        }
+      }
+      if (msg.type === "apply-probe") {
+        const action = msg.action;
+        const reply = (payload) => figma.ui.postMessage(__spreadValues({ type: "probe-result", action }, payload));
+        const safeJson = (v, depth = 3) => {
+          const seen = /* @__PURE__ */ new WeakSet();
+          const walk = (x, d) => {
+            var _a3, _b2, _c2;
+            if (x === null || typeof x !== "object") return typeof x === "function" ? `[fn ${x.name || "anonymous"}]` : typeof x === "symbol" ? String(x) : x;
+            if (seen.has(x)) return "[circular]";
+            if (d <= 0) return Array.isArray(x) ? `[array ${x.length}]` : `[object ${(_c2 = (_b2 = x.type) != null ? _b2 : (_a3 = x.constructor) == null ? void 0 : _a3.name) != null ? _c2 : ""}]`;
+            seen.add(x);
+            if (Array.isArray(x)) return x.slice(0, 50).map((i) => walk(i, d - 1));
+            const out = {};
+            for (const k of Object.keys(x).slice(0, 80)) {
+              try {
+                out[k] = walk(x[k], d - 1);
+              } catch (e) {
+                out[k] = `[throws: ${e instanceof Error ? e.message : String(e)}]`;
+              }
+            }
+            return out;
+          };
+          return walk(v, depth);
+        };
+        const protoNames = (obj) => {
+          const names = /* @__PURE__ */ new Set();
+          let o = obj;
+          while (o && o !== Object.prototype) {
+            for (const n of Object.getOwnPropertyNames(o)) names.add(n);
+            for (const s of Object.getOwnPropertySymbols(o)) names.add(String(s));
+            o = Object.getPrototypeOf(o);
+          }
+          return Array.from(names).sort();
+        };
+        try {
+          if (action === "globals") {
+            const f = figma;
+            const top = protoNames(f);
+            const namespaces = {};
+            for (const k of top) {
+              try {
+                const v = f[k];
+                if (v && typeof v === "object") namespaces[k] = protoNames(v).slice(0, 200);
+              } catch (e) {
+              }
+            }
+            reply({ success: true, editorType: f.editorType, apiVersion: f.apiVersion, figma: top, namespaces, hasMotion: typeof f.motion, globals: protoNames(globalThis).filter((n) => !/^(Array|Object|Function|String|Number|Boolean|Symbol|Math|JSON|Date|RegExp|Error|Promise|Map|Set|WeakMap|WeakSet|Reflect|Proxy|Intl|ArrayBuffer|DataView|Uint|Int|Float|BigInt|globalThis|undefined|NaN|Infinity|parseInt|parseFloat|isNaN|isFinite|decodeURI|encodeURI|escape|unescape|eval|console|setTimeout|clearTimeout|setInterval|clearInterval|TypeError|RangeError|SyntaxError|ReferenceError|EvalError|URIError|Atomics|SharedArrayBuffer|TextEncoder|TextDecoder|queueMicrotask|structuredClone)/.test(n)) });
+            return;
+          }
+          if (action === "node") {
+            const id = msg.nodeId;
+            const node = id ? await figma.getNodeByIdAsync(id) : (_l = figma.currentPage.selection[0]) != null ? _l : null;
+            if (!node) throw new Error("node not found (pass nodeId or select one)");
+            const filter = msg.filter ? new RegExp(msg.filter, "i") : null;
+            const names = protoNames(node).filter((n) => !filter || filter.test(n));
+            const values = {};
+            for (const n of names) {
+              try {
+                const v = node[n];
+                values[n] = typeof v === "function" ? `[fn/${v.length}]` : safeJson(v, 2);
+              } catch (e) {
+                values[n] = `[throws: ${e instanceof Error ? e.message : String(e)}]`;
+              }
+            }
+            reply({ success: true, id: node.id, name: node.name, type: node.type, count: names.length, values });
+            return;
+          }
+          if (action === "eval") {
+            const code = msg.code;
+            if (!code) throw new Error("code required");
+            const id = msg.nodeId;
+            const node = id ? await figma.getNodeByIdAsync(id) : (_m = figma.currentPage.selection[0]) != null ? _m : null;
+            const fn = new Function("figma", "node", "protoNames", "safeJson", `return (async () => { ${code} })();`);
+            const result = await fn(figma, node, protoNames, safeJson);
+            reply({ success: true, result: safeJson(result, 4) });
+            return;
+          }
+          throw new Error(`Unknown probe action: ${action}`);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.stack || err.message : String(err);
+          reply({ success: false, error: errorMsg });
+        }
       }
       if (msg.type === "find-nodes") {
         const nodeType = msg.nodeType;

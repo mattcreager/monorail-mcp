@@ -885,7 +885,7 @@
           ws.send(JSON.stringify({
             type: 'primitives-applied', success: msg.success,
             slideId: msg.slideId, slideName: msg.slideName,
-            created: msg.created, warnings: msg.warnings, error: msg.error
+            created: msg.created, animated: msg.animated, stepSlides: msg.stepSlides, groups: msg.groups, warnings: msg.warnings, error: msg.error
           }));
         }
         if (msg.warnings?.length > 0) {
@@ -923,6 +923,24 @@
       if (msg.type === 'component-info') {
         addActivity(msg.success ? '\u2713' : '\u2717',
           msg.success ? `Component "${msg.node?.name}"` : `Component failed: ${msg.error}`);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        }
+      }
+
+      // Probe (API exploration)
+      if (msg.type === 'probe-result') {
+        addActivity(msg.success ? '\u2713' : '\u2717', msg.success ? `probe ${msg.action}` : `probe failed: ${msg.error}`);
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+      }
+
+      // Motion (native object animations)
+      if (msg.type === 'motion-result') {
+        const what = msg.action === 'list' ? `${msg.styles?.length || 0} animation style(s)`
+          : msg.action === 'apply' ? `${msg.applied?.length || 0} reveal(s)`
+          : msg.action === 'clear' ? `cleared ${msg.removed || 0} animation(s)`
+          : `inspected ${Array.isArray(msg.nodes) ? msg.nodes.length : 0} node(s)`;
+        addActivity(msg.success ? '\u2713' : '\u2717', msg.success ? what : `Motion failed: ${msg.error}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(msg));
         }

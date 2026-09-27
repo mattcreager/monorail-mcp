@@ -1296,3 +1296,21 @@ Design principles > more archetypes. Principles compound, archetypes are O(n) wo
 - `shared/types.ts` — shared TypeScript types
 - `docs/decisions/template-first-architecture.md` — architecture direction
 ```
+
+## Session 2026-09-14 — Native reveals (Motion API)
+
+**Ask:** builds/reveals with Figma's native animation tools instead of one slide per state.
+
+**Done:**
+- Upgraded `@figma/plugin-typings` 1.121 → 1.138 (adds `figma.motion`, `MotionNodeMixin`).
+- `shared/motion.ts`: step → timeline offset, style matching, validation. `test/motion.test.js` pins it.
+- Plugin: `reveal` field on primitive ops (applied after the op loop, so a late failure can't drop a reveal);
+  `apply-motion` message with list / apply / inspect / clear; opacity-keyframe fallback when no style matches.
+- Server: `monorail_motion` tool; `step_seconds` + `reveal` in the primitives schema; reveals listed in results.
+- SKILL.md pattern "Reveals: native object animations, not slide copies".
+
+**Resolved on a live deck:** `figma.motion` is undefined in the Slides editor, and Slides object animations have
+no Plugin API. So in Slides a reveal becomes a clone-based step slide with a native SMART_ANIMATE transition
+(`build_mode` auto|motion|slides|groups, `transition` SMART_ANIMATE|DISSOLVE|NONE). Motion stays the path for Design
+files. Presenter feedback: step slides "animate the copy in but don't build one slide" — so the Slides default became
+`groups`: one slide, a transparent frame per step (`Reveal N`), one manual Fade in / On click per frame. Also fixed: `src/proxy.ts` allowlists message types — new tools must be added there. See docs/failures.md.

@@ -1,6 +1,6 @@
 # Monorail
 
-MCP server for real-time design collaboration in Figma. 14 tools across 5 categories.
+MCP server for real-time design collaboration in Figma. 15 tools across 5 categories.
 
 ## Architecture
 
@@ -15,11 +15,12 @@ MCP server for real-time design collaboration in Figma. 14 tools across 5 catego
 - Build plugin: `cd figma-plugin && npm run build`
 - Watch server: `npm run dev`
 - Watch plugin: `cd figma-plugin && npm run watch`
-- No test suite currently
+- Tests: `npm test` (node:test against dist/) — geometry and motion helpers
 
 ## Key Files
 
-- `src/index.ts` — All 14 MCP tool definitions and handlers
+- `src/index.ts` — All 15 MCP tool definitions and handlers
+- `shared/motion.ts` — pure logic for native reveals (build step → timeline offset, style matching); tested in `test/motion.test.js`
 - `figma-plugin/code.ts` — Plugin logic (all Figma API calls)
 - `shared/types.ts` — TypeScript interfaces shared between server and plugin
 - `docs/SKILL.md` — Narrative methodology (loaded as MCP resource)

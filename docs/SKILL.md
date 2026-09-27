@@ -242,6 +242,48 @@ Primitives give you:
 - Mixed element types (text + rect + line)
 - Visual hierarchy through layering
 
+### Reveals: declare build steps once, let Monorail pick the native mechanism
+
+Author the settled slide once and mark what arrives later. Never hand-build
+one slide per state.
+
+```
+1. Build the settled state with monorail_primitives.
+2. Put `reveal` on any named op that should arrive later:
+     { "op": "text", "name": "work", ..., "reveal": 1 }
+     { "op": "text", "name": "ownership", ..., "reveal": { "step": 2, "style": "fade in" } }
+3. Read the result: it lists either Motion reveals or the step slides it made.
+4. Screenshot each step slide; monorail_motion inspect on the slide IDs shows
+   the enter transitions.
+```
+
+What happens depends on the editor (`build_mode: "auto"`):
+
+- **Design editor** — `figma.motion` exists. Each element gets a Motion
+  animation style at offset step × `step_seconds`; no style match → an
+  opacity keyframe. One slide.
+- **Figma Slides** — the Plugin API exposes no object animations
+  (`figma.motion` is undefined; Slides' Object animations panel has no API).
+  Default: **one slide, one transparent frame per step** named `Reveal 1`,
+  `Reveal 2` (`· exit after k` when an element leaves). Slides allows one object
+  animation per object and a frame is one object, so the presenter finishes
+  with one click per group in the Animate tab: Fade in, On click. Tell the user
+  this explicitly — it is the only manual step.
+- `build_mode: "slides"` instead clones the slide into one slide per step with a
+  native `SMART_ANIMATE` transition (or `DISSOLVE`). No manual step, but N slides
+  per scene in the grid; the clones are named `name · k/N`.
+
+Rules of thumb:
+
+- Elements that mask a connector (a label on a line) take the *same* step as
+  the line, or the line shows through before the label arrives.
+- Only top-level children of the slide become steps; nest inside a frame if a
+  group must arrive together.
+- To animate an existing slide: `monorail_pull` for node IDs, then
+  `monorail_motion apply` with `reveals`. Applying again to a slide that already
+  has step slides or groups makes more — delete the old slides / ungroup first.
+- `monorail_motion list` and `clear` are Motion-only and error in Slides.
+
 ### Reordering for Narrative
 
 Use `monorail_reorder` freely. It's reliable and lets you restructure the deck without touching content.

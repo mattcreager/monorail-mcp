@@ -3,6 +3,9 @@
 
 // Import shared types (type-only imports are erased at compile time by esbuild)
 import type { SlideContent, Slide, DeckIR, ElementInfo, AddableContainer } from '../shared/types';
+import { normaliseReveal, pickAnimationStyle, revealEndsAt, stepFromReveal, normaliseTransition } from '../shared/motion';
+import type { NormalisedReveal, RevealSpec } from '../shared/motion';
+import { normaliseWeight, styleCandidates, resolveLineHeight, resolveLetterSpacing } from '../shared/typography';
 // Pure geometry, factored out so test/geometry.test.js can pin it without Figma.
 // esbuild bundles this in; keep it free of Figma API calls.
 import {
@@ -79,6 +82,369 @@ async function saveMapping(mapping: Record<string, string>): Promise<void> {
 }
 
 // Check if we're in Figma Slides
+// ── Motion helpers (native object animations) ────────────────────────────
+// The Plugin API models Slides object animations as Motion animation styles
+// on a node, positioned on the slide's timeline. There is no click-trigger
+// field, so a build step is a timeline offset (step × stepSeconds). Anything
+// that cannot use a style falls back to a manual opacity keyframe track so the
+// element still arrives at the right moment.
+
+interface RevealResult {
+  id: string;
+  name: string;
+  mode: 'style' | 'keyframe' | 'unavailable';
+  style?: string;
+  step?: number;
+  offset: number;
+  duration: number;
+}
+
+function motionAvailable(): boolean {
+  const m = (figma as any).motion;
+  return !!m && typeof m.figmaAnimationStyles === 'function';
+}
+
+function listAnimationStyles(): Array<{ styleId: string; name: string }> {
+  if (!motionAvailable()) return [];
+  try {
+    return (figma as any).motion.figmaAnimationStyles() as Array<{ styleId: string; name: string }>;
+  } catch (e) {
+    console.error('figmaAnimationStyles failed:', e);
+    return [];
+  }
+}
+
+/** Grow the node's timeline so a reveal placed late on it can finish. */
+function ensureTimelineCovers(node: SceneNode, seconds: number): void {
+  try {
+    const timelines = (node as any).timelines as Array<{ id: string; duration: number }> | undefined;
+    const tl = timelines && timelines[0];
+    if (tl && tl.duration < seconds) (node as any).setTimelineDuration(tl.id, seconds);
+  } catch (e) {
+    console.error('setTimelineDuration failed:', e);
+  }
+}
+
+function applyRevealToNode(
+  node: SceneNode,
+  reveal: NormalisedReveal,
+  styles: Array<{ styleId: string; name: string }>,
+  warnings: string[],
+): RevealResult {
+  const base: RevealResult = {
+    id: node.id, name: node.name, mode: 'unavailable',
+    step: reveal.step, offset: reveal.offset, duration: reveal.duration,
+  };
+  const n = node as any;
+  if (typeof n.applyAnimationStyle !== 'function' && typeof n.applyManualKeyframeTrack !== 'function') {
+    warnings.push(`"${node.name}": this node type has no Motion API; reveal skipped`);
+    return base;
+  }
+
+  const style = pickAnimationStyle(styles, reveal.style);
+  if (reveal.style && !style) {
+    warnings.push(`"${node.name}": no animation style matches "${reveal.style}" (available: ${styles.map(s => s.name).join(', ') || 'none'}); using an opacity keyframe instead`);
+  }
+  if (style && typeof n.applyAnimationStyle === 'function') {
+    try {
+      n.applyAnimationStyle(style.styleId, {
+        duration: reveal.duration,
+        timelineOffset: reveal.offset,
+        props: reveal.props,
+      });
+      ensureTimelineCovers(node, revealEndsAt(reveal) + 0.1);
+      return { ...base, mode: 'style', style: style.name };
+    } catch (e) {
+      warnings.push(`"${node.name}": applyAnimationStyle(${style.name}) failed: ${e instanceof Error ? e.message : String(e)}; using an opacity keyframe instead`);
+    }
+  }
+
+  // Fallback: hidden until offset, then fade to full opacity.
+  n.applyManualKeyframeTrack(
+    { type: 'PROPERTY', name: 'OPACITY' },
+    {
+      baseValue: { type: 'FLOAT', value: 0 },
+      keyframes: [
+        { timelinePosition: reveal.offset, value: { type: 'FLOAT', value: 0 } },
+        { timelinePosition: revealEndsAt(reveal), value: { type: 'FLOAT', value: 1 } },
+      ],
+    },
+  );
+  ensureTimelineCovers(node, revealEndsAt(reveal) + 0.1);
+  return { ...base, mode: 'keyframe' };
+}
+
+type BuildMode = 'auto' | 'motion' | 'slides' | 'groups';
+
+interface StepSlideResult { id: string; name: string; step: number; transition: string }
+
+interface RevealGroupResult { id: string; name: string; step: number; until?: number; members: string[] }
+
+interface RevealOutcome {
+  /** Motion animation styles / keyframes applied on one slide. */
+  animated: RevealResult[];
+  /** Slides fallback: one slide per build state with a native transition. */
+  stepSlides: StepSlideResult[];
+  /** Slides: one frame per build step on a single slide, ready for one object animation each. */
+  groups: RevealGroupResult[];
+  /** Which path ran. */
+  mode: 'motion' | 'slides' | 'groups' | 'none';
+}
+
+/**
+ * Slides, single-slide builds. Figma Slides applies one object animation per
+ * object and a frame counts as one object, so wrapping each step's elements
+ * in a frame turns "animate this build" into one click per step in the
+ * Animate panel: select "Reveal 1", choose Fade in, On click. The plugin cannot
+ * set the animation itself (no API), but it leaves nothing else to do.
+ *
+ * Frames are transparent, do not clip, sit at the members' bounding box, and
+ * take the z-position of their top-most member so stacking is preserved.
+ */
+function buildRevealGroups(
+  slide: SceneNode & ChildrenMixin,
+  reveals: Array<{ node: SceneNode; reveal: NormalisedReveal }>,
+  stepSeconds: number | undefined,
+  warnings: string[],
+): RevealGroupResult[] {
+  const byKey = new Map<string, { step: number; until?: number; nodes: SceneNode[] }>();
+  // The last step anything arrives at: an 'until' at or beyond it means "stays".
+  let lastStep = 0;
+  for (const r of reveals) lastStep = Math.max(lastStep, stepFromReveal(r.reveal, stepSeconds));
+  for (const r of reveals) {
+    if (r.node.parent !== slide) {
+      warnings.push(`"${r.node.name}" is not a direct child of the slide; reveal groups only take top-level elements`);
+      continue;
+    }
+    const step = stepFromReveal(r.reveal, stepSeconds);
+    const until = r.reveal.until !== undefined && r.reveal.until < lastStep ? r.reveal.until : undefined;
+    if (step === 0 && until === undefined) continue; // present throughout, nothing to animate
+    const key = `${step}|${until ?? ''}`;
+    const g = byKey.get(key) ?? { step, until, nodes: [] };
+    g.nodes.push(r.node);
+    byKey.set(key, g);
+  }
+
+  const results: RevealGroupResult[] = [];
+  const keys = Array.from(byKey.keys()).sort((a, b) => {
+    const ga = byKey.get(a)!, gb = byKey.get(b)!;
+    return ga.step - gb.step || (ga.until ?? 99) - (gb.until ?? 99);
+  });
+  for (const key of keys) {
+    const g = byKey.get(key)!;
+    const children = slide.children as SceneNode[];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, topIndex = -1;
+    for (const n of g.nodes) {
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.width); maxY = Math.max(maxY, n.y + n.height);
+      topIndex = Math.max(topIndex, children.indexOf(n));
+    }
+    const frame = figma.createFrame();
+    frame.name = (g.step > 0 ? `Reveal ${g.step}` : 'Visible at start') + (g.until !== undefined ? ` · exit after ${g.until}` : '');
+    frame.fills = [];
+    frame.clipsContent = false;
+    frame.resize(Math.max(1, maxX - minX), Math.max(1, maxY - minY));
+    // Insert where the top-most member sits; members removed below shift indices,
+    // so insert first, then move members in.
+    slide.insertChild(Math.min(topIndex + 1, children.length), frame);
+    frame.x = minX; frame.y = minY;
+    for (const n of g.nodes) {
+      const ax = n.x, ay = n.y;
+      frame.appendChild(n);
+      n.x = ax - minX; n.y = ay - minY;
+    }
+    results.push({ id: frame.id, name: frame.name, step: g.step, until: g.until, members: g.nodes.map(n => n.name) });
+  }
+  return results;
+}
+
+function setBuildTransition(slide: SceneNode, duration: number, style: string, warnings: string[]): void {
+  const sl = slide as any;
+  if (typeof sl.setSlideTransition !== 'function') {
+    warnings.push(`"${slide.name}": not a Slide node, no transition set`);
+    return;
+  }
+  try {
+    sl.setSlideTransition({ style, duration, curve: 'EASE_IN_AND_OUT', timing: { type: 'ON_CLICK' } });
+  } catch (e) {
+    warnings.push(`"${slide.name}": setSlideTransition(${style}) failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/**
+ * Slides fallback. Figma Slides object animations are not reachable from the
+ * Plugin API (figma.motion is undefined in the slides editor), so a build is
+ * expressed the way Figma's own docs describe it: one slide per state, Smart
+ * Animate between them. Clones keep layer names and order, which is what
+ * Smart Animate matches on, so elements that persist hold still and elements
+ * that arrive fade in.
+ *
+ * `stepOfChild` maps a child node id on `slide` to the first step it appears
+ * at; children not in the map are present from step 0. `slide` itself becomes
+ * the final state and the clones are inserted before it.
+ */
+interface StepRange { from: number; until?: number }
+
+function buildStepSlides(
+  slide: SceneNode & ChildrenMixin,
+  stepOfChild: Map<string, StepRange>,
+  duration: number,
+  transition: string,
+  warnings: string[],
+): StepSlideResult[] {
+  let maxStep = 0;
+  stepOfChild.forEach(v => {
+    if (v.from > maxStep) maxStep = v.from;
+    // An element that leaves needs a later slide to leave from.
+    if (v.until !== undefined && v.until + 1 > maxStep) maxStep = v.until + 1;
+  });
+  if (maxStep === 0) return [];
+
+  const parent = slide.parent as any;
+  if (!parent || !('insertChild' in parent)) {
+    warnings.push('Cannot place step slides: the slide has no container');
+    return [];
+  }
+
+  const baseName = slide.name.replace(/ · \d+\/\d+$/, '');
+  const children = slide.children as SceneNode[];
+  const rangeByIndex: StepRange[] = children.map(c => stepOfChild.get(c.id) ?? { from: 0 });
+  const visibleAt = (r: StepRange, k: number) => k >= r.from && (r.until === undefined || k <= r.until);
+  const results: StepSlideResult[] = [];
+
+  for (let k = 0; k < maxStep; k++) {
+    const clone = (slide as any).clone() as SceneNode & ChildrenMixin;
+    const cloneChildren = clone.children as SceneNode[];
+    // Same order as the source; walk backwards so removals don't shift indices.
+    for (let i = cloneChildren.length - 1; i >= 0; i--) {
+      if (!visibleAt(rangeByIndex[i], k)) cloneChildren[i].remove();
+    }
+    clone.name = `${baseName} · ${k}/${maxStep}`;
+    const idx = (parent.children as SceneNode[]).indexOf(slide as SceneNode);
+    parent.insertChild(idx < 0 ? parent.children.length : idx, clone);
+    if (k > 0) setBuildTransition(clone, duration, transition, warnings);
+    results.push({ id: clone.id, name: clone.name, step: k, transition: k > 0 ? transition : 'none' });
+  }
+
+  // The source slide is the final state: drop anything that has already left.
+  for (let i = children.length - 1; i >= 0; i--) {
+    if (!visibleAt(rangeByIndex[i], maxStep)) children[i].remove();
+  }
+  slide.name = `${baseName} · ${maxStep}/${maxStep}`;
+  setBuildTransition(slide, duration, transition, warnings);
+  results.push({ id: slide.id, name: slide.name, step: maxStep, transition });
+  return results;
+}
+
+/**
+ * Apply reveals to nodes on one slide. Motion when the editor exposes it,
+ * otherwise (in Slides) step slides with a native transition.
+ */
+function applyRevealsToNodes(
+  slide: SceneNode & ChildrenMixin,
+  reveals: Array<{ node: SceneNode; reveal: NormalisedReveal }>,
+  warnings: string[],
+  stepSeconds: number | undefined,
+  buildMode: BuildMode,
+  transition: string,
+): RevealOutcome {
+  const none: RevealOutcome = { animated: [], stepSlides: [], groups: [], mode: 'none' };
+  if (reveals.length === 0) return none;
+
+  const canMotion = motionAvailable();
+  const useMotion = buildMode === 'motion' ? true : (buildMode === 'slides' || buildMode === 'groups') ? false : canMotion;
+
+  if (useMotion) {
+    if (!canMotion) {
+      warnings.push(`${reveals.length} reveal(s) ignored: Motion API unavailable here (figma.motion is undefined in the ${(figma as any).editorType} editor). Use build_mode "slides" for step slides with Smart Animate.`);
+      return none;
+    }
+    const styles = listAnimationStyles();
+    const leaving = reveals.filter(r => r.reveal.until !== undefined);
+    if (leaving.length) warnings.push(`${leaving.length} reveal(s) have 'until'; Motion styles only animate arrivals, so those elements stay visible`);
+    const animated = reveals.map(r => applyRevealToNode(r.node, r.reveal, styles, warnings));
+    return { animated, stepSlides: [], groups: [], mode: 'motion' };
+  }
+
+  if (!isInSlides()) {
+    warnings.push(`${reveals.length} reveal(s) ignored: step slides need the Slides editor and Motion is unavailable in this ${(figma as any).editorType} file.`);
+    return none;
+  }
+  // Default in Slides: one slide, one frame per step, ready for a single
+  // object animation each. 'slides' asks for cloned step slides instead.
+  if (buildMode !== 'slides') {
+    const groups = buildRevealGroups(slide, reveals, stepSeconds, warnings);
+    return { animated: [], stepSlides: [], groups, mode: 'groups' };
+  }
+  const stepOfChild = new Map<string, StepRange>();
+  let duration = 0;
+  for (const r of reveals) {
+    if (r.node.parent !== slide) {
+      warnings.push(`"${r.node.name}" is not a direct child of the slide; step slides only handle top-level elements`);
+      continue;
+    }
+    stepOfChild.set(r.node.id, { from: stepFromReveal(r.reveal, stepSeconds), until: r.reveal.until });
+    if (r.reveal.duration > duration) duration = r.reveal.duration;
+  }
+  const stepSlides = buildStepSlides(slide, stepOfChild, duration || 0.4, transition, warnings);
+  return { animated: [], stepSlides, groups: [], mode: 'slides' };
+}
+
+/** Reveals declared on primitive ops. Ops need a name so the node can be found. */
+function applyPrimitiveReveals(
+  slide: SceneNode & ChildrenMixin,
+  operations: Array<{ op: string; name?: string; reveal?: RevealSpec | number }>,
+  nodesByName: Record<string, SceneNode>,
+  warnings: string[],
+  stepSeconds?: number,
+  buildMode: BuildMode = 'auto',
+  transition?: string,
+): RevealOutcome {
+  const wanted = operations.filter(o => o.reveal !== undefined && o.reveal !== null);
+  if (wanted.length === 0) return { animated: [], stepSlides: [], groups: [], mode: 'none' };
+  const reveals: Array<{ node: SceneNode; reveal: NormalisedReveal }> = [];
+  for (const o of wanted) {
+    if (o.op === 'background') { warnings.push('reveal on background ignored'); continue; }
+    if (!o.name || !nodesByName[o.name]) {
+      warnings.push(`reveal needs a named op that created a node (op "${o.op}"${o.name ? ` named "${o.name}"` : ''})`);
+      continue;
+    }
+    const reveal = normaliseReveal(o.reveal, stepSeconds);
+    if (reveal) reveals.push({ node: nodesByName[o.name], reveal });
+  }
+  return applyRevealsToNodes(slide, reveals, warnings, stepSeconds, buildMode, normaliseTransition(transition));
+}
+
+function describeMotion(node: SceneNode): Record<string, unknown> {
+  const n = node as any;
+  const styles = (n.animationStyles || []) as Array<{ id: string; name: string; duration?: number; timelineOffset?: number; props?: unknown }>;
+  const animations = n.animations ? Object.keys(n.animations) : [];
+  const manual = n.manualKeyframeTracks ? Object.keys(n.manualKeyframeTracks) : [];
+  const timelines = (n.timelines || []) as Array<{ id: string; duration: number }>;
+  return {
+    id: node.id, name: node.name, type: node.type,
+    animationStyles: styles.map(s => ({ id: s.id, name: s.name, duration: s.duration, timelineOffset: s.timelineOffset, props: s.props })),
+    animatedProperties: animations,
+    manualTracks: manual,
+    timelines,
+  };
+}
+
+function clearMotion(node: SceneNode): number {
+  const n = node as any;
+  let removed = 0;
+  try {
+    for (const s of (n.animationStyles || []) as Array<{ id: string }>) { n.removeAnimationStyle(s.id); removed++; }
+    for (const field of Object.keys(n.manualKeyframeTracks || {})) {
+      if (field === 'fills' || field === 'strokes' || field === 'effects') continue;
+      n.removeManualKeyframeTrack({ type: 'PROPERTY', name: field }); removed++;
+    }
+  } catch (e) {
+    console.error('clearMotion failed:', e);
+  }
+  return removed;
+}
+
 function isInSlides(): boolean {
   return figma.editorType === 'slides';
 }
@@ -197,6 +563,38 @@ async function getFontName(bold: boolean = false, family?: string): Promise<Font
   }
   const font = await loadFontWithFallback();
   return bold ? font.bold : font.regular;
+}
+
+/** Cache of family+style → loaded FontName (or null when the style is missing). */
+const styleFontCache: { [key: string]: FontName | null } = {};
+
+/**
+ * Resolve a font for a CSS-ish weight (400/500/600/650/700, or a name). Tries
+ * the family's matching style, then neighbours, and finally the plain
+ * bold/regular pair so a missing style never fails the op. Returns the font
+ * plus a note when it had to degrade, so the caller can warn once.
+ */
+async function getFontForWeight(
+  family: string | undefined,
+  weight: number | string | undefined,
+  bold: boolean,
+): Promise<{ font: FontName; degraded?: string }> {
+  const w = normaliseWeight(weight, bold);
+  if (w === undefined || w === 400 || (w === 700 && family === undefined)) {
+    return { font: await getFontName(w === 700, family) };
+  }
+  // Family to try styles on: the requested one, else the fallback winner.
+  const base = family ? await getFontName(false, family) : (await loadFontWithFallback()).regular;
+  for (const style of styleCandidates(w)) {
+    const key = `${base.family}::${style}`;
+    if (styleFontCache[key] === undefined) {
+      try { await figma.loadFontAsync({ family: base.family, style }); styleFontCache[key] = { family: base.family, style }; }
+      catch { styleFontCache[key] = null; }
+    }
+    const f = styleFontCache[key];
+    if (f) return style === styleCandidates(w)[0] ? { font: f } : { font: f, degraded: `${base.family} has no ${styleCandidates(w)[0]}; used ${style}` };
+  }
+  return { font: await getFontName(w >= 600, family), degraded: `${base.family} has no weight ${w}; used ${w >= 600 ? 'Bold' : 'Regular'}` };
 }
 
 // Helper to add text (with optional name for update-in-place)
@@ -3915,6 +4313,13 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         maxWidth?: number;
         alignment?: 'LEFT' | 'CENTER' | 'RIGHT';
         verticalAlignment?: 'TOP' | 'CENTER' | 'BOTTOM';
+        // typography (CSS-ish): weight 400/500/600/700 or a name; lineHeight
+        // 1.04 (multiplier) | 52 (px) | "120%"; letterSpacing -0.96 (px) | "-0.035em"
+        weight?: number | string;
+        lineHeight?: number | string;
+        letterSpacing?: number | string;
+        // any op: hide the layer (e.g. speaker notes kept on the slide but never shown)
+        visible?: boolean;
         // rect/ellipse
         stroke?: string | RGB;
         // line + path
@@ -3931,6 +4336,10 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         headSize?: number;
         direction_arrow?: 'right' | 'down' | 'left' | 'up' | number;
         bidirectional?: boolean;
+        // Native object animation (Motion): reveal this element as a build
+        // step on the slide's timeline instead of duplicating the slide.
+        // A bare number is the step; see shared/motion.ts.
+        reveal?: RevealSpec | number;
       }
 
       const slideId = (msg as any).slideId as string | undefined;
@@ -4202,8 +4611,9 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
             } else if (op.op === 'text') {
               const textNode = figma.createText();
               if (op.name) textNode.name = op.name;
-              const fontName = await getFontName(op.bold || false, op.fontFamily);
-              textNode.fontName = fontName;
+              const resolved = await getFontForWeight(op.fontFamily, op.weight, op.bold || false);
+              textNode.fontName = resolved.font;
+              if (resolved.degraded && !warnings.includes(resolved.degraded)) warnings.push(resolved.degraded);
               
               // Font size validation
               const requestedSize = op.fontSize || 24;
@@ -4214,6 +4624,11 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
               textNode.fontSize = requestedSize;
               textNode.fills = [{ type: 'SOLID', color: resolveColor(op.color) }];
               textNode.characters = op.text || '';
+              // Typography that CSS expresses and Figma defaults would otherwise loosen.
+              const lh = resolveLineHeight(op.lineHeight);
+              if (lh) textNode.lineHeight = lh;
+              const ls = resolveLetterSpacing(op.letterSpacing);
+              if (ls) textNode.letterSpacing = ls;
               
               // Text sizing modes:
               // 1. Fixed box (width + height): text stays bounded, use with alignment
@@ -4585,10 +5000,30 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           }
         }
 
+        // Hidden layers (visible:false) — applied by name after creation.
+        for (const o of operations) {
+          if (o.visible === false && o.name && nodesByName[o.name]) nodesByName[o.name].visible = false;
+          else if (o.visible === false) warnings.push(`visible:false needs a named op (op "${o.op}")`);
+        }
+
+        // Native reveals: applied after every node exists, so a reveal can
+        // never be lost to an op that failed later in the batch.
+        const stepSeconds = (msg as any).stepSeconds as number | undefined;
+        const outcome = applyPrimitiveReveals(
+          targetSlide, operations, nodesByName, warnings, stepSeconds,
+          ((msg as any).buildMode as BuildMode) || 'auto', (msg as any).transition as string | undefined,
+        );
+        const animated = outcome.animated;
+        const stepSlides = outcome.stepSlides;
+        const groups = outcome.groups;
+
         figma.currentPage.selection = [targetSlide];
         figma.viewport.scrollAndZoomIntoView([targetSlide]);
 
-        const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"`;
+        const summary = `Created ${createdNodes.length} elements on "${targetSlide.name}"` +
+          (animated.length > 0 ? `, ${animated.length} with reveals` : '') +
+          (stepSlides.length > 0 ? `, ${stepSlides.length} build slides` : '') +
+          (groups.length > 0 ? `, ${groups.length} reveal groups` : '');
         figma.notify(summary);
         
         // Notify about warnings
@@ -4602,6 +5037,9 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           slideId: targetSlide.id,
           slideName: targetSlide.name,
           created: createdNodes,
+          animated: animated.length > 0 ? animated : undefined,
+          stepSlides: stepSlides.length > 0 ? stepSlides : undefined,
+          groups: groups.length > 0 ? groups : undefined,
           warnings: warnings.length > 0 ? warnings : undefined
         });
 
@@ -4822,6 +5260,186 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
     // =========================================================================
     // find-nodes — Search nodes by type and/or name
     // =========================================================================
+    // ── Motion: native object animations ──────────────────────────────────
+    // list    → the animation styles Figma offers in this document
+    // apply   → reveals: [{ target, step|offset, duration, style, props }]
+    // inspect → what is animated on the given slides/nodes
+    // clear   → strip animation styles and manual tracks from slides/nodes
+    if (msg.type === 'apply-motion') {
+      const action = (msg as any).action as 'list' | 'apply' | 'inspect' | 'clear';
+      const targets = ((msg as any).targets || []) as string[];
+      const reply = (payload: Record<string, unknown>) =>
+        figma.ui.postMessage({ type: 'motion-result', action, ...payload });
+
+      try {
+        // 'apply' decides for itself (Motion, or step slides in Slides); only
+        // Motion-only actions need the API up front.
+        if ((action === 'list' || action === 'clear') && !motionAvailable()) {
+          const api = (figma as any).apiVersion ?? 'unknown';
+          const editor = (figma as any).editorType ?? 'unknown';
+          throw new Error(`Motion API unavailable here (figma.motion is ${typeof (figma as any).motion}; apiVersion ${api}, editor ${editor}). It needs Plugin API 1.130+ and an editor that exposes Motion. Reveals fall back to separate slides.`);
+        }
+
+        if (action === 'list') {
+          const styles = listAnimationStyles().map(s => ({
+            styleId: s.styleId, name: s.name, description: (s as any).description, props: (s as any).props,
+          }));
+          reply({ success: true, styles });
+          return;
+        }
+
+        if (action === 'apply') {
+          const requested = ((msg as any).reveals || []) as Array<{ target: string } & RevealSpec>;
+          if (requested.length === 0) throw new Error('No reveals provided');
+          const stepSeconds = (msg as any).stepSeconds as number | undefined;
+          const buildMode = ((msg as any).buildMode as BuildMode) || 'auto';
+          const transition = normaliseTransition((msg as any).transition as string | undefined);
+          const warnings: string[] = [];
+          const reveals: Array<{ node: SceneNode; reveal: NormalisedReveal }> = [];
+          let slide: (SceneNode & ChildrenMixin) | null = null;
+          for (const r of requested) {
+            const node = await (figma as any).getNodeByIdAsync(r.target) as SceneNode | null;
+            if (!node) { warnings.push(`Target not found: ${r.target}`); continue; }
+            const { target, ...spec } = r;
+            const reveal = normaliseReveal(spec, stepSeconds);
+            if (!reveal) continue;
+            // Walk up to the containing slide (or top-level frame).
+            let p: BaseNode | null = node.parent;
+            while (p && p.type !== 'SLIDE' && !(p.type === 'FRAME' && p.parent && p.parent.type === 'PAGE')) p = p.parent;
+            if (!p) { warnings.push(`"${node.name}" is not on a slide`); continue; }
+            if (slide && p.id !== slide.id) { warnings.push(`"${node.name}" is on a different slide (${p.name}); one slide per apply`); continue; }
+            slide = p as SceneNode & ChildrenMixin;
+            reveals.push({ node, reveal });
+          }
+          if (!slide) throw new Error('No valid targets on a slide');
+          const outcome = applyRevealsToNodes(slide, reveals, warnings, stepSeconds, buildMode, transition);
+          figma.notify(outcome.mode === 'slides'
+            ? `Built ${outcome.stepSlides.length} step slides (${transition})`
+            : outcome.mode === 'groups'
+              ? `Grouped ${outcome.groups.length} reveal step(s) — add one object animation per group`
+              : `Applied ${outcome.animated.length} reveal(s)`);
+          reply({ success: true, mode: outcome.mode, applied: outcome.animated, stepSlides: outcome.stepSlides, groups: outcome.groups, warnings: warnings.length ? warnings : undefined });
+          return;
+        }
+
+        if (action === 'inspect' || action === 'clear') {
+          if (targets.length === 0) throw new Error('targets required: slide or node IDs');
+          const nodes: SceneNode[] = [];
+          const slides: Array<{ id: string; name: string; transition?: unknown; skipped?: boolean }> = [];
+          for (const id of targets) {
+            const n = await (figma as any).getNodeByIdAsync(id) as SceneNode | null;
+            if (!n) continue;
+            // A slide (or frame) target means its direct children.
+            if ('children' in n && (n.type === 'SLIDE' || n.type === 'FRAME')) {
+              nodes.push(...(n as any).children as SceneNode[]);
+              let transition: unknown;
+              try { transition = typeof (n as any).getSlideTransition === 'function' ? (n as any).getSlideTransition() : undefined; } catch { transition = undefined; }
+              slides.push({ id: n.id, name: n.name, transition, skipped: (n as any).isSkippedSlide });
+            } else {
+              nodes.push(n);
+            }
+          }
+          if (action === 'inspect') {
+            const report = nodes.map(n => describeMotion(n));
+            reply({ success: true, nodes: report, slides, motionAvailable: motionAvailable(), apiVersion: (figma as any).apiVersion, editorType: (figma as any).editorType });
+            return;
+          }
+          let removed = 0;
+          for (const n of nodes) removed += clearMotion(n);
+          figma.notify(`Cleared ${removed} animation(s)`);
+          reply({ success: true, removed, nodes: nodes.length });
+          return;
+        }
+
+        throw new Error(`Unknown motion action: ${action}`);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Motion error:', errorMsg);
+        figma.notify(`Motion failed: ${errorMsg}`, { error: true });
+        reply({ success: false, error: errorMsg });
+      }
+    }
+
+    // ── Probe: explore the live Plugin API, documented or not ─────────────
+    // action 'globals' → own property names of `figma` and its namespaces
+    // action 'node'    → property names up the prototype chain of a node, with
+    //                    readable values, filtered by an optional regex
+    // action 'eval'    → run an async function body with (figma, node, helpers)
+    if (msg.type === 'apply-probe') {
+      const action = (msg as any).action as 'globals' | 'node' | 'eval';
+      const reply = (payload: Record<string, unknown>) => figma.ui.postMessage({ type: 'probe-result', action, ...payload });
+      const safeJson = (v: unknown, depth = 3): unknown => {
+        const seen = new WeakSet<object>();
+        const walk = (x: any, d: number): unknown => {
+          if (x === null || typeof x !== 'object') return typeof x === 'function' ? `[fn ${x.name || 'anonymous'}]` : typeof x === 'symbol' ? String(x) : x;
+          if (seen.has(x)) return '[circular]';
+          if (d <= 0) return Array.isArray(x) ? `[array ${x.length}]` : `[object ${x.type ?? x.constructor?.name ?? ''}]`;
+          seen.add(x);
+          if (Array.isArray(x)) return x.slice(0, 50).map(i => walk(i, d - 1));
+          const out: Record<string, unknown> = {};
+          for (const k of Object.keys(x).slice(0, 80)) { try { out[k] = walk(x[k], d - 1); } catch (e) { out[k] = `[throws: ${e instanceof Error ? e.message : String(e)}]`; } }
+          return out;
+        };
+        return walk(v, depth);
+      };
+      const protoNames = (obj: any): string[] => {
+        const names = new Set<string>();
+        let o = obj;
+        while (o && o !== Object.prototype) {
+          for (const n of Object.getOwnPropertyNames(o)) names.add(n);
+          for (const s of Object.getOwnPropertySymbols(o)) names.add(String(s));
+          o = Object.getPrototypeOf(o);
+        }
+        return Array.from(names).sort();
+      };
+      try {
+        if (action === 'globals') {
+          const f = figma as any;
+          const top = protoNames(f);
+          const namespaces: Record<string, string[]> = {};
+          for (const k of top) {
+            try {
+              const v = f[k];
+              if (v && typeof v === 'object') namespaces[k] = protoNames(v).slice(0, 200);
+            } catch { /* getter threw */ }
+          }
+          reply({ success: true, editorType: f.editorType, apiVersion: f.apiVersion, figma: top, namespaces, hasMotion: typeof f.motion, globals: protoNames(globalThis).filter(n => !/^(Array|Object|Function|String|Number|Boolean|Symbol|Math|JSON|Date|RegExp|Error|Promise|Map|Set|WeakMap|WeakSet|Reflect|Proxy|Intl|ArrayBuffer|DataView|Uint|Int|Float|BigInt|globalThis|undefined|NaN|Infinity|parseInt|parseFloat|isNaN|isFinite|decodeURI|encodeURI|escape|unescape|eval|console|setTimeout|clearTimeout|setInterval|clearInterval|TypeError|RangeError|SyntaxError|ReferenceError|EvalError|URIError|Atomics|SharedArrayBuffer|TextEncoder|TextDecoder|queueMicrotask|structuredClone)/.test(n)) });
+          return;
+        }
+        if (action === 'node') {
+          const id = (msg as any).nodeId as string | undefined;
+          const node = id ? await (figma as any).getNodeByIdAsync(id) : (figma.currentPage.selection[0] ?? null);
+          if (!node) throw new Error('node not found (pass nodeId or select one)');
+          const filter = (msg as any).filter ? new RegExp((msg as any).filter as string, 'i') : null;
+          const names = protoNames(node).filter(n => !filter || filter.test(n));
+          const values: Record<string, unknown> = {};
+          for (const n of names) {
+            try {
+              const v = (node as any)[n];
+              values[n] = typeof v === 'function' ? `[fn/${v.length}]` : safeJson(v, 2);
+            } catch (e) { values[n] = `[throws: ${e instanceof Error ? e.message : String(e)}]`; }
+          }
+          reply({ success: true, id: node.id, name: node.name, type: node.type, count: names.length, values });
+          return;
+        }
+        if (action === 'eval') {
+          const code = (msg as any).code as string;
+          if (!code) throw new Error('code required');
+          const id = (msg as any).nodeId as string | undefined;
+          const node = id ? await (figma as any).getNodeByIdAsync(id) : (figma.currentPage.selection[0] ?? null);
+          // eslint-disable-next-line no-new-func
+          const fn = new Function('figma', 'node', 'protoNames', 'safeJson', `return (async () => { ${code} })();`);
+          const result = await fn(figma, node, protoNames, safeJson);
+          reply({ success: true, result: safeJson(result, 4) });
+          return;
+        }
+        throw new Error(`Unknown probe action: ${action}`);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? (err.stack || err.message) : String(err);
+        reply({ success: false, error: errorMsg });
+      }
+    }
+
     if (msg.type === 'find-nodes') {
       const nodeType = (msg as any).nodeType as string | undefined;
       const name = (msg as any).name as string | undefined;
