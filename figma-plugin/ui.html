@@ -547,8 +547,19 @@
       wsUrl = wsUrlInput.value.trim() || 'ws://localhost:9876';
     };
     disconnectBtn.onclick = () => {
+      userClosed = true;
+      cancelReconnect();
       if (ws) ws.close();
+      else setStatus('', '<span class="host">Disconnected</span>');
       settingsOverlay.classList.remove('open');
+    };
+    autoConnectCheckbox.onchange = () => {
+      if (!autoConnectCheckbox.checked) {
+        cancelReconnect();
+        if (!ws) setStatus('', '<span class="host">Disconnected</span>');
+      } else if (!ws) {
+        connectWebSocket();
+      }
     };
 
     // ── Copy ID ──
@@ -556,10 +567,41 @@
       parent.postMessage({ pluginMessage: { type: 'get-slide-reference' } }, '*');
     };
 
+    // ── Reconnect ──
+    // When the socket closes (the proxy restarted, the machine slept), try
+    // again with backoff instead of waiting for someone to re-run the plugin.
+    // A close the user asked for (Disconnect, clicking the status dot) or an
+    // unticked Auto-connect box stops it; clicking the dot reconnects.
+    const RECONNECT_MIN_MS = 500;
+    const RECONNECT_MAX_MS = 10000;
+    let reconnectTimer = null;
+    let reconnectAttempt = 0;
+    let userClosed = false;
+
+    function cancelReconnect() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer || userClosed || !autoConnectCheckbox.checked) return;
+      const base = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * Math.pow(2, reconnectAttempt));
+      const delay = Math.round(base * (0.5 + Math.random() * 0.5));
+      reconnectAttempt++;
+      setStatus('connecting', `<span class="host">Reconnecting in ${Math.max(1, Math.round(delay / 1000))}s\u2026</span>`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWebSocket();
+      }, delay);
+    }
+
     // ── WebSocket ──
     function connectWebSocket() {
+      cancelReconnect();
       if (ws) {
         if (ws.readyState === WebSocket.OPEN) {
+          // Clicking the dot while connected is a deliberate disconnect.
+          userClosed = true;
           ws.close();
           return;
         }
@@ -572,12 +614,16 @@
         ws = null;
       }
 
+      userClosed = false;
       setStatus('connecting', '<span class="host">Connecting\u2026</span>');
 
       try {
         ws = new WebSocket(wsUrl);
+        let opened = false;
 
         ws.onopen = () => {
+          opened = true;
+          reconnectAttempt = 0;
           setStatus('connected', '<span class="host">monorail</span>');
           startUptime();
           addActivity('\u25cf', 'Connected');
@@ -586,7 +632,7 @@
             type: 'hello',
             plugin: 'monorail-figma',
             version: '0.2.0',
-            features: ['request-id'],
+            features: ['request-id', 'auto-reconnect'],
             fileKey: fileContext.fileKey || null,
             fileName: fileContext.fileName || null,
             pageName: fileContext.pageName || null
@@ -672,8 +718,10 @@
         ws.onclose = () => {
           setStatus('', '<span class="host">Disconnected</span>');
           stopUptime();
-          addActivity('\u25cb', 'Disconnected');
+          // One line per lost connection, not one per failed retry.
+          if (opened) addActivity('\u25cb', userClosed ? 'Disconnected' : 'Disconnected, reconnecting');
           ws = null;
+          scheduleReconnect();
         };
 
         ws.onerror = () => {
@@ -682,6 +730,8 @@
 
       } catch (e) {
         setStatus('', '<span class="host">Failed</span>');
+        ws = null;
+        scheduleReconnect();
       }
     }
 
