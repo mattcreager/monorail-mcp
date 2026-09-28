@@ -6,6 +6,7 @@ import type { SlideContent, Slide, DeckIR, ElementInfo, AddableContainer } from 
 import { normaliseReveal, pickAnimationStyle, revealEndsAt, stepFromReveal, normaliseTransition } from '../shared/motion';
 import type { NormalisedReveal, RevealSpec } from '../shared/motion';
 import { normaliseWeight, styleCandidates, resolveLineHeight, resolveLetterSpacing } from '../shared/typography';
+import { PLUGIN_REPLY_FOR } from '../shared/protocol';
 // Pure geometry, factored out so test/geometry.test.js can pin it without Figma.
 // esbuild bundles this in; keep it free of Figma API calls.
 import {
@@ -3097,6 +3098,18 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
 
 // Main message handler
 figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchRequest; mode?: 'append' | 'replace'; startIndex?: number }) => {
+  // Replies echo the request's id (protocol 2), so the proxy and the server
+  // can match a reply that arrives after its request timed out. And every
+  // request gets exactly one reply: one that got none held the proxy's lock,
+  // and every session waiting on it, until someone noticed (2026-09-27).
+  const requestId = (msg as any).requestId as string | undefined;
+  const expected = PLUGIN_REPLY_FOR[msg.type];
+  let replied = false;
+  let handlerError: string | null = null;
+  const post = (payload: any) => {
+    if (payload && payload.type === expected) replied = true;
+    figma.ui.postMessage(requestId ? { ...payload, requestId } : payload);
+  };
   try {
     if (msg.type === 'apply-ir') {
       if (!msg.ir) {
@@ -3317,7 +3330,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
 
       const positionText = pushMode === 'append' && startIndex !== undefined ? ` at position ${startIndex}` : '';
       figma.notify(`✓ ${summary.join(' • ')}${positionText}`, { timeout: 3000 });
-      figma.ui.postMessage({
+      post({
         type: 'applied',
         count: created + updated,
         created,
@@ -3338,7 +3351,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       if (selection.length === 0) {
         figma.notify('No selection. Click on a slide first.', { error: true });
-        figma.ui.postMessage({ type: 'slide-reference', success: false, error: 'No selection. Select a slide first.' });
+        post({ type: 'slide-reference', success: false, error: 'No selection. Select a slide first.' });
         return;
       }
       
@@ -3358,7 +3371,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       if (nodeType === 'SLIDE' || (nodeType === 'FRAME' && node.parent?.type === 'PAGE')) {
         const ref = `Slide: "${(node as any).name || 'Untitled'}" (${node.id})`;
         figma.notify(ref, { timeout: 3000 });
-        figma.ui.postMessage({ 
+        post({ 
           type: 'slide-reference', 
           success: true, 
           id: node.id, 
@@ -3378,7 +3391,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         if (currentType === 'SLIDE') {
           const ref = `Slide: "${(node as any).name || 'Untitled'}" (${node.id})`;
           figma.notify(ref, { timeout: 3000 });
-          figma.ui.postMessage({ 
+          post({ 
             type: 'slide-reference', 
             success: true, 
             id: node.id, 
@@ -3391,7 +3404,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         if (currentType === 'FRAME' && parentType === 'PAGE') {
           const ref = `Slide: "${(node as any).name || 'Untitled'}" (${node.id})`;
           figma.notify(ref, { timeout: 3000 });
-          figma.ui.postMessage({ 
+          post({ 
             type: 'slide-reference', 
             success: true, 
             id: node.id, 
@@ -3409,7 +3422,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
       
       figma.notify('Could not find slide. Try clicking directly on slide content.', { error: true });
-      figma.ui.postMessage({ type: 'slide-reference', success: false, error: 'Selection is not in a slide. Click on slide content first.' });
+      post({ type: 'slide-reference', success: false, error: 'Selection is not in a slide. Click on slide content first.' });
       return;
     }
 
@@ -3521,7 +3534,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       const diagramSlides = slides.filter(s => s.has_diagram).length;
       const containerCount = allContainers.length;
       
-      figma.ui.postMessage({ type: 'exported', ir: JSON.stringify(ir, null, 2) });
+      post({ type: 'exported', ir: JSON.stringify(ir, null, 2) });
       const stats = [`${slides.length} slides`, `${richSlides} with elements`];
       if (diagramSlides > 0) stats.push(`${diagramSlides} with diagrams`);
       if (containerCount > 0) stats.push(`${containerCount} addable containers`);
@@ -3531,7 +3544,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
     if (msg.type === 'patch-elements') {
       if (!msg.patches || !msg.patches.changes || msg.patches.changes.length === 0) {
         figma.notify('No patches provided', { error: true });
-        figma.ui.postMessage({ type: 'patched', updated: 0, failed: [], fontSubstitutions: [] });
+        post({ type: 'patched', updated: 0, failed: [], fontSubstitutions: [] });
         return;
       }
       
@@ -3553,7 +3566,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
 
       figma.notify(notifyMsg, { error: result.failed.length > 0 });
-      figma.ui.postMessage({ type: 'patched', ...result });
+      post({ type: 'patched', ...result });
     }
     
     // SPIKE: Export full template structure
@@ -3567,7 +3580,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         targetNode = await (figma as any).getNodeByIdAsync(requestedSlideId);
         if (!targetNode) {
           figma.notify(`Slide not found: ${requestedSlideId}`, { error: true });
-          figma.ui.postMessage({ type: 'template-captured', error: `Slide not found: ${requestedSlideId}` });
+          post({ type: 'template-captured', error: `Slide not found: ${requestedSlideId}` });
           return;
         }
       } else if (figma.currentPage.selection.length > 0) {
@@ -3594,7 +3607,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       if (!targetNode) {
         figma.notify('No slide selected or found', { error: true });
-        figma.ui.postMessage({ type: 'template-captured', error: 'No slide selected or found' });
+        post({ type: 'template-captured', error: 'No slide selected or found' });
         return;
       }
       
@@ -3612,7 +3625,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
       const nodeCount = countNodes(captured);
       
-      figma.ui.postMessage({ 
+      post({ 
         type: 'template-captured', 
         template: JSON.stringify(captured, null, 2),
         nodeCount 
@@ -3863,7 +3876,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         figma.viewport.scrollAndZoomIntoView([slide]);
         
         figma.notify(`✓ Created "${layout}" slide`);
-        figma.ui.postMessage({ 
+        post({ 
           type: 'styled-slide-created', 
           success: true, 
           slideId: slide.id
@@ -3873,7 +3886,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error('Create styled slide error:', errorMsg);
         figma.notify(`Error: ${errorMsg}`, { error: true });
-        figma.ui.postMessage({ type: 'styled-slide-created', success: false, error: errorMsg });
+        post({ type: 'styled-slide-created', success: false, error: errorMsg });
       }
     }
     
@@ -3884,7 +3897,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       if (!sourceId) {
         figma.notify('No source slide ID provided', { error: true });
-        figma.ui.postMessage({ type: 'instantiated', success: false, error: 'No source ID' });
+        post({ type: 'instantiated', success: false, error: 'No source ID' });
         return;
       }
       
@@ -3893,7 +3906,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         const sourceNode = await (figma as any).getNodeByIdAsync(sourceId);
         if (!sourceNode) {
           figma.notify(`Source slide not found: ${sourceId}`, { error: true });
-          figma.ui.postMessage({ type: 'instantiated', success: false, error: 'Source not found' });
+          post({ type: 'instantiated', success: false, error: 'Source not found' });
           return;
         }
         
@@ -4017,7 +4030,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         }
         figma.notify(notifyMsg);
         
-        figma.ui.postMessage({ 
+        post({ 
           type: 'instantiated', 
           success: true, 
           newSlideId: clonedSlide.id,
@@ -4030,7 +4043,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error('Instantiate error:', errorMsg);
         figma.notify(`Error: ${errorMsg}`, { error: true });
-        figma.ui.postMessage({ type: 'instantiated', success: false, error: errorMsg });
+        post({ type: 'instantiated', success: false, error: errorMsg });
       }
     }
     
@@ -4040,7 +4053,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       if (!slideIds || slideIds.length === 0) {
         figma.notify('No slide IDs provided', { error: true });
-        figma.ui.postMessage({ type: 'slides-deleted', deleted: 0, failed: [], deletedNames: [] });
+        post({ type: 'slides-deleted', deleted: 0, failed: [], deletedNames: [] });
         return;
       }
       
@@ -4101,7 +4114,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         figma.notify(`${failed.length} slides not found`, { error: true });
       }
       
-      figma.ui.postMessage({ type: 'slides-deleted', deleted, failed, deletedNames });
+      post({ type: 'slides-deleted', deleted, failed, deletedNames });
     }
     
     // Reorder slides
@@ -4110,7 +4123,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       if (!slideIds || slideIds.length === 0) {
         figma.notify('No slide IDs provided', { error: true });
-        figma.ui.postMessage({ type: 'slides-reordered', success: false, error: 'No slide IDs provided' });
+        post({ type: 'slides-reordered', success: false, error: 'No slide IDs provided' });
         return;
       }
       
@@ -4131,14 +4144,14 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         }
         
         if (slides.length === 0) {
-          figma.ui.postMessage({ type: 'slides-reordered', success: false, error: 'No valid slides found' });
+          post({ type: 'slides-reordered', success: false, error: 'No valid slides found' });
           return;
         }
         
         // Get the parent container (SLIDE_ROW for Figma Slides)
         const parent = slides[0].parent;
         if (!parent || !('insertChild' in parent)) {
-          figma.ui.postMessage({ type: 'slides-reordered', success: false, error: 'Cannot access slide container' });
+          post({ type: 'slides-reordered', success: false, error: 'Cannot access slide container' });
           return;
         }
         
@@ -4177,7 +4190,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           figma.notify(`✓ Order unchanged (${slides.length} slides)`);
         }
         
-        figma.ui.postMessage({ 
+        post({ 
           type: 'slides-reordered', 
           success: true, 
           count: slides.length,
@@ -4189,7 +4202,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error('Reorder error:', errorMsg);
         figma.notify(`Error: ${errorMsg}`, { error: true });
-        figma.ui.postMessage({ type: 'slides-reordered', success: false, error: errorMsg });
+        post({ type: 'slides-reordered', success: false, error: errorMsg });
       }
     }
     
@@ -4207,7 +4220,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         targetNode = await (figma as any).getNodeByIdAsync(requestedSlideId);
         if (!targetNode) {
           figma.notify(`Slide not found: ${requestedSlideId}`, { error: true });
-          figma.ui.postMessage({ type: 'screenshot-exported', error: `Slide not found: ${requestedSlideId}` });
+          post({ type: 'screenshot-exported', error: `Slide not found: ${requestedSlideId}` });
           return;
         }
       } else if (figma.currentPage.selection.length > 0) {
@@ -4235,7 +4248,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       
       if (!targetNode) {
         figma.notify('No slide found to screenshot', { error: true });
-        figma.ui.postMessage({ type: 'screenshot-exported', error: 'No slide found' });
+        post({ type: 'screenshot-exported', error: 'No slide found' });
         return;
       }
       
@@ -4249,7 +4262,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         // Convert to base64
         const base64 = figma.base64Encode(pngData);
         
-        figma.ui.postMessage({ 
+        post({ 
           type: 'screenshot-exported',
           success: true,
           slideId: targetNode.id,
@@ -4264,7 +4277,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error('Screenshot export error:', errorMsg);
         figma.notify(`Export failed: ${errorMsg}`, { error: true });
-        figma.ui.postMessage({ type: 'screenshot-exported', success: false, error: errorMsg });
+        post({ type: 'screenshot-exported', success: false, error: errorMsg });
       }
     }
     
@@ -4347,7 +4360,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
 
       if (!operations || operations.length === 0) {
         figma.notify('No operations provided', { error: true });
-        figma.ui.postMessage({ type: 'primitives-applied', success: false, error: 'No operations provided' });
+        post({ type: 'primitives-applied', success: false, error: 'No operations provided' });
         return;
       }
 
@@ -5031,7 +5044,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           figma.notify(`⚠️ ${warnings.length} design warning(s)`, { timeout: 3000 });
         }
         
-        figma.ui.postMessage({
+        post({
           type: 'primitives-applied',
           success: true,
           slideId: targetSlide.id,
@@ -5047,7 +5060,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error('Primitives error:', errorMsg);
         figma.notify(`Failed: ${errorMsg}`, { error: true });
-        figma.ui.postMessage({ type: 'primitives-applied', success: false, error: errorMsg });
+        post({ type: 'primitives-applied', success: false, error: errorMsg });
       }
     }
 
@@ -5066,7 +5079,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
 
       if (!targetNode) {
-        figma.ui.postMessage({ type: 'css-extracted', success: false, error: nodeId ? `Node not found: ${nodeId}` : 'No node selected' });
+        post({ type: 'css-extracted', success: false, error: nodeId ? `Node not found: ${nodeId}` : 'No node selected' });
         return;
       }
 
@@ -5108,7 +5121,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           raw.blendMode = (targetNode as any).blendMode;
         }
 
-        figma.ui.postMessage({
+        post({
           type: 'css-extracted',
           success: true,
           css,
@@ -5116,7 +5129,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         });
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        figma.ui.postMessage({ type: 'css-extracted', success: false, error: errorMsg });
+        post({ type: 'css-extracted', success: false, error: errorMsg });
       }
     }
 
@@ -5137,7 +5150,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
 
       if (!targetNode) {
-        figma.ui.postMessage({
+        post({
           type: 'node-exported', success: false,
           error: nodeId ? `Node not found: ${nodeId}` : 'No node selected',
         });
@@ -5153,7 +5166,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
             chunks.push(String.fromCharCode.apply(null, [...svgData.slice(i, i + 8192)]));
           }
           const svgString = chunks.join('');
-          figma.ui.postMessage({
+          post({
             type: 'node-exported', success: true,
             nodeId: targetNode.id, nodeName: targetNode.name,
             format: 'SVG', data: svgString,
@@ -5165,7 +5178,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
             constraint: { type: 'SCALE', value: scale },
           });
           const base64 = figma.base64Encode(pngData);
-          figma.ui.postMessage({
+          post({
             type: 'node-exported', success: true,
             nodeId: targetNode.id, nodeName: targetNode.name,
             format: 'PNG', data: base64,
@@ -5175,7 +5188,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         figma.notify(`Exported "${targetNode.name}" as ${format}`);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        figma.ui.postMessage({ type: 'node-exported', success: false, error: errorMsg });
+        post({ type: 'node-exported', success: false, error: errorMsg });
       }
     }
 
@@ -5193,7 +5206,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       }
 
       if (!targetNode) {
-        figma.ui.postMessage({
+        post({
           type: 'component-info', success: false,
           error: nodeId ? `Node not found: ${nodeId}` : 'No node selected',
         });
@@ -5254,7 +5267,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         }));
       }
 
-      figma.ui.postMessage(result);
+      post(result);
     }
 
     // =========================================================================
@@ -5269,7 +5282,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       const action = (msg as any).action as 'list' | 'apply' | 'inspect' | 'clear';
       const targets = ((msg as any).targets || []) as string[];
       const reply = (payload: Record<string, unknown>) =>
-        figma.ui.postMessage({ type: 'motion-result', action, ...payload });
+        post({ type: 'motion-result', action, ...payload });
 
       try {
         // 'apply' decides for itself (Motion, or step slides in Slides); only
@@ -5367,7 +5380,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
     // action 'eval'    → run an async function body with (figma, node, helpers)
     if (msg.type === 'apply-probe') {
       const action = (msg as any).action as 'globals' | 'node' | 'eval';
-      const reply = (payload: Record<string, unknown>) => figma.ui.postMessage({ type: 'probe-result', action, ...payload });
+      const reply = (payload: Record<string, unknown>) => post({ type: 'probe-result', action, ...payload });
       const safeJson = (v: unknown, depth = 3): unknown => {
         const seen = new WeakSet<object>();
         const walk = (x: any, d: number): unknown => {
@@ -5451,7 +5464,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
         if (parentId) {
           const parent = await (figma as any).getNodeByIdAsync(parentId);
           if (!parent || !('children' in parent)) {
-            figma.ui.postMessage({
+            post({
               type: 'nodes-found', success: false,
               error: `Parent not found or has no children: ${parentId}`,
             });
@@ -5482,14 +5495,14 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           parentName: node.parent?.name ?? null,
         }));
 
-        figma.ui.postMessage({
+        post({
           type: 'nodes-found', success: true,
           nodes: results, total, truncated: total > limit,
         });
         figma.notify(`Found ${total} nodes${total > limit ? ` (showing ${limit})` : ''}`);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        figma.ui.postMessage({ type: 'nodes-found', success: false, error: errorMsg });
+        post({ type: 'nodes-found', success: false, error: errorMsg });
       }
     }
 
@@ -5498,8 +5511,19 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
+    handlerError = errorMsg;
     console.error('Plugin error:', errorMsg);
     figma.notify(`Error: ${errorMsg}`, { error: true });
+  } finally {
+    if (expected && !replied) {
+      post({
+        type: expected,
+        success: false,
+        error: handlerError
+          ? `Plugin error in ${msg.type}: ${handlerError}`
+          : `The plugin finished ${msg.type} without a result (missing or invalid input?)`,
+      });
+    }
   }
 };
 

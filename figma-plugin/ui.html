@@ -585,7 +585,8 @@
           ws.send(JSON.stringify({
             type: 'hello',
             plugin: 'monorail-figma',
-            version: '0.1.0',
+            version: '0.2.0',
+            features: ['request-id'],
             fileKey: fileContext.fileKey || null,
             fileName: fileContext.fileName || null,
             pageName: fileContext.pageName || null
@@ -608,55 +609,55 @@
               const modeText = msg.mode === 'replace' ? ' (replacing)' : '';
               addActivity('\u2193', `Push ${count} slides${modeText}`);
               if (msg.autoApply) {
-                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), mode: msg.mode || 'append', startIndex: msg.startIndex } }, '*');
+                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), mode: msg.mode || 'append', startIndex: msg.startIndex, requestId: msg.requestId } }, '*');
               } else {
                 showToast(`Received ${count} slides`);
               }
             } else if (msg.type === 'request-export') {
               addActivity('\u2191', 'Pulling deck');
-              parent.postMessage({ pluginMessage: { type: 'export-ir' } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'export-ir', requestId: msg.requestId } }, '*');
             } else if (msg.type === 'patch-elements') {
               const count = msg.patches?.changes?.length || 0;
               addActivity('\u270e', `Patching ${count} elements`);
-              parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'capture-template') {
               addActivity('\u25cb', msg.slideId ? `Capturing ${msg.slideId}` : 'Capturing template');
-              parent.postMessage({ pluginMessage: { type: 'capture-template', slideId: msg.slideId, maxDepth: msg.maxDepth } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'capture-template', slideId: msg.slideId, maxDepth: msg.maxDepth, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'instantiate-template') {
               addActivity('+', 'Creating from template');
-              parent.postMessage({ pluginMessage: { type: 'instantiate-template', sourceId: msg.sourceId, contentMap: msg.contentMap } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'instantiate-template', sourceId: msg.sourceId, contentMap: msg.contentMap, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'create-styled-slide') {
               addActivity('+', `Creating "${msg.layout}" slide`);
-              parent.postMessage({ pluginMessage: { type: 'create-styled-slide', layout: msg.layout, content: msg.content, designSystem: msg.designSystem } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'create-styled-slide', layout: msg.layout, content: msg.content, designSystem: msg.designSystem, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'delete-slides') {
               const count = msg.slideIds?.length || 0;
               addActivity('\u00d7', `Deleting ${count} slides`);
-              parent.postMessage({ pluginMessage: { type: 'delete-slides', slideIds: msg.slideIds } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'delete-slides', slideIds: msg.slideIds, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'reorder-slides') {
               const count = msg.slideIds?.length || 0;
               addActivity('\u2195', `Reordering ${count} slides`);
-              parent.postMessage({ pluginMessage: { type: 'reorder-slides', slideIds: msg.slideIds } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'reorder-slides', slideIds: msg.slideIds, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'request-screenshot') {
               addActivity('\u25ce', msg.slideId ? `Screenshot ${msg.slideId}` : 'Screenshot');
-              parent.postMessage({ pluginMessage: { type: 'export-screenshot', slideId: msg.slideId, scale: msg.scale } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'export-screenshot', slideId: msg.slideId, scale: msg.scale, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'apply-primitives') {
               const count = msg.operations?.length || 0;
               const target = msg.slideId ? ` on ${msg.slideId}` : '';
               addActivity('\u25a0', `${count} primitives${target}`);
-              parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations, minFontSize: msg.minFontSize } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations, minFontSize: msg.minFontSize, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'get-css') {
               addActivity('\u25a1', msg.nodeId ? `CSS for ${msg.nodeId}` : 'CSS for selection');
-              parent.postMessage({ pluginMessage: { type: 'get-css', nodeId: msg.nodeId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'get-css', nodeId: msg.nodeId, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'export-node') {
               addActivity('\u2b07', msg.nodeId ? `Export ${msg.format || 'SVG'} ${msg.nodeId}` : 'Export node');
-              parent.postMessage({ pluginMessage: { type: 'export-node', nodeId: msg.nodeId, format: msg.format, scale: msg.scale } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'export-node', nodeId: msg.nodeId, format: msg.format, scale: msg.scale, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'get-component-info') {
               addActivity('\u25c6', msg.nodeId ? `Component ${msg.nodeId}` : 'Component info');
-              parent.postMessage({ pluginMessage: { type: 'get-component-info', nodeId: msg.nodeId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'get-component-info', nodeId: msg.nodeId, requestId: msg.requestId } }, '*');
             } else if (msg.type === 'find-nodes') {
               const desc = [msg.nodeType, msg.name].filter(Boolean).join(' ');
               addActivity('\u25c9', `Find ${desc || 'nodes'}`);
-              parent.postMessage({ pluginMessage: { type: 'find-nodes', nodeType: msg.nodeType, name: msg.name, parentId: msg.parentId, limit: msg.limit } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'find-nodes', nodeType: msg.nodeType, name: msg.name, parentId: msg.parentId, limit: msg.limit, requestId: msg.requestId } }, '*');
             } else {
               // Generic relay — forward any unrecognized message types to plugin
               // This prevents needing ui.html updates for every new tool
@@ -723,27 +724,34 @@
         }
         if (msg.skipped > 0) parts.push(`${msg.skipped} skipped`);
         const posText = msg.startIndex !== undefined ? ` @${msg.startIndex}` : '';
-        const text = (parts.join(' ') + posText) || `Applied ${msg.count} slides`;
-        addActivity('\u2713', text);
-        showToast(text);
+        const text = msg.success === false
+          ? `Push failed: ${msg.error}`
+          : (parts.join(' ') + posText) || `Applied ${msg.count} slides`;
+        addActivity(msg.success === false ? '\u2717' : '\u2713', text);
+        showToast(text, msg.success === false);
 
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'applied', count: msg.count, created: msg.created,
             updated: msg.updated, skipped: msg.skipped,
             createdNames: msg.createdNames, updatedNames: msg.updatedNames,
-            startIndex: msg.startIndex
+            startIndex: msg.startIndex,
+            success: msg.success, error: msg.error, requestId: msg.requestId
           }));
         }
       }
 
       // Exported deck
       if (msg.type === 'exported') {
-        const parsed = JSON.parse(msg.ir);
-        const count = parsed.slides?.length || 0;
-        addActivity('\u2713', `Pulled ${count} slides`);
+        // An error reply has no IR; parsing it used to throw here, so nothing
+        // was sent back and the request hung.
+        let parsed = null;
+        let error = msg.error;
+        try { parsed = typeof msg.ir === 'string' ? JSON.parse(msg.ir) : (msg.ir || null); }
+        catch (e) { error = error || `Could not parse the exported IR: ${e.message}`; }
+        addActivity(parsed ? '\u2713' : '\u2717', parsed ? `Pulled ${parsed.slides?.length || 0} slides` : `Pull failed: ${error}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'exported', ir: parsed }));
+          ws.send(JSON.stringify({ type: 'exported', ir: parsed, success: msg.success, error, requestId: msg.requestId }));
         }
       }
 
@@ -762,19 +770,27 @@
           ws.send(JSON.stringify({
             type: 'patched', updated: msg.updated, added: msg.added,
             deleted: msg.deleted, failed: msg.failed,
-            newElements: msg.newElements, deletedElements: msg.deletedElements
+            newElements: msg.newElements, deletedElements: msg.deletedElements,
+            success: msg.success, error: msg.error, requestId: msg.requestId
           }));
         }
       }
 
       // Template captured
       if (msg.type === 'template-captured') {
-        addActivity('\u2713', `Captured ${msg.nodeCount} nodes`);
+        // The error replies ("Slide not found") carry no template; parsing one
+        // used to throw here, so nothing was sent back and the request hung.
+        let template = null;
+        let error = msg.error;
+        try { template = typeof msg.template === 'string' ? JSON.parse(msg.template) : (msg.template || null); }
+        catch (e) { error = error || `Could not parse the captured template: ${e.message}`; }
+        addActivity(template ? '\u2713' : '\u2717', template ? `Captured ${msg.nodeCount} nodes` : `Capture failed: ${error}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'template-captured',
-            template: JSON.parse(msg.template),
-            nodeCount: msg.nodeCount
+            template,
+            nodeCount: msg.nodeCount,
+            success: msg.success, error, requestId: msg.requestId
           }));
         }
       }
@@ -790,7 +806,7 @@
           ws.send(JSON.stringify({
             type: 'instantiated', success: msg.success,
             newSlideId: msg.newSlideId, updated: msg.updated,
-            failed: msg.failed, error: msg.error
+            failed: msg.failed, error: msg.error, requestId: msg.requestId
           }));
         }
       }
@@ -801,7 +817,7 @@
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'styled-slide-created', success: msg.success,
-            slideId: msg.slideId, error: msg.error
+            slideId: msg.slideId, error: msg.error, requestId: msg.requestId
           }));
         }
       }
@@ -823,7 +839,8 @@
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'slides-deleted', deleted: msg.deleted,
-            failed: msg.failed, deletedNames: msg.deletedNames
+            failed: msg.failed, deletedNames: msg.deletedNames,
+            success: msg.success, error: msg.error, requestId: msg.requestId
           }));
         }
       }
@@ -850,7 +867,7 @@
           ws.send(JSON.stringify({
             type: 'slides-reordered', success: msg.success,
             count: msg.count, beforeOrder: msg.beforeOrder,
-            afterOrder: msg.afterOrder, error: msg.error
+            afterOrder: msg.afterOrder, error: msg.error, requestId: msg.requestId
           }));
         }
       }
@@ -868,7 +885,7 @@
             type: 'screenshot-exported', success: msg.success,
             slideId: msg.slideId, slideName: msg.slideName,
             base64: msg.base64, width: msg.width, height: msg.height,
-            error: msg.error
+            error: msg.error, requestId: msg.requestId
           }));
         }
       }
@@ -885,7 +902,8 @@
           ws.send(JSON.stringify({
             type: 'primitives-applied', success: msg.success,
             slideId: msg.slideId, slideName: msg.slideName,
-            created: msg.created, animated: msg.animated, stepSlides: msg.stepSlides, groups: msg.groups, warnings: msg.warnings, error: msg.error
+            created: msg.created, animated: msg.animated, stepSlides: msg.stepSlides, groups: msg.groups, warnings: msg.warnings, error: msg.error,
+            requestId: msg.requestId
           }));
         }
         if (msg.warnings?.length > 0) {
@@ -900,7 +918,7 @@
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'css-extracted', success: msg.success,
-            css: msg.css, raw: msg.raw, error: msg.error
+            css: msg.css, raw: msg.raw, error: msg.error, requestId: msg.requestId
           }));
         }
       }
@@ -914,7 +932,7 @@
             type: 'node-exported', success: msg.success,
             nodeId: msg.nodeId, nodeName: msg.nodeName,
             format: msg.format, data: msg.data,
-            width: msg.width, height: msg.height, error: msg.error
+            width: msg.width, height: msg.height, error: msg.error, requestId: msg.requestId
           }));
         }
       }

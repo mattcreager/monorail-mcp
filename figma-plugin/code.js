@@ -192,6 +192,47 @@
     return Math.round(n * 1e3) / 1e3;
   }
 
+  // ../shared/protocol.ts
+  var RESPONSE_FOR = {
+    "request-export": "exported",
+    "push-ir": "applied",
+    "patch-elements": "patched",
+    "capture-template": "template-captured",
+    "instantiate-template": "instantiated",
+    "create-styled-slide": "styled-slide-created",
+    "delete-slides": "slides-deleted",
+    "reorder-slides": "slides-reordered",
+    "request-screenshot": "screenshot-exported",
+    "apply-primitives": "primitives-applied",
+    "get-css": "css-extracted",
+    "export-node": "node-exported",
+    "get-component-info": "component-info",
+    "find-nodes": "nodes-found",
+    "apply-motion": "motion-result",
+    "apply-probe": "probe-result"
+  };
+  var REQUEST_TYPES = new Set(Object.keys(RESPONSE_FOR));
+  var RESPONSE_TYPES = new Set(Object.values(RESPONSE_FOR));
+  var PLUGIN_REPLY_FOR = {
+    "apply-ir": "applied",
+    "export-ir": "exported",
+    "patch-elements": "patched",
+    "capture-template": "template-captured",
+    "instantiate-template": "instantiated",
+    "create-styled-slide": "styled-slide-created",
+    "delete-slides": "slides-deleted",
+    "reorder-slides": "slides-reordered",
+    "export-screenshot": "screenshot-exported",
+    "apply-primitives": "primitives-applied",
+    "get-css": "css-extracted",
+    "export-node": "node-exported",
+    "get-component-info": "component-info",
+    "find-nodes": "nodes-found",
+    "apply-motion": "motion-result",
+    "apply-probe": "probe-result"
+  };
+  var MAX_TIMEOUT_MS = 10 * 6e4;
+
   // ../shared/geometry.ts
   function resolveDirectionDegrees(dir) {
     if (typeof dir === "number") return { degrees: dir };
@@ -2473,6 +2514,14 @@
   }
   figma.ui.onmessage = async (msg) => {
     var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _l, _m;
+    const requestId = msg.requestId;
+    const expected = PLUGIN_REPLY_FOR[msg.type];
+    let replied = false;
+    let handlerError = null;
+    const post = (payload) => {
+      if (payload && payload.type === expected) replied = true;
+      figma.ui.postMessage(requestId ? __spreadProps(__spreadValues({}, payload), { requestId }) : payload);
+    };
     try {
       if (msg.type === "apply-ir") {
         if (!msg.ir) {
@@ -2629,7 +2678,7 @@
         if (skipped > 0) summary.push(`${skipped} skipped (locked)`);
         const positionText = pushMode === "append" && startIndex !== void 0 ? ` at position ${startIndex}` : "";
         figma.notify(`\u2713 ${summary.join(" \u2022 ")}${positionText}`, { timeout: 3e3 });
-        figma.ui.postMessage({
+        post({
           type: "applied",
           count: created + updated,
           created,
@@ -2647,7 +2696,7 @@
         const selection = figma.currentPage.selection;
         if (selection.length === 0) {
           figma.notify("No selection. Click on a slide first.", { error: true });
-          figma.ui.postMessage({ type: "slide-reference", success: false, error: "No selection. Select a slide first." });
+          post({ type: "slide-reference", success: false, error: "No selection. Select a slide first." });
           return;
         }
         console.log("[Plugin] Selection:", selection[0].type, selection[0].name);
@@ -2657,7 +2706,7 @@
         if (nodeType === "SLIDE" || nodeType === "FRAME" && ((_b = node.parent) == null ? void 0 : _b.type) === "PAGE") {
           const ref = `Slide: "${node.name || "Untitled"}" (${node.id})`;
           figma.notify(ref, { timeout: 3e3 });
-          figma.ui.postMessage({
+          post({
             type: "slide-reference",
             success: true,
             id: node.id,
@@ -2672,7 +2721,7 @@
           if (currentType === "SLIDE") {
             const ref = `Slide: "${node.name || "Untitled"}" (${node.id})`;
             figma.notify(ref, { timeout: 3e3 });
-            figma.ui.postMessage({
+            post({
               type: "slide-reference",
               success: true,
               id: node.id,
@@ -2683,7 +2732,7 @@
           if (currentType === "FRAME" && parentType === "PAGE") {
             const ref = `Slide: "${node.name || "Untitled"}" (${node.id})`;
             figma.notify(ref, { timeout: 3e3 });
-            figma.ui.postMessage({
+            post({
               type: "slide-reference",
               success: true,
               id: node.id,
@@ -2697,7 +2746,7 @@
           node = node.parent;
         }
         figma.notify("Could not find slide. Try clicking directly on slide content.", { error: true });
-        figma.ui.postMessage({ type: "slide-reference", success: false, error: "Selection is not in a slide. Click on slide content first." });
+        post({ type: "slide-reference", success: false, error: "Selection is not in a slide. Click on slide content first." });
         return;
       }
       if (msg.type === "export-ir") {
@@ -2777,7 +2826,7 @@
         }).length;
         const diagramSlides = slides.filter((s) => s.has_diagram).length;
         const containerCount = allContainers.length;
-        figma.ui.postMessage({ type: "exported", ir: JSON.stringify(ir, null, 2) });
+        post({ type: "exported", ir: JSON.stringify(ir, null, 2) });
         const stats = [`${slides.length} slides`, `${richSlides} with elements`];
         if (diagramSlides > 0) stats.push(`${diagramSlides} with diagrams`);
         if (containerCount > 0) stats.push(`${containerCount} addable containers`);
@@ -2786,7 +2835,7 @@
       if (msg.type === "patch-elements") {
         if (!msg.patches || !msg.patches.changes || msg.patches.changes.length === 0) {
           figma.notify("No patches provided", { error: true });
-          figma.ui.postMessage({ type: "patched", updated: 0, failed: [], fontSubstitutions: [] });
+          post({ type: "patched", updated: 0, failed: [], fontSubstitutions: [] });
           return;
         }
         const result = await applyPatches(msg.patches);
@@ -2800,7 +2849,7 @@
           notifyMsg += ` (${uniqueSubs.length} font sub${uniqueSubs.length > 1 ? "s" : ""})`;
         }
         figma.notify(notifyMsg, { error: result.failed.length > 0 });
-        figma.ui.postMessage(__spreadValues({ type: "patched" }, result));
+        post(__spreadValues({ type: "patched" }, result));
       }
       if (msg.type === "capture-template") {
         let countNodes2 = function(node) {
@@ -2819,7 +2868,7 @@
           targetNode = await figma.getNodeByIdAsync(requestedSlideId);
           if (!targetNode) {
             figma.notify(`Slide not found: ${requestedSlideId}`, { error: true });
-            figma.ui.postMessage({ type: "template-captured", error: `Slide not found: ${requestedSlideId}` });
+            post({ type: "template-captured", error: `Slide not found: ${requestedSlideId}` });
             return;
           }
         } else if (figma.currentPage.selection.length > 0) {
@@ -2845,12 +2894,12 @@
         }
         if (!targetNode) {
           figma.notify("No slide selected or found", { error: true });
-          figma.ui.postMessage({ type: "template-captured", error: "No slide selected or found" });
+          post({ type: "template-captured", error: "No slide selected or found" });
           return;
         }
         const captured = captureNodeTree(targetNode);
         const nodeCount = countNodes2(captured);
-        figma.ui.postMessage({
+        post({
           type: "template-captured",
           template: JSON.stringify(captured, null, 2),
           nodeCount
@@ -3066,7 +3115,7 @@
           figma.currentPage.selection = [slide];
           figma.viewport.scrollAndZoomIntoView([slide]);
           figma.notify(`\u2713 Created "${layout}" slide`);
-          figma.ui.postMessage({
+          post({
             type: "styled-slide-created",
             success: true,
             slideId: slide.id
@@ -3075,7 +3124,7 @@
           const errorMsg = err instanceof Error ? err.message : String(err);
           console.error("Create styled slide error:", errorMsg);
           figma.notify(`Error: ${errorMsg}`, { error: true });
-          figma.ui.postMessage({ type: "styled-slide-created", success: false, error: errorMsg });
+          post({ type: "styled-slide-created", success: false, error: errorMsg });
         }
       }
       if (msg.type === "instantiate-template") {
@@ -3083,14 +3132,14 @@
         const contentMap = msg.contentMap;
         if (!sourceId) {
           figma.notify("No source slide ID provided", { error: true });
-          figma.ui.postMessage({ type: "instantiated", success: false, error: "No source ID" });
+          post({ type: "instantiated", success: false, error: "No source ID" });
           return;
         }
         try {
           const sourceNode = await figma.getNodeByIdAsync(sourceId);
           if (!sourceNode) {
             figma.notify(`Source slide not found: ${sourceId}`, { error: true });
-            figma.ui.postMessage({ type: "instantiated", success: false, error: "Source not found" });
+            post({ type: "instantiated", success: false, error: "Source not found" });
             return;
           }
           const clonedSlide = sourceNode.clone();
@@ -3168,7 +3217,7 @@
             notifyMsg += ` (${uniqueSubs.length} font substitution${uniqueSubs.length > 1 ? "s" : ""})`;
           }
           figma.notify(notifyMsg);
-          figma.ui.postMessage({
+          post({
             type: "instantiated",
             success: true,
             newSlideId: clonedSlide.id,
@@ -3181,14 +3230,14 @@
           const errorMsg = err instanceof Error ? err.message : String(err);
           console.error("Instantiate error:", errorMsg);
           figma.notify(`Error: ${errorMsg}`, { error: true });
-          figma.ui.postMessage({ type: "instantiated", success: false, error: errorMsg });
+          post({ type: "instantiated", success: false, error: errorMsg });
         }
       }
       if (msg.type === "delete-slides") {
         const slideIds = msg.slideIds;
         if (!slideIds || slideIds.length === 0) {
           figma.notify("No slide IDs provided", { error: true });
-          figma.ui.postMessage({ type: "slides-deleted", deleted: 0, failed: [], deletedNames: [] });
+          post({ type: "slides-deleted", deleted: 0, failed: [], deletedNames: [] });
           return;
         }
         let deleted = 0;
@@ -3232,13 +3281,13 @@
         if (failed.length > 0) {
           figma.notify(`${failed.length} slides not found`, { error: true });
         }
-        figma.ui.postMessage({ type: "slides-deleted", deleted, failed, deletedNames });
+        post({ type: "slides-deleted", deleted, failed, deletedNames });
       }
       if (msg.type === "reorder-slides") {
         const slideIds = msg.slideIds;
         if (!slideIds || slideIds.length === 0) {
           figma.notify("No slide IDs provided", { error: true });
-          figma.ui.postMessage({ type: "slides-reordered", success: false, error: "No slide IDs provided" });
+          post({ type: "slides-reordered", success: false, error: "No slide IDs provided" });
           return;
         }
         try {
@@ -3255,12 +3304,12 @@
             }
           }
           if (slides.length === 0) {
-            figma.ui.postMessage({ type: "slides-reordered", success: false, error: "No valid slides found" });
+            post({ type: "slides-reordered", success: false, error: "No valid slides found" });
             return;
           }
           const parent = slides[0].parent;
           if (!parent || !("insertChild" in parent)) {
-            figma.ui.postMessage({ type: "slides-reordered", success: false, error: "Cannot access slide container" });
+            post({ type: "slides-reordered", success: false, error: "Cannot access slide container" });
             return;
           }
           const currentChildren = parent.children || [];
@@ -3285,7 +3334,7 @@
           } else {
             figma.notify(`\u2713 Order unchanged (${slides.length} slides)`);
           }
-          figma.ui.postMessage({
+          post({
             type: "slides-reordered",
             success: true,
             count: slides.length,
@@ -3296,7 +3345,7 @@
           const errorMsg = err instanceof Error ? err.message : String(err);
           console.error("Reorder error:", errorMsg);
           figma.notify(`Error: ${errorMsg}`, { error: true });
-          figma.ui.postMessage({ type: "slides-reordered", success: false, error: errorMsg });
+          post({ type: "slides-reordered", success: false, error: errorMsg });
         }
       }
       if (msg.type === "export-screenshot") {
@@ -3307,7 +3356,7 @@
           targetNode = await figma.getNodeByIdAsync(requestedSlideId);
           if (!targetNode) {
             figma.notify(`Slide not found: ${requestedSlideId}`, { error: true });
-            figma.ui.postMessage({ type: "screenshot-exported", error: `Slide not found: ${requestedSlideId}` });
+            post({ type: "screenshot-exported", error: `Slide not found: ${requestedSlideId}` });
             return;
           }
         } else if (figma.currentPage.selection.length > 0) {
@@ -3333,7 +3382,7 @@
         }
         if (!targetNode) {
           figma.notify("No slide found to screenshot", { error: true });
-          figma.ui.postMessage({ type: "screenshot-exported", error: "No slide found" });
+          post({ type: "screenshot-exported", error: "No slide found" });
           return;
         }
         try {
@@ -3342,7 +3391,7 @@
             constraint: { type: "SCALE", value: scale }
           });
           const base64 = figma.base64Encode(pngData);
-          figma.ui.postMessage({
+          post({
             type: "screenshot-exported",
             success: true,
             slideId: targetNode.id,
@@ -3356,7 +3405,7 @@
           const errorMsg = err instanceof Error ? err.message : String(err);
           console.error("Screenshot export error:", errorMsg);
           figma.notify(`Export failed: ${errorMsg}`, { error: true });
-          figma.ui.postMessage({ type: "screenshot-exported", success: false, error: errorMsg });
+          post({ type: "screenshot-exported", success: false, error: errorMsg });
         }
       }
       if (msg.type === "apply-primitives") {
@@ -3364,7 +3413,7 @@
         const operations = msg.operations;
         if (!operations || operations.length === 0) {
           figma.notify("No operations provided", { error: true });
-          figma.ui.postMessage({ type: "primitives-applied", success: false, error: "No operations provided" });
+          post({ type: "primitives-applied", success: false, error: "No operations provided" });
           return;
         }
         try {
@@ -3867,7 +3916,7 @@
           if (warnings.length > 0) {
             figma.notify(`\u26A0\uFE0F ${warnings.length} design warning(s)`, { timeout: 3e3 });
           }
-          figma.ui.postMessage({
+          post({
             type: "primitives-applied",
             success: true,
             slideId: targetSlide.id,
@@ -3882,7 +3931,7 @@
           const errorMsg = err instanceof Error ? err.message : String(err);
           console.error("Primitives error:", errorMsg);
           figma.notify(`Failed: ${errorMsg}`, { error: true });
-          figma.ui.postMessage({ type: "primitives-applied", success: false, error: errorMsg });
+          post({ type: "primitives-applied", success: false, error: errorMsg });
         }
       }
       if (msg.type === "get-css") {
@@ -3894,7 +3943,7 @@
           targetNode = figma.currentPage.selection[0];
         }
         if (!targetNode) {
-          figma.ui.postMessage({ type: "css-extracted", success: false, error: nodeId ? `Node not found: ${nodeId}` : "No node selected" });
+          post({ type: "css-extracted", success: false, error: nodeId ? `Node not found: ${nodeId}` : "No node selected" });
           return;
         }
         try {
@@ -3930,7 +3979,7 @@
           if ("blendMode" in targetNode) {
             raw.blendMode = targetNode.blendMode;
           }
-          figma.ui.postMessage({
+          post({
             type: "css-extracted",
             success: true,
             css,
@@ -3938,7 +3987,7 @@
           });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          figma.ui.postMessage({ type: "css-extracted", success: false, error: errorMsg });
+          post({ type: "css-extracted", success: false, error: errorMsg });
         }
       }
       if (msg.type === "export-node") {
@@ -3952,7 +4001,7 @@
           targetNode = figma.currentPage.selection[0];
         }
         if (!targetNode) {
-          figma.ui.postMessage({
+          post({
             type: "node-exported",
             success: false,
             error: nodeId ? `Node not found: ${nodeId}` : "No node selected"
@@ -3967,7 +4016,7 @@
               chunks.push(String.fromCharCode.apply(null, [...svgData.slice(i, i + 8192)]));
             }
             const svgString = chunks.join("");
-            figma.ui.postMessage({
+            post({
               type: "node-exported",
               success: true,
               nodeId: targetNode.id,
@@ -3983,7 +4032,7 @@
               constraint: { type: "SCALE", value: scale }
             });
             const base64 = figma.base64Encode(pngData);
-            figma.ui.postMessage({
+            post({
               type: "node-exported",
               success: true,
               nodeId: targetNode.id,
@@ -3997,7 +4046,7 @@
           figma.notify(`Exported "${targetNode.name}" as ${format}`);
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          figma.ui.postMessage({ type: "node-exported", success: false, error: errorMsg });
+          post({ type: "node-exported", success: false, error: errorMsg });
         }
       }
       if (msg.type === "get-component-info") {
@@ -4009,7 +4058,7 @@
           targetNode = figma.currentPage.selection[0];
         }
         if (!targetNode) {
-          figma.ui.postMessage({
+          post({
             type: "component-info",
             success: false,
             error: nodeId ? `Node not found: ${nodeId}` : "No node selected"
@@ -4071,12 +4120,12 @@
             properties: v.variantProperties || {}
           }));
         }
-        figma.ui.postMessage(result);
+        post(result);
       }
       if (msg.type === "apply-motion") {
         const action = msg.action;
         const targets = msg.targets || [];
-        const reply = (payload) => figma.ui.postMessage(__spreadValues({ type: "motion-result", action }, payload));
+        const reply = (payload) => post(__spreadValues({ type: "motion-result", action }, payload));
         try {
           if ((action === "list" || action === "clear") && !motionAvailable()) {
             const api = (_i = figma.apiVersion) != null ? _i : "unknown";
@@ -4171,7 +4220,7 @@
       }
       if (msg.type === "apply-probe") {
         const action = msg.action;
-        const reply = (payload) => figma.ui.postMessage(__spreadValues({ type: "probe-result", action }, payload));
+        const reply = (payload) => post(__spreadValues({ type: "probe-result", action }, payload));
         const safeJson = (v, depth = 3) => {
           const seen = /* @__PURE__ */ new WeakSet();
           const walk = (x, d) => {
@@ -4262,7 +4311,7 @@
           if (parentId) {
             const parent = await figma.getNodeByIdAsync(parentId);
             if (!parent || !("children" in parent)) {
-              figma.ui.postMessage({
+              post({
                 type: "nodes-found",
                 success: false,
                 error: `Parent not found or has no children: ${parentId}`
@@ -4294,7 +4343,7 @@
               parentName: (_d2 = (_c2 = node.parent) == null ? void 0 : _c2.name) != null ? _d2 : null
             };
           });
-          figma.ui.postMessage({
+          post({
             type: "nodes-found",
             success: true,
             nodes: results,
@@ -4304,7 +4353,7 @@
           figma.notify(`Found ${total} nodes${total > limit ? ` (showing ${limit})` : ""}`);
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          figma.ui.postMessage({ type: "nodes-found", success: false, error: errorMsg });
+          post({ type: "nodes-found", success: false, error: errorMsg });
         }
       }
       if (msg.type === "close") {
@@ -4312,8 +4361,17 @@
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      handlerError = errorMsg;
       console.error("Plugin error:", errorMsg);
       figma.notify(`Error: ${errorMsg}`, { error: true });
+    } finally {
+      if (expected && !replied) {
+        post({
+          type: expected,
+          success: false,
+          error: handlerError ? `Plugin error in ${msg.type}: ${handlerError}` : `The plugin finished ${msg.type} without a result (missing or invalid input?)`
+        });
+      }
     }
   };
   console.log(`Monorail loaded. Editor: ${figma.editorType}`);
