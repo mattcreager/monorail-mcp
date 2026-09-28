@@ -603,7 +603,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_status",
         description:
-          "Check if the Figma plugin is connected via WebSocket. Returns connection state and plugin info if connected.",
+          "Check the connection to the Figma plugin. Reports whether a plugin is connected (and which build), the shared proxy this session goes through, who holds the plugin right now (request type, session, age) and recent requests the plugin never answered, plus the current selection.",
         inputSchema: {
           type: "object" as const,
           properties: {},
@@ -744,6 +744,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description:
                 "Figma node ID to extract CSS from. If omitted, uses the currently selected node.",
+            },
+            timeout_ms: {
+              type: "number",
+              description: "How long to wait for the plugin, in ms (default 90000; 1000–600000). A big node can take longer. While a request runs, other sessions get told the plugin is busy, for up to this long if it never answers.",
             },
           },
         },
@@ -1047,6 +1051,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             node_id: { type: "string", description: "For node/eval: Figma node ID. Defaults to the current selection." },
             filter: { type: "string", description: "For node: case-insensitive regex on property names." },
             code: { type: "string", description: "For eval: async function body. `return` a JSON-serialisable value." },
+            timeout_ms: { type: "number", description: "How long to wait for the plugin, in ms (default 120000; 1000–600000). Other sessions are told the plugin is busy while the probe runs." },
           },
           required: ["action"],
         },
@@ -1072,6 +1077,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "number",
               description:
                 "Export scale factor (default: 1). Only affects PNG output.",
+            },
+            timeout_ms: {
+              type: "number",
+              description: "How long to wait for the plugin, in ms (default 90000; 1000–600000). A big node can take longer. While a request runs, other sessions get told the plugin is busy, for up to this long if it never answers.",
             },
           },
         },
@@ -1132,60 +1141,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // monorail_status - Check plugin connection
     // =========================================================================
     case "monorail_status": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
-      
-      if (isConnected) {
-        const selectionText = currentSelection.count > 0
-          ? `\n  Selection: ${currentSelection.count} node(s)\n` + currentSelection.nodes.map(n => {
-              const dims = n.width != null && n.height != null ? ` ${n.width}×${n.height}` : '';
-              return `    - ${n.type} "${n.name}"${dims}${n.parent ? ` (in ${n.parent})` : ''}`;
-            }).join('\n')
-          : '\n  Selection: none';
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `✓ Figma plugin connected\n  Plugin: ${pluginInfo.name || "unknown"}\n  Version: ${pluginInfo.version || "unknown"}\n  Connected at: ${pluginInfo.connectedAt || "unknown"}\n  WebSocket server: ws://localhost:${WS_PORT}${selectionText}`,
-            },
-          ],
-        };
-      } else {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `✗ No plugin connected\n  WebSocket server: ws://localhost:${WS_PORT} (listening)\n\nTo connect:\n1. Open Figma Slides\n2. Run the Monorail plugin\n3. Plugin will auto-connect on open`,
-            },
-          ],
-        };
-      }
+      await linkReady();
+      return { content: [{ type: "text" as const, text: await statusText() }] };
     }
 
     // =========================================================================
     // monorail_pull - Get deck state from Figma
     // =========================================================================
     case "monorail_pull": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
 
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Check if there's already a pending pull request
-      if (hasPendingRequest('pull')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another pull request is already in progress. Please wait.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -1197,8 +1168,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const mode = (args?.mode as string) || "full";
 
       // Create pending request and send to plugin
-      const pullPromise = createPendingRequest<DeckIR>('pull', "Timeout waiting for plugin export");
-      connectedPlugin!.send(JSON.stringify({ type: "request-export" }));
+      const pullPromise = pluginRequest<DeckIR>({ type: "request-export" });
 
       try {
         const ir = await pullPromise;
@@ -1342,14 +1312,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // monorail_push - Create/replace slides in Figma (with inline validation)
     // =========================================================================
     case "monorail_push": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -1400,16 +1370,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const mode = (args?.mode as string) || "append"; // Default to append for backwards compatibility
       const startIndex = args?.start_index as number | undefined;
 
-      // Send to plugin
-      connectedPlugin!.send(
-        JSON.stringify({
-          type: "push-ir",
-          ir: ir,
-          autoApply: autoApply,
-          mode: mode,
-          startIndex: mode === "append" ? startIndex : undefined, // startIndex only applies in append mode
-        })
-      );
+      // Send to plugin. With autoApply the plugin answers `applied`, so wait for
+      // it: a push that was refused (plugin busy, no plugin) used to report
+      // success anyway. Without autoApply the plugin only shows a toast and
+      // never replies, so there is nothing to wait for.
+      const pushMessage = {
+        type: "push-ir",
+        ir: ir,
+        autoApply: autoApply,
+        mode: mode,
+        startIndex: mode === "append" ? startIndex : undefined, // startIndex only applies in append mode
+      };
+      try {
+        if (autoApply) {
+          await pluginRequest(pushMessage);
+        } else {
+          connectedPlugin!.send(JSON.stringify(pushMessage));
+        }
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error pushing slides: ${e instanceof Error ? e.message : "unknown error"}` }],
+          isError: true,
+        };
+      }
 
       // Also update currentIR in server state
       currentIR = ir;
@@ -1437,14 +1420,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // monorail_patch - Update specific elements by node ID
     // =========================================================================
     case "monorail_patch": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -1459,22 +1442,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Check if there's already a pending patch request
-      if (hasPendingRequest('patch')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another patch request is already in progress. Please wait.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
       // Create pending request and send to plugin
-      const patchPromise = createPendingRequest<PatchResult>('patch', "Timeout waiting for patch result");
-      connectedPlugin!.send(JSON.stringify({ type: "patch-elements", patches }));
+      const patchPromise = pluginRequest<PatchResult>({ type: "patch-elements", patches });
 
       try {
         const result = await patchPromise;
@@ -1526,7 +1495,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // monorail_capture - Capture slide structure + design system + slots
     // =========================================================================
 case "monorail_capture": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
 
       // Extract parameters
       const maxDepth = typeof request.params?.arguments?.max_depth === 'number'
@@ -1541,20 +1510,7 @@ case "monorail_capture": {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Check if there's already a pending capture request
-      if (hasPendingRequest('capture')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another capture request is already in progress. Please wait.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -1562,8 +1518,7 @@ case "monorail_capture": {
       }
 
       // Create pending request and send to plugin (with optional slideId and maxDepth)
-      const capturePromise = createPendingRequest<CapturedTemplate>('capture', "Timeout waiting for template capture");
-      connectedPlugin!.send(JSON.stringify({ type: "capture-template", slideId, maxDepth }));
+      const capturePromise = pluginRequest<CapturedTemplate>({ type: "capture-template", slideId, maxDepth });
 
       try {
         const result = await capturePromise;
@@ -1652,7 +1607,7 @@ ${JSON.stringify(output, null, 2)}
     // monorail_css - Extract CSS + raw paint data from a node
     // =========================================================================
     case "monorail_css": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
 
       const nodeId = typeof request.params?.arguments?.node_id === 'string'
         ? request.params.arguments.node_id
@@ -1663,27 +1618,14 @@ ${JSON.stringify(output, null, 2)}
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
         };
       }
 
-      if (hasPendingRequest('css')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another CSS request is already in progress. Please wait.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const cssPromise = createPendingRequest<CssResult>('css', "Timeout waiting for CSS extraction");
-      connectedPlugin!.send(JSON.stringify({ type: "get-css", nodeId }));
+      const cssPromise = pluginRequest<CssResult>({ type: "get-css", nodeId }, { timeoutMs: request.params?.arguments?.timeout_ms });
 
       try {
         const result = await cssPromise;
@@ -1748,7 +1690,7 @@ ${JSON.stringify(output, null, 2)}
     // monorail_export - Export node as SVG or PNG
     // =========================================================================
     case "monorail_export": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
 
       const nodeId = typeof request.params?.arguments?.node_id === 'string'
         ? request.params.arguments.node_id
@@ -1762,20 +1704,12 @@ ${JSON.stringify(output, null, 2)}
 
       if (!isConnected) {
         return {
-          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first." }],
+          content: [{ type: "text" as const, text: notConnectedMessage() }],
           isError: true,
         };
       }
 
-      if (hasPendingRequest('export')) {
-        return {
-          content: [{ type: "text" as const, text: "Error: Another export request is already in progress. Please wait." }],
-          isError: true,
-        };
-      }
-
-      const exportPromise = createPendingRequest<ExportResult>('export', "Timeout waiting for node export");
-      connectedPlugin!.send(JSON.stringify({ type: "export-node", nodeId, format, scale }));
+      const exportPromise = pluginRequest<ExportResult>({ type: "export-node", nodeId, format, scale }, { timeoutMs: request.params?.arguments?.timeout_ms });
 
       try {
         const result = await exportPromise;
@@ -1824,7 +1758,7 @@ ${JSON.stringify(output, null, 2)}
     // monorail_component - Inspect component relationships
     // =========================================================================
     case "monorail_component": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
 
       const nodeId = typeof request.params?.arguments?.node_id === 'string'
         ? request.params.arguments.node_id
@@ -1832,20 +1766,12 @@ ${JSON.stringify(output, null, 2)}
 
       if (!isConnected) {
         return {
-          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first." }],
+          content: [{ type: "text" as const, text: notConnectedMessage() }],
           isError: true,
         };
       }
 
-      if (hasPendingRequest('component')) {
-        return {
-          content: [{ type: "text" as const, text: "Error: Another component request is already in progress. Please wait." }],
-          isError: true,
-        };
-      }
-
-      const compPromise = createPendingRequest<ComponentInfoResult>('component', "Timeout waiting for component info");
-      connectedPlugin!.send(JSON.stringify({ type: "get-component-info", nodeId }));
+      const compPromise = pluginRequest<ComponentInfoResult>({ type: "get-component-info", nodeId });
 
       try {
         const result = await compPromise;
@@ -1900,7 +1826,7 @@ ${JSON.stringify(output, null, 2)}
     // monorail_find - Search nodes by type/name
     // =========================================================================
     case "monorail_find": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
 
       const nodeType = typeof request.params?.arguments?.type === 'string'
         ? request.params.arguments.type
@@ -1917,20 +1843,12 @@ ${JSON.stringify(output, null, 2)}
 
       if (!isConnected) {
         return {
-          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma and run the Monorail plugin first." }],
+          content: [{ type: "text" as const, text: notConnectedMessage() }],
           isError: true,
         };
       }
 
-      if (hasPendingRequest('find')) {
-        return {
-          content: [{ type: "text" as const, text: "Error: Another find request is already in progress. Please wait." }],
-          isError: true,
-        };
-      }
-
-      const findPromise = createPendingRequest<FindResult>('find', "Timeout waiting for node search");
-      connectedPlugin!.send(JSON.stringify({ type: "find-nodes", nodeType, name: nodeName, parentId, limit }));
+      const findPromise = pluginRequest<FindResult>({ type: "find-nodes", nodeType, name: nodeName, parentId, limit });
 
       try {
         const result = await findPromise;
@@ -1976,14 +1894,14 @@ ${JSON.stringify(output, null, 2)}
     // monorail_clone - Clone slide and update content
     // =========================================================================
     case "monorail_clone": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -2000,26 +1918,12 @@ ${JSON.stringify(output, null, 2)}
         };
       }
 
-      // Check if there's already a pending instantiate request
-      if (hasPendingRequest('instantiate')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another clone request is already in progress. Please wait.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
       // Create pending request and send to plugin
-      const instantiatePromise = createPendingRequest<InstantiateResult>('instantiate', "Timeout waiting for clone");
-      connectedPlugin!.send(JSON.stringify({ 
-        type: "instantiate-template", 
+      const instantiatePromise = pluginRequest<InstantiateResult>({
+        type: "instantiate-template",
         sourceId: sourceSlideId,
         contentMap: contentMap || {}
-      }));
+      });
 
       try {
         const result = await instantiatePromise;
@@ -2066,14 +1970,14 @@ The new slide has been selected in Figma.`,
     // monorail_delete - Delete slides by ID
     // =========================================================================
     case "monorail_delete": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -2088,22 +1992,8 @@ The new slide has been selected in Figma.`,
         };
       }
 
-      // Check if there's already a pending delete request
-      if (hasPendingRequest('delete')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another delete request is already in progress. Please wait.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
       // Create pending request and send to plugin
-      const deletePromise = createPendingRequest<DeleteResult>('delete', "Timeout waiting for delete result");
-      connectedPlugin!.send(JSON.stringify({ type: "delete-slides", slideIds }));
+      const deletePromise = pluginRequest<DeleteResult>({ type: "delete-slides", slideIds });
 
       try {
         const result = await deletePromise;
@@ -2137,14 +2027,14 @@ The new slide has been selected in Figma.`,
     // monorail_reorder - Reorder slides
     // =========================================================================
     case "monorail_reorder": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -2159,22 +2049,8 @@ The new slide has been selected in Figma.`,
         };
       }
 
-      // Check if there's already a pending reorder request
-      if (hasPendingRequest('reorder')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another reorder request is already in progress. Please wait.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
       // Create pending request and send to plugin
-      const reorderPromise = createPendingRequest<ReorderResult>('reorder', "Timeout waiting for reorder result");
-      connectedPlugin!.send(JSON.stringify({ type: "reorder-slides", slideIds }));
+      const reorderPromise = pluginRequest<ReorderResult>({ type: "reorder-slides", slideIds });
 
       try {
         const result = await reorderPromise;
@@ -2216,14 +2092,14 @@ The new slide has been selected in Figma.`,
     // monorail_screenshot - Export slide as PNG image
     // =========================================================================
     case "monorail_screenshot": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -2233,22 +2109,8 @@ The new slide has been selected in Figma.`,
       const slideId = args?.slide_id as string | undefined;
       const scale = (args?.scale as number) || 0.5;
 
-      // Check if there's already a pending screenshot request
-      if (hasPendingRequest('screenshot')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another screenshot request is already in progress. Please wait.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
       // Create pending request and send to plugin
-      const screenshotPromise = createPendingRequest<ScreenshotResult>('screenshot', "Timeout waiting for screenshot");
-      connectedPlugin!.send(JSON.stringify({ type: "request-screenshot", slideId, scale }));
+      const screenshotPromise = pluginRequest<ScreenshotResult>({ type: "request-screenshot", slideId, scale });
 
       try {
         const result = await screenshotPromise;
@@ -2297,14 +2159,14 @@ The new slide has been selected in Figma.`,
     // monorail_primitives - Low-level design operations
     // =========================================================================
     case "monorail_primitives": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
 
       if (!isConnected) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first.",
+              text: notConnectedMessage(),
             },
           ],
           isError: true,
@@ -2327,22 +2189,9 @@ The new slide has been selected in Figma.`,
         };
       }
 
-      // Check if there's already a pending primitives request
-      if (hasPendingRequest('primitives')) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Error: Another primitives request is already in progress. Please wait.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
       try {
         // Create promise for response
-        const resultPromise = createPendingRequest<{
+        const resultPromise = pluginRequest<{
           success: boolean;
           slideId?: string;
           slideName?: string;
@@ -2352,10 +2201,7 @@ The new slide has been selected in Figma.`,
           groups?: RevealGroupResult[];
           warnings?: string[];
           error?: string;
-        }>('primitives', 'Primitives request timed out');
-
-        // Send to plugin
-        connectedPlugin!.send(JSON.stringify({
+        }>({
           type: 'apply-primitives',
           slideId,
           operations,
@@ -2363,7 +2209,7 @@ The new slide has been selected in Figma.`,
           stepSeconds: args?.step_seconds as number | undefined,
           buildMode: args?.build_mode,
           transition: args?.transition,
-        }));
+        });
 
         // Wait for response
         const result = await resultPromise;
@@ -2420,10 +2266,10 @@ ${createdList}${revealsText}${warningsText}
     // monorail_motion - Native object animations (reveals) on one slide
     // =========================================================================
     case "monorail_motion": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       if (!isConnected) {
         return {
-          content: [{ type: "text" as const, text: "Error: No Figma plugin connected. Open Figma Slides and run the Monorail plugin first." }],
+          content: [{ type: "text" as const, text: notConnectedMessage() }],
           isError: true,
         };
       }
@@ -2431,12 +2277,8 @@ ${createdList}${revealsText}${warningsText}
       if (!["list", "apply", "inspect", "clear"].includes(action)) {
         return { content: [{ type: "text" as const, text: `Error: unknown action "${action}". Use list, apply, inspect or clear.` }], isError: true };
       }
-      if (hasPendingRequest('motion')) {
-        return { content: [{ type: "text" as const, text: "Error: Another motion request is already in progress. Please wait." }], isError: true };
-      }
       try {
-        const resultPromise = createPendingRequest<MotionResult>('motion', 'Motion request timed out');
-        connectedPlugin!.send(JSON.stringify({
+        const resultPromise = pluginRequest<MotionResult>({
           type: 'apply-motion',
           action,
           targets: args?.targets,
@@ -2444,7 +2286,7 @@ ${createdList}${revealsText}${warningsText}
           stepSeconds: args?.step_seconds,
           buildMode: args?.build_mode,
           transition: args?.transition,
-        }));
+        });
         const result = await resultPromise;
         if (!result.success) {
           return { content: [{ type: "text" as const, text: `Error: ${result.error || "Unknown error"}` }], isError: true };
@@ -2462,21 +2304,17 @@ ${createdList}${revealsText}${warningsText}
     // monorail_probe - explore the Plugin API from inside the sandbox
     // =========================================================================
     case "monorail_probe": {
-      const isConnected = connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+      const isConnected = await linkReady();
       if (!isConnected) {
-        return { content: [{ type: "text" as const, text: "Error: No Figma plugin connected." }], isError: true };
-      }
-      if (hasPendingRequest('probe')) {
-        return { content: [{ type: "text" as const, text: "Error: Another probe is in progress." }], isError: true };
+        return { content: [{ type: "text" as const, text: notConnectedMessage() }], isError: true };
       }
       try {
-        const resultPromise = createPendingRequest<Record<string, unknown> & { success: boolean; error?: string }>('probe', 'Probe timed out');
-        connectedPlugin!.send(JSON.stringify({
+        const resultPromise = pluginRequest<Record<string, unknown> & { success: boolean; error?: string }>({
           type: 'apply-probe', action: args?.action, nodeId: args?.node_id, filter: args?.filter, code: args?.code,
-        }));
+        }, { timeoutMs: args?.timeout_ms });
         const result = await resultPromise;
         if (!result.success) return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
-        const { success, type, ...rest } = result as any;
+        const { success, type, requestId, ...rest } = result as any;
         return { content: [{ type: "text" as const, text: JSON.stringify(rest, null, 2) }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Error in monorail_probe: ${e instanceof Error ? e.message : "unknown error"}` }], isError: true };
@@ -3099,303 +2937,613 @@ After pushing slides, use \`monorail_screenshot\` to see what was rendered:
 // =============================================================================
 // WEBSOCKET BRIDGE
 // =============================================================================
+//
+// Two ways to reach the Figma plugin:
+// - proxy mode (normal): this server is one upstream client of the shared
+//   proxy (src/proxy.ts) on PROXY_PORT; the plugin connects to the proxy on
+//   WS_PORT. If the proxy goes away, this server reconnects with backoff and
+//   starts a new proxy when none is listening.
+// - direct mode (fallback, when no proxy can run): this server listens on
+//   WS_PORT itself, and only this session can use the plugin.
+//
+// Every request goes through pluginRequest(). It carries a requestId, a
+// timeoutMs and a clientLabel (protocol 2, shared/protocol.ts), and its reply
+// is matched by id: a late reply can't resolve a different call, and sibling
+// sub-agents sharing this process don't block each other. A `busy` from the
+// proxy is retried for a few seconds, then reported with who holds the plugin.
+// See docs/proxy-wedge-2026-09.md.
 
-const WS_PORT = parseInt(process.env.MONORAIL_WS_PORT || "9876", 10);
+import { spawn } from "child_process";
+import { fileURLToPath } from "url";
+import path from "path";
+import fs from "fs";
+import os from "os";
+import {
+  PROTOCOL_VERSION, RESPONSE_FOR, RESPONSE_TYPES, DEFAULT_TIMEOUT_MS,
+  clampTimeout, type RequestErrorCode,
+} from "../shared/protocol.js";
+
+function envInt(name: string, fallback: number): number {
+  const v = parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(v) && v >= 0 ? v : fallback;
+}
+
+const WS_PORT = envInt("MONORAIL_WS_PORT", 9876);
+const PROXY_PORT = envInt("MONORAIL_PROXY_PORT", 9877);
+/**
+ * Who this server is, for status and for whoever its requests make wait.
+ * TERM_PROGRAM alone ("tmux") named all eleven sessions the same on 2026-09-27;
+ * the working directory tells them apart.
+ */
+const HOST_LABEL = process.env.MONORAIL_HOST_LABEL
+  || `${path.basename(process.cwd())}@${process.env.TERM_PROGRAM || "claude"}`;
+const CLIENT_LABEL = `${HOST_LABEL} pid ${process.pid}`;
+/** How long to keep retrying while the plugin serves someone else's request. */
+const BUSY_RETRY_MS = envInt("MONORAIL_BUSY_RETRY_MS", 10_000);
+/** Overrides every per-type default timeout in DEFAULT_TIMEOUT_MS. */
+const TIMEOUT_OVERRIDE_MS = process.env.MONORAIL_TIMEOUT_MS ? envInt("MONORAIL_TIMEOUT_MS", 30_000) : null;
+/** Extra wait past the proxy's TTL, so the proxy's report (which names the cause) lands first. */
+const SERVER_TIMEOUT_GRACE_MS = 2_000;
+const RECONNECT_MIN_MS = envInt("MONORAIL_RECONNECT_MIN_MS", 250);
+const RECONNECT_MAX_MS = envInt("MONORAIL_RECONNECT_MAX_MS", 10_000);
+/** Don't start a proxy more often than this (per server) while none will stay up. */
+const SPAWN_COOLDOWN_MS = envInt("MONORAIL_SPAWN_COOLDOWN_MS", 15_000);
+/** MONORAIL_PROXY_SPAWN=0: never start a proxy, only connect to one (e.g. one run by launchd). */
+const SPAWN_ALLOWED = process.env.MONORAIL_PROXY_SPAWN !== "0";
+/** How long a tool call waits for a reconnect in progress before failing. */
+const LINK_WAIT_MS = envInt("MONORAIL_LINK_WAIT_MS", 3_000);
+/** The proxy pings every heartbeat; this long without a word from it means the link is dead. */
+const PROXY_SILENCE_MS = 3 * envInt("MONORAIL_HEARTBEAT_MS", 15_000);
+
 let wsServer: WebSocketServer | null = null;
+/** The socket requests go out on: the proxy in proxy mode, the plugin in direct mode. */
 let connectedPlugin: WebSocket | null = null;
-let pluginInfo: { name?: string; version?: string; connectedAt?: string } = {};
+let pluginInfo: { name?: string; version?: string; connectedAt?: string; features?: string[]; fileName?: string | null } = {};
 let currentSelection: { count: number; nodes: Array<{ id: string; name: string; type: string; width: number | null; height: number | null; parent: string | null }> } = { count: 0, nodes: [] };
 
-// =============================================================================
-// PENDING REQUEST MANAGER
-// =============================================================================
-// Consolidated request/response handling for WebSocket communication.
-// Each request type gets a pending entry that tracks resolve/reject/timeout.
+type LinkMode = "starting" | "proxy" | "direct" | "degraded";
+let linkMode: LinkMode = "starting";
+/** From the proxy's `registered` reply: 1 for builds before request ids, 0 until it arrives. */
+let proxyProtocol = 0;
+let reconnectAttempt = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let nextReconnectAt = 0;
+let lastSpawnAt = 0;
+let lastLinkError: string | null = null;
+let lastProxyContact = 0;
+let shuttingDown = false;
+let linkWaiters: Array<() => void> = [];
 
-interface PendingRequest<T> {
-  resolve: (value: T) => void;
-  reject: (error: Error) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function fmtDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+// =============================================================================
+// REQUEST LAYER
+// =============================================================================
+
+class PluginRequestError extends Error {
+  constructor(message: string, readonly code: RequestErrorCode, readonly retryable: boolean) {
+    super(message);
+    this.name = "PluginRequestError";
+  }
+}
+
+type Outcome =
+  | { kind: "reply"; msg: any }
+  | { kind: "busy"; msg: any }
+  | { kind: "error"; msg: any }
+  | { kind: "timeout"; waitedMs: number }
+  | { kind: "closed"; why: string };
+
+interface PendingRequest {
+  id: string;
+  type: string;
+  responseType: string;
+  sentAt: number;
+  timeoutMs: number;
+  timer: ReturnType<typeof setTimeout>;
+  settle: (o: Outcome) => void;
 }
 
 // Result types for each request (some imported from shared/types.ts)
 // These are local types not in shared:
 interface CapturedTemplate { template: any; nodeCount: number; }
 interface InstantiateResult { success: boolean; newSlideId?: string; updated?: number; failed?: string[]; fontSubstitutions?: string[]; error?: string; }
-interface CreateResult { success: boolean; slideId?: string; error?: string; }
 interface CssResult { success: boolean; css?: Record<string, string>; raw?: any; error?: string; }
 interface ExportResult { success: boolean; nodeId?: string; nodeName?: string; format?: string; data?: string; width?: number; height?: number; error?: string; }
 interface ComponentInfoResult { success: boolean; node: { id: string; name: string; type: string }; isInstance?: boolean; mainComponent?: { id: string; name: string; description?: string }; componentSet?: { id: string; name: string; variantCount: number }; componentProperties?: Record<string, { type: string; value: string; options?: string[] }>; variants?: Array<{ id: string; name: string; properties: Record<string, string> }>; error?: string; }
 interface FindResult { success: boolean; nodes?: Array<{ id: string; name: string; type: string; x: number; y: number; width: number; height: number; parentId: string | null; parentName: string | null }>; total?: number; truncated?: boolean; error?: string; }
 
-// Type-safe request type keys
-type RequestType = 'pull' | 'patch' | 'capture' | 'instantiate' | 'create' | 'delete' | 'reorder' | 'screenshot' | 'primitives' | 'css' | 'export' | 'component' | 'find' | 'motion' | 'probe';
+/** Requests waiting for a reply, by requestId. */
+const pendingRequests = new Map<string, PendingRequest>();
+let requestSeq = 0;
 
-// Map of pending requests by type
-const pendingRequests = new Map<RequestType, PendingRequest<any>>();
+function timeoutFor(type: string, requested?: unknown): number {
+  const base = TIMEOUT_OVERRIDE_MS ?? DEFAULT_TIMEOUT_MS[type] ?? 30_000;
+  return clampTimeout(requested ?? base, base);
+}
 
-const REQUEST_TIMEOUT_MS = 30000;
+function isLinkOpen(): boolean {
+  return connectedPlugin !== null && connectedPlugin.readyState === WebSocket.OPEN;
+}
 
-/**
- * Create a pending request with automatic timeout.
- * Returns a promise that resolves when the corresponding response arrives.
- */
-function createPendingRequest<T>(type: RequestType, timeoutMessage: string): Promise<T> {
-  // Reject if there's already a pending request of this type
-  if (pendingRequests.has(type)) {
-    return Promise.reject(new Error(`Another ${type} request is already in progress. Please wait.`));
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      pendingRequests.delete(type);
-      reject(new Error(timeoutMessage));
-    }, REQUEST_TIMEOUT_MS);
-
-    pendingRequests.set(type, { resolve, reject, timeoutId });
+/** Resolves true once a request can go out, waiting briefly for a reconnect in progress. */
+function linkReady(waitMs = LINK_WAIT_MS): Promise<boolean> {
+  if (isLinkOpen()) return Promise.resolve(true);
+  if (waitMs <= 0 || shuttingDown) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); resolve(isLinkOpen()); };
+    const timer = setTimeout(() => {
+      linkWaiters = linkWaiters.filter((w) => w !== done);
+      resolve(isLinkOpen());
+    }, waitMs);
+    linkWaiters.push(done);
   });
 }
 
-/**
- * Resolve a pending request with the result.
- */
-function resolvePendingRequest<T>(type: RequestType, result: T): boolean {
-  const pending = pendingRequests.get(type);
-  if (!pending) return false;
-  
-  clearTimeout(pending.timeoutId);
-  pendingRequests.delete(type);
-  pending.resolve(result);
-  return true;
+function linkUp(): void {
+  const waiters = linkWaiters;
+  linkWaiters = [];
+  for (const w of waiters) w();
+}
+
+function notConnectedMessage(): string {
+  if (linkMode === "direct") {
+    return `Error: No Figma plugin connected. This session listens on ws://localhost:${WS_PORT} itself (direct mode): open Figma and run the Monorail plugin.`;
+  }
+  const next = reconnectTimer ? ` next try in ${secs(Math.max(0, nextReconnectAt - Date.now()))},` : "";
+  return `Error: Not connected to the monorail proxy on ws://localhost:${PROXY_PORT}. Reconnecting (attempt ${reconnectAttempt},${next} last error: ${lastLinkError ?? "none"}). Retry shortly.`;
 }
 
 /**
- * Check if a request type has a pending request.
+ * Serialise requests inside this process when nobody else will: in direct mode
+ * (no proxy), and behind a protocol 1 proxy, whose replies carry no ids and
+ * so can only be matched when one request is out at a time.
  */
-function hasPendingRequest(type: RequestType): boolean {
-  return pendingRequests.has(type);
+function localHolder(): Outcome | null {
+  if (!(linkMode === "direct" || proxyProtocol < 2) || pendingRequests.size === 0) return null;
+  const h = [...pendingRequests.values()][0];
+  const ageMs = Date.now() - h.sentAt;
+  return { kind: "busy", msg: { retryAfterMs: 250, holder: { type: h.type, label: CLIENT_LABEL, ageMs, ttlMs: h.timeoutMs, expiresInMs: Math.max(0, h.timeoutMs - ageMs) } } };
+}
+
+function sendOnce(message: Record<string, unknown> & { type: string }, timeoutMs: number): Promise<Outcome> {
+  return new Promise((resolve) => {
+    const sock = connectedPlugin;
+    // The link can close between linkReady() and here.
+    if (!sock || sock.readyState !== WebSocket.OPEN) {
+      resolve({ kind: "closed", why: `the link closed before ${message.type} could be sent; retry the call` });
+      return;
+    }
+    const id = `${process.pid}-${++requestSeq}`;
+    const waitMs = timeoutMs + (linkMode === "proxy" ? SERVER_TIMEOUT_GRACE_MS : 0);
+    const p: PendingRequest = {
+      id, type: message.type, responseType: RESPONSE_FOR[message.type], sentAt: Date.now(), timeoutMs,
+      timer: setTimeout(() => p.settle({ kind: "timeout", waitedMs: waitMs }), waitMs),
+      settle: (o) => {
+        if (pendingRequests.get(id) !== p) return;
+        clearTimeout(p.timer);
+        pendingRequests.delete(id);
+        resolve(o);
+      },
+    };
+    pendingRequests.set(id, p);
+    sock.send(JSON.stringify({ ...message, requestId: id, timeoutMs, clientLabel: CLIENT_LABEL }), (err) => {
+      if (err) p.settle({ kind: "closed", why: `could not send ${message.type} (${err.message})` });
+    });
+  });
+}
+
+function busyMessage(type: string, msg: any, tries: number, waitedMs: number): string {
+  const h = msg?.holder;
+  const who = h
+    ? `${h.type} from "${h.label}" has held it for ${secs(h.ageMs ?? 0)}` +
+      (typeof h.expiresInMs === "number" ? ` (released within ${secs(h.expiresInMs)})` : "")
+    : "another session holds it (this proxy build doesn't say who)";
+  return `${type}: the Figma plugin is busy: ${who}. Retried ${tries}× over ${secs(waitedMs)}; this is retryable, so try again shortly.`;
+}
+
+function errorFromProxy(type: string, msg: any): PluginRequestError {
+  const code: RequestErrorCode = typeof msg?.code === "string" ? msg.code : "PLUGIN_ERROR";
+  const retryable = typeof msg?.retryable === "boolean" ? msg.retryable : false;
+  const text = typeof msg?.message === "string" ? msg.message : "unknown error from the proxy";
+  return new PluginRequestError(`${type}: ${text}`, code, retryable);
+}
+
+function pluginError(type: string, msg: any, fallback: string): PluginRequestError {
+  return new PluginRequestError(`${type}: ${msg?.error || fallback}`, "PLUGIN_ERROR", false);
+}
+
+/** Shape each reply the way its tool handler expects it. */
+function mapReply(type: string, p: any): unknown {
+  switch (p.type) {
+    case "exported":
+      if (!p.ir) throw pluginError(type, p, "the plugin returned no deck IR");
+      return p.ir as DeckIR;
+    case "applied":
+      if (p.success === false) throw pluginError(type, p, "the plugin could not apply the IR");
+      return p;
+    case "patched":
+      if (p.success === false) throw pluginError(type, p, "the plugin could not apply the patch");
+      return {
+        updated: p.updated || 0, added: p.added || 0, deleted: p.deleted || 0,
+        failed: p.failed || [], newElements: p.newElements || [], deletedElements: p.deletedElements || [],
+      } satisfies PatchResult;
+    case "template-captured":
+      if (!p.template) throw pluginError(type, p, "the plugin returned no template");
+      return { template: p.template, nodeCount: p.nodeCount || 0 } satisfies CapturedTemplate;
+    case "instantiated":
+      return {
+        success: p.success, newSlideId: p.newSlideId, updated: p.updated, failed: p.failed,
+        fontSubstitutions: p.fontSubstitutions, error: p.error,
+      } satisfies InstantiateResult;
+    case "slides-deleted":
+      if (p.success === false) throw pluginError(type, p, "the plugin could not delete the slides");
+      return { deleted: p.deleted || 0, failed: p.failed || [] } satisfies DeleteResult;
+    case "slides-reordered":
+      return { success: p.success, count: p.count, error: p.error } satisfies ReorderResult;
+    case "screenshot-exported":
+      return {
+        success: p.success, slideId: p.slideId, slideName: p.slideName,
+        base64: p.base64, width: p.width, height: p.height, error: p.error,
+      } satisfies ScreenshotResult;
+    case "primitives-applied":
+      return {
+        success: p.success, slideId: p.slideId, slideName: p.slideName,
+        created: p.created, animated: p.animated, stepSlides: p.stepSlides, groups: p.groups,
+        warnings: p.warnings, error: p.error,
+      };
+    case "css-extracted":
+      return { success: p.success, css: p.css, raw: p.raw, error: p.error } satisfies CssResult;
+    case "node-exported":
+      return {
+        success: p.success, nodeId: p.nodeId, nodeName: p.nodeName,
+        format: p.format, data: p.data, width: p.width, height: p.height, error: p.error,
+      } satisfies ExportResult;
+    case "component-info":
+      return {
+        success: p.success, node: p.node, isInstance: p.isInstance, mainComponent: p.mainComponent,
+        componentSet: p.componentSet, componentProperties: p.componentProperties,
+        variants: p.variants, error: p.error,
+      } satisfies ComponentInfoResult;
+    case "nodes-found":
+      return { success: p.success, nodes: p.nodes, total: p.total, truncated: p.truncated, error: p.error } satisfies FindResult;
+    default:
+      // motion-result, probe-result, styled-slide-created: the handler reads the message itself.
+      return p;
+  }
+}
+
+/**
+ * Send one request to the Figma plugin and wait for its reply.
+ *
+ * Fails with a PluginRequestError whose message says which limit was hit:
+ * BUSY (someone else held the plugin for the whole retry window),
+ * PROXY_TTL_EXPIRED (the proxy gave up on the plugin), SERVER_TIMEOUT (this
+ * server gave up, with no word from the proxy), PROXY_DISCONNECTED,
+ * NO_PLUGIN, NOT_CONNECTED, or PLUGIN_ERROR.
+ */
+async function pluginRequest<T = any>(message: Record<string, unknown> & { type: string }, opts: { timeoutMs?: unknown } = {}): Promise<T> {
+  const type = message.type;
+  const timeoutMs = timeoutFor(type, opts.timeoutMs);
+  const started = Date.now();
+  const busyDeadline = started + Math.min(BUSY_RETRY_MS, timeoutMs);
+  let busyTries = 0;
+  for (;;) {
+    if (!(await linkReady())) {
+      throw new PluginRequestError(`${type}: ${notConnectedMessage().replace(/^Error: /, "")}`, "NOT_CONNECTED", true);
+    }
+    const outcome = localHolder() ?? await sendOnce(message, timeoutMs);
+    switch (outcome.kind) {
+      case "reply":
+        return mapReply(type, outcome.msg) as T;
+      case "busy": {
+        busyTries++;
+        const hint = Number(outcome.msg?.retryAfterMs);
+        const base = Number.isFinite(hint) ? Math.min(2000, Math.max(100, hint)) : 250;
+        const wait = Math.round(base * (0.75 + Math.random() * 0.75));
+        const left = busyDeadline - Date.now();
+        if (left > 0) {
+          // The last try lands on the deadline, so the whole window is used.
+          await sleep(Math.min(wait, left));
+          continue;
+        }
+        throw new PluginRequestError(busyMessage(type, outcome.msg, busyTries, Date.now() - started), "BUSY", true);
+      }
+      case "error":
+        throw errorFromProxy(type, outcome.msg);
+      case "timeout": {
+        const why = linkMode !== "proxy" ? "server-side timeout"
+          : proxyProtocol >= 2 ? `server-side timeout; the proxy should have reported its own ${secs(timeoutMs)} TTL first, so it may be unresponsive`
+          : "server-side timeout; this proxy build has no request TTL";
+        throw new PluginRequestError(
+          `${type}: no reply from the Figma plugin within ${secs(outcome.waitedMs)} (${why}). If that was an edit, check Figma before retrying.`,
+          "SERVER_TIMEOUT", true);
+      }
+      case "closed":
+        throw new PluginRequestError(`${type}: ${outcome.why}`, "PROXY_DISCONNECTED", true);
+    }
+  }
 }
 
 // =============================================================================
 // MESSAGE HANDLER (shared between direct mode and proxy mode)
 // =============================================================================
 
-function handlePluginMessage(data: string, sender: WebSocket) {
-  console.error(`[WebSocket] Received: ${data}`);
-  try {
-    const parsed = JSON.parse(data);
+let statusWaiters: Array<{ id: string; resolve: (s: any) => void }> = [];
 
-    if (parsed.type === "hello") {
+function logIncoming(data: string): void {
+  const shown = data.length > 400 ? `${data.slice(0, 400)}… (${data.length} chars)` : data;
+  console.error(`[WebSocket] Received: ${shown}`);
+}
+
+function findPending(parsed: any): PendingRequest | undefined {
+  if (typeof parsed.requestId === "string") return pendingRequests.get(parsed.requestId);
+  const waiting = [...pendingRequests.values()];
+  if (parsed.type === "busy" || parsed.type === "error") {
+    // A protocol 1 proxy answers in order and we send one request at a time to it.
+    return waiting.sort((a, b) => b.sentAt - a.sentAt)[0];
+  }
+  // A plugin or proxy without request ids: the oldest request waiting for this reply type.
+  return waiting.filter((p) => p.responseType === parsed.type).sort((a, b) => a.sentAt - b.sentAt)[0];
+}
+
+function handlePluginMessage(data: string, sender: WebSocket) {
+  lastProxyContact = Date.now();
+  let parsed: any;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    sender.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+    return;
+  }
+  if (!parsed || typeof parsed.type !== "string") return;
+
+  if (parsed.type === "busy" || parsed.type === "error" || RESPONSE_TYPES.has(parsed.type)) {
+    logIncoming(data);
+    const p = findPending(parsed);
+    if (!p) {
+      console.error(`[WebSocket] ${parsed.type} matches no waiting request (a late reply to a call that already gave up?); ignored`);
+      return;
+    }
+    p.settle({ kind: parsed.type === "busy" ? "busy" : parsed.type === "error" ? "error" : "reply", msg: parsed });
+    return;
+  }
+
+  switch (parsed.type) {
+    case "hello":
       pluginInfo = {
         name: parsed.plugin || "unknown",
         version: parsed.version || "unknown",
         connectedAt: new Date().toISOString(),
+        features: Array.isArray(parsed.features) ? parsed.features : [],
+        fileName: parsed.fileName ?? null,
       };
       // Only send hello-ack in direct mode (proxy handles it in proxy mode)
-      if (!proxyMode) {
+      if (linkMode === "direct") {
         sender.send(JSON.stringify({
           type: "hello-ack",
           server: "monorail-mcp",
-          version: "0.1.0",
+          version: "0.2.0",
+          protocol: PROTOCOL_VERSION,
           timestamp: new Date().toISOString(),
         }));
       }
       console.error(`[WebSocket] Hello from ${pluginInfo.name} v${pluginInfo.version}`);
-    } else if (parsed.type === "registered") {
-      // Proxy acknowledged our registration
-      console.error(`[WebSocket] Registered with proxy as ${parsed.id}`);
-    } else if (parsed.type === "busy") {
-      // Proxy says another session has inflight request
-      console.error(`[WebSocket] Proxy busy: ${parsed.message}`);
-    } else if (parsed.type === "status-response") {
-      // Proxy status response — store for monorail_status
-      proxyStatus = parsed;
-      console.error(`[WebSocket] Proxy status: ${parsed.pluginCount} plugins, ${parsed.upstreamCount} upstreams`);
-    } else if (parsed.type === "ping") {
+      return;
+    case "registered":
+      proxyProtocol = typeof parsed.protocol === "number" ? parsed.protocol : 1;
+      console.error(`[WebSocket] Registered with proxy as ${parsed.id} (protocol ${proxyProtocol})`);
+      return;
+    case "status-response": {
+      const i = statusWaiters.findIndex((w) => w.id === parsed.requestId);
+      const w = i >= 0 ? statusWaiters.splice(i, 1)[0] : statusWaiters.shift();
+      w?.resolve(parsed);
+      return;
+    }
+    case "ping":
       sender.send(JSON.stringify({ type: "pong" }));
-    } else if (parsed.type === "exported") {
-      console.error(`[WebSocket] Received exported IR with ${parsed.ir?.slides?.length || 0} slides`);
-      if (parsed.ir) {
-        resolvePendingRequest<DeckIR>('pull', parsed.ir as DeckIR);
-      }
-    } else if (parsed.type === "applied") {
-      console.error(`[WebSocket] Plugin applied ${parsed.count} slides`);
-    } else if (parsed.type === "patched") {
-      const edited = parsed.updated || 0;
-      const added = parsed.added || 0;
-      const deleted = parsed.deleted || 0;
-      console.error(`[WebSocket] Patched: ${edited} edited, ${added} added, ${deleted} deleted, ${parsed.failed?.length || 0} failed`);
-      resolvePendingRequest<PatchResult>('patch', {
-        updated: edited, added, deleted,
-        failed: parsed.failed || [],
-        newElements: parsed.newElements || [],
-        deletedElements: parsed.deletedElements || [],
-      });
-    } else if (parsed.type === "template-captured") {
-      console.error(`[WebSocket] Captured template with ${parsed.nodeCount} nodes`);
-      resolvePendingRequest<CapturedTemplate>('capture', {
-        template: parsed.template,
-        nodeCount: parsed.nodeCount || 0,
-      });
-    } else if (parsed.type === "instantiated") {
-      console.error(`[WebSocket] Instantiate result: success=${parsed.success}, updated=${parsed.updated}`);
-      resolvePendingRequest<InstantiateResult>('instantiate', {
-        success: parsed.success, newSlideId: parsed.newSlideId,
-        updated: parsed.updated, failed: parsed.failed,
-        fontSubstitutions: parsed.fontSubstitutions, error: parsed.error,
-      });
-    } else if (parsed.type === "styled-slide-created") {
-      console.error(`[WebSocket] Create styled slide result: success=${parsed.success}`);
-      resolvePendingRequest<CreateResult>('create', {
-        success: parsed.success, slideId: parsed.slideId, error: parsed.error,
-      });
-    } else if (parsed.type === "slides-deleted") {
-      console.error(`[WebSocket] Delete result: deleted=${parsed.deleted}, failed=${parsed.failed?.length || 0}`);
-      resolvePendingRequest<DeleteResult>('delete', {
-        deleted: parsed.deleted || 0, failed: parsed.failed || [],
-      });
-    } else if (parsed.type === "slides-reordered") {
-      console.error(`[WebSocket] Reorder result: success=${parsed.success}, count=${parsed.count}`);
-      resolvePendingRequest<ReorderResult>('reorder', {
-        success: parsed.success, count: parsed.count, error: parsed.error,
-      });
-    } else if (parsed.type === "screenshot-exported") {
-      const sizeKB = parsed.base64 ? Math.round((parsed.base64.length * 3 / 4) / 1024) : 0;
-      console.error(`[WebSocket] Screenshot result: success=${parsed.success}, size=${sizeKB}KB`);
-      resolvePendingRequest<ScreenshotResult>('screenshot', {
-        success: parsed.success, slideId: parsed.slideId, slideName: parsed.slideName,
-        base64: parsed.base64, width: parsed.width, height: parsed.height, error: parsed.error,
-      });
-    } else if (parsed.type === "primitives-applied") {
-      const count = parsed.created?.length || 0;
-      console.error(`[WebSocket] Primitives result: success=${parsed.success}, created=${count}`);
-      resolvePendingRequest<{
-        success: boolean; slideId?: string; slideName?: string;
-        created?: Array<{ name: string; id: string; type: string }>;
-        animated?: RevealResult[]; stepSlides?: StepSlideResult[]; groups?: RevealGroupResult[];
-        warnings?: string[]; error?: string;
-      }>('primitives', {
-        success: parsed.success, slideId: parsed.slideId, slideName: parsed.slideName,
-        created: parsed.created, animated: parsed.animated, stepSlides: parsed.stepSlides, groups: parsed.groups,
-        warnings: parsed.warnings, error: parsed.error,
-      });
-    } else if (parsed.type === "probe-result") {
-      console.error(`[WebSocket] Probe result: action=${parsed.action}, success=${parsed.success}`);
-      resolvePendingRequest('probe', parsed);
-    } else if (parsed.type === "motion-result") {
-      console.error(`[WebSocket] Motion result: action=${parsed.action}, success=${parsed.success}`);
-      resolvePendingRequest<MotionResult>('motion', parsed as MotionResult);
-    } else if (parsed.type === "css-extracted") {
-      console.error(`[WebSocket] CSS result: success=${parsed.success}, node=${parsed.raw?.name}`);
-      resolvePendingRequest<CssResult>('css', {
-        success: parsed.success, css: parsed.css, raw: parsed.raw, error: parsed.error,
-      });
-    } else if (parsed.type === "node-exported") {
-      const sizeInfo = parsed.format === 'PNG' ? `${Math.round((parsed.data?.length || 0) * 3 / 4 / 1024)}KB` : `${parsed.data?.length || 0} chars`;
-      console.error(`[WebSocket] Export result: success=${parsed.success}, format=${parsed.format}, size=${sizeInfo}`);
-      resolvePendingRequest<ExportResult>('export', {
-        success: parsed.success, nodeId: parsed.nodeId, nodeName: parsed.nodeName,
-        format: parsed.format, data: parsed.data,
-        width: parsed.width, height: parsed.height, error: parsed.error,
-      });
-    } else if (parsed.type === "component-info") {
-      console.error(`[WebSocket] Component info: success=${parsed.success}, node=${parsed.node?.name}`);
-      resolvePendingRequest<ComponentInfoResult>('component', {
-        success: parsed.success, node: parsed.node,
-        isInstance: parsed.isInstance, mainComponent: parsed.mainComponent,
-        componentSet: parsed.componentSet, componentProperties: parsed.componentProperties,
-        variants: parsed.variants, error: parsed.error,
-      });
-    } else if (parsed.type === "nodes-found") {
-      console.error(`[WebSocket] Find result: success=${parsed.success}, total=${parsed.total}`);
-      resolvePendingRequest<FindResult>('find', {
-        success: parsed.success, nodes: parsed.nodes,
-        total: parsed.total, truncated: parsed.truncated, error: parsed.error,
-      });
-    } else if (parsed.type === "selection-changed") {
+      return;
+    case "selection-changed":
       currentSelection = { count: parsed.count || 0, nodes: parsed.nodes || [] };
       console.error(`[WebSocket] Selection: ${currentSelection.count} nodes`);
-    } else {
+      return;
+    default:
+      logIncoming(data);
       console.error(`[WebSocket] Unknown message type: ${parsed.type}`);
-    }
-  } catch (e) {
-    sender.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
   }
+}
+
+function queryProxyStatus(timeoutMs = 2000): Promise<any | null> {
+  if (linkMode !== "proxy" || !isLinkOpen()) return Promise.resolve(null);
+  const id = `status-${process.pid}-${++requestSeq}`;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      statusWaiters = statusWaiters.filter((w) => w.id !== id);
+      resolve(null);
+    }, timeoutMs);
+    statusWaiters.push({ id, resolve: (s) => { clearTimeout(timer); resolve(s); } });
+    connectedPlugin!.send(JSON.stringify({ type: "status-query", requestId: id }));
+  });
+}
+
+/** The text of monorail_status. */
+async function statusText(): Promise<string> {
+  const selectionText = currentSelection.count > 0
+    ? `\n  Selection: ${currentSelection.count} node(s)\n` + currentSelection.nodes.map(n => {
+        const dims = n.width != null && n.height != null ? ` ${n.width}×${n.height}` : '';
+        return `    - ${n.type} "${n.name}"${dims}${n.parent ? ` (in ${n.parent})` : ''}`;
+      }).join('\n')
+    : '\n  Selection: none';
+  const me = `  This session: ${CLIENT_LABEL}`;
+  const howToConnect = "\n\nTo connect:\n1. Open Figma\n2. Run the Monorail plugin\n3. It connects on open. Plugin builds from 2026-09 on also reconnect by themselves when the proxy restarts.";
+
+  if (linkMode === "direct") {
+    if (!isLinkOpen()) {
+      return `✗ No plugin connected\n  Mode: direct (no proxy): this session listens on ws://localhost:${WS_PORT}\n${me}${howToConnect}`;
+    }
+    const waiting = [...pendingRequests.values()];
+    return `✓ Figma plugin connected (direct)\n  Plugin: ${pluginInfo.name || "unknown"} ${pluginInfo.version || ""}\n  Connected at: ${pluginInfo.connectedAt || "unknown"}\n  Mode: direct (no proxy): ws://localhost:${WS_PORT}\n${me}\n  In flight: ${waiting.length ? waiting.map(p => `${p.type} for ${secs(Date.now() - p.sentAt)}`).join(", ") : "nothing"}${selectionText}`;
+  }
+
+  if (!isLinkOpen()) return `✗ ${notConnectedMessage().replace(/^Error: /, "")}\n${me}`;
+
+  const st = await queryProxyStatus();
+  const lines: string[] = [];
+  const plugins: any[] = Array.isArray(st?.plugins) ? st.plugins : [];
+  const pluginCount: number = typeof st?.pluginCount === "number" ? st.pluginCount : (pluginInfo.name ? 1 : 0);
+
+  if (pluginCount > 0) {
+    lines.push("✓ Figma plugin connected (via proxy)");
+    if (plugins.length > 0) {
+      for (const p of plugins) {
+        const feats = Array.isArray(p.features) && p.features.length ? ` · features: ${p.features.join(", ")}` : "";
+        lines.push(`  Plugin: ${p.plugin || "unknown"} ${p.version || ""}${p.fileName ? ` · file "${p.fileName}"` : ""}${p.pageName ? ` · page "${p.pageName}"` : ""} · connected ${p.connectedAt}${feats}`);
+      }
+      if (plugins.some((p) => !Array.isArray(p.features) || !p.features.includes("auto-reconnect"))) {
+        lines.push("  Note: this plugin build predates auto-reconnect and request ids. Re-run the plugin in Figma once to load them.");
+      }
+    } else {
+      lines.push(`  Plugin: ${pluginInfo.name || "unknown"} ${pluginInfo.version || ""}`);
+    }
+  } else {
+    lines.push("✗ No Figma plugin connected to the proxy");
+  }
+
+  if (st && typeof st.protocol === "number") {
+    lines.push(`  Proxy: ws://localhost:${PROXY_PORT} · pid ${st.pid} · monorail-proxy ${st.version} (protocol ${st.protocol}) · up ${fmtDuration(st.uptimeMs ?? 0)} · ${st.upstreamCount} session(s)`);
+  } else if (st) {
+    lines.push(`  Proxy: ws://localhost:${PROXY_PORT} · an older build (protocol 1): it can't say who holds the plugin and has no request TTL. Restart it to upgrade. ${st.upstreamCount} session(s)`);
+  } else {
+    lines.push(`  Proxy: ws://localhost:${PROXY_PORT} · connected, but it didn't answer a status query within 2s`);
+  }
+  lines.push(me);
+
+  const held: any[] = Array.isArray(st?.inflight) ? st.inflight : [];
+  if (st && Array.isArray(st.inflight)) {
+    lines.push(held.length === 0
+      ? "  Plugin lock: free"
+      : held.map((h) => `  Plugin lock: ${h.type} from "${h.label}" for ${secs(h.ageMs)} (released within ${secs(h.expiresInMs)})`).join("\n"));
+  }
+  const expired: any[] = Array.isArray(st?.recentExpired) ? st.recentExpired.slice(0, 3) : [];
+  if (expired.length > 0) {
+    lines.push("  Recent TTL expiries (the plugin never answered):");
+    for (const e of expired) lines.push(`    - ${e.type} from "${e.label}" after ${secs(e.ageMs)} at ${e.at}`);
+  }
+
+  return lines.join("\n") + selectionText + (pluginCount === 0 ? howToConnect : "");
 }
 
 // =============================================================================
 // CONNECTION MODES
 // =============================================================================
 
-import { spawn } from "child_process";
-import { fileURLToPath } from "url";
-import path from "path";
+function failAllPending(why: string): void {
+  for (const p of [...pendingRequests.values()]) p.settle({ kind: "closed", why });
+}
 
-const PROXY_PORT = parseInt(process.env.MONORAIL_PROXY_PORT || "9877", 10);
-const HOST_LABEL = process.env.MONORAIL_HOST_LABEL || process.env.TERM_PROGRAM || "claude";
-let proxyMode = false;
-let proxyStatus: any = null;
-
-function setupSocket(ws: WebSocket) {
+/** Direct mode: a plugin connected to this server's own WebSocket server. */
+function setupPluginSocket(ws: WebSocket) {
   connectedPlugin = ws;
   ws.on("message", (data) => handlePluginMessage(data.toString(), ws));
   ws.on("close", () => {
-    console.error("[WebSocket] Connection closed");
+    console.error("[WebSocket] Plugin connection closed");
     if (connectedPlugin === ws) {
       connectedPlugin = null;
       pluginInfo = {};
+      failAllPending("the Figma plugin disconnected before replying. If that was an edit, check Figma before retrying: it may have been applied.");
     }
   });
   ws.on("error", (err) => {
     console.error("[WebSocket] Error:", err.message);
   });
+  linkUp();
 }
 
-/** Mode 1: Connect to proxy as upstream client */
+/** Proxy mode: this server's socket to the proxy. Reconnects when it closes. */
+function setupProxySocket(ws: WebSocket) {
+  connectedPlugin = ws;
+  linkMode = "proxy";
+  proxyProtocol = 0;
+  reconnectAttempt = 0;
+  lastLinkError = null;
+  lastProxyContact = Date.now();
+  ws.on("message", (data) => handlePluginMessage(data.toString(), ws));
+  ws.on("ping", () => { lastProxyContact = Date.now(); });
+  ws.on("close", () => {
+    if (connectedPlugin !== ws) return;
+    connectedPlugin = null;
+    pluginInfo = {};
+    proxyProtocol = 0;
+    console.error("[WebSocket] Proxy connection closed; reconnecting");
+    failAllPending("the connection to the monorail proxy closed before a reply (the proxy restarted or died). This server is reconnecting: retry the call. If it was an edit, check Figma first: it may have been applied.");
+    scheduleReconnect();
+  });
+  ws.on("error", (err) => {
+    console.error("[WebSocket] Proxy socket error:", err.message);
+  });
+  ws.send(JSON.stringify({ type: "register", id: `mcp-${process.pid}`, label: CLIENT_LABEL, protocol: PROTOCOL_VERSION }));
+  linkUp();
+}
+
+/** Connect to a proxy that is already listening. Resolves false (and records why) if none is. */
 function connectToProxy(): Promise<boolean> {
   return new Promise((resolve) => {
     const ws = new WebSocket(`ws://localhost:${PROXY_PORT}`);
-    const timeout = setTimeout(() => { ws.terminate(); resolve(false); }, 2000);
-
-    ws.on("open", () => {
-      clearTimeout(timeout);
-      proxyMode = true;
+    let settled = false;
+    const fail = (why: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      lastLinkError = why;
+      ws.removeAllListeners();
+      ws.on("error", () => { /* already failed */ });
+      ws.terminate();
+      resolve(false);
+    };
+    const timer = setTimeout(() => fail("connect timed out after 2s"), 2000);
+    ws.once("open", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.removeAllListeners("error");
       console.error(`[WebSocket] Connected to proxy on port ${PROXY_PORT}`);
-      ws.send(JSON.stringify({
-        type: "register",
-        id: `mcp-${process.pid}`,
-        label: HOST_LABEL,
-      }));
-      setupSocket(ws);
+      setupProxySocket(ws);
       resolve(true);
     });
-
-    ws.on("error", () => {
-      clearTimeout(timeout);
-      resolve(false);
-    });
+    ws.on("error", (err: NodeJS.ErrnoException) => fail(err.code || err.message));
   });
 }
 
 /** Mode 2: Direct WebSocket server (original behavior) */
 function startDirectServer(): Promise<boolean> {
   return new Promise((resolve) => {
-    wsServer = new WebSocketServer({ port: WS_PORT });
+    const srv = new WebSocketServer({ port: WS_PORT });
 
-    wsServer.on("listening", () => {
+    srv.on("listening", () => {
+      wsServer = srv;
+      linkMode = "direct";
       console.error(`[WebSocket] Direct server listening on ws://localhost:${WS_PORT}`);
       resolve(true);
     });
 
-    wsServer.on("connection", (ws) => {
+    srv.on("connection", (ws) => {
       console.error("[WebSocket] Plugin connected!");
-      setupSocket(ws);
+      setupPluginSocket(ws);
     });
 
-    wsServer.on("error", (err: NodeJS.ErrnoException) => {
+    srv.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") {
         console.error(`[WebSocket] Port ${WS_PORT} in use, cannot start direct server`);
-        wsServer?.close();
+        srv.close();
         resolve(false);
       } else {
         console.error("[WebSocket] Server error:", err.message);
@@ -3404,31 +3552,85 @@ function startDirectServer(): Promise<boolean> {
   });
 }
 
+function proxyLogPath(): string {
+  if (process.env.MONORAIL_PROXY_LOG) return process.env.MONORAIL_PROXY_LOG;
+  return process.platform === "darwin"
+    ? path.join(os.homedir(), "Library", "Logs", "monorail-proxy.log")
+    : path.join(os.tmpdir(), "monorail-proxy.log");
+}
+
 /** Mode 3: Spawn proxy, then connect as upstream */
 async function spawnProxyAndConnect(): Promise<boolean> {
+  lastSpawnAt = Date.now();
   console.error("[WebSocket] Spawning proxy...");
+  // The proxy outlives this server, so give it a log file rather than our stderr.
+  let out: number | "ignore" = "ignore";
   try {
-    const thisFile = fileURLToPath(import.meta.url);
-    const proxyPath = path.join(path.dirname(thisFile), "proxy.js");
-    const child = spawn(process.execPath, [proxyPath], {
-      detached: true,
-      stdio: "ignore",
-    });
+    const logPath = proxyLogPath();
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    out = fs.openSync(logPath, "a");
+  } catch {
+    out = "ignore";
+  }
+  try {
+    const proxyPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "proxy.js");
+    const child = spawn(process.execPath, [proxyPath], { detached: true, stdio: ["ignore", out, out] });
     child.unref();
     console.error(`[WebSocket] Proxy spawned (pid ${child.pid})`);
-
-    // Wait for proxy to be ready
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 200));
-      if (await connectToProxy()) return true;
-    }
-    console.error("[WebSocket] Proxy spawned but failed to connect");
-    return false;
   } catch (e) {
     console.error("[WebSocket] Failed to spawn proxy:", (e as Error).message);
     return false;
+  } finally {
+    if (typeof out === "number") fs.closeSync(out);
   }
+
+  // Wait for it (or for whichever proxy won a spawn race) to be ready
+  for (let i = 0; i < 15; i++) {
+    await sleep(200);
+    if (await connectToProxy()) return true;
+  }
+  console.error("[WebSocket] Proxy spawned but failed to connect");
+  return false;
 }
+
+function scheduleReconnect(): void {
+  if (shuttingDown || reconnectTimer || isLinkOpen() || linkMode === "direct") return;
+  const base = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** Math.min(reconnectAttempt, 16));
+  const delay = Math.round(base * (0.5 + Math.random() * 0.5));
+  reconnectAttempt++;
+  nextReconnectAt = Date.now() + delay;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    void reconnect();
+  }, delay);
+  reconnectTimer.unref();
+}
+
+async function reconnect(): Promise<void> {
+  if (shuttingDown || isLinkOpen()) return;
+  const attempt = reconnectAttempt;
+  if (await connectToProxy()) {
+    console.error(`[WebSocket] Reconnected to proxy (attempt ${attempt})`);
+    return;
+  }
+  // Nothing listening: start a proxy, unless one was started moments ago.
+  if (SPAWN_ALLOWED && lastLinkError === "ECONNREFUSED" && Date.now() - lastSpawnAt >= SPAWN_COOLDOWN_MS) {
+    if (await spawnProxyAndConnect()) {
+      console.error(`[WebSocket] Reconnected to a new proxy (attempt ${attempt})`);
+      return;
+    }
+  }
+  scheduleReconnect();
+}
+
+// A proxy that stops answering without closing (a half-open socket after
+// sleep, a wedged process) would otherwise hold this link forever.
+setInterval(() => {
+  if (linkMode === "proxy" && isLinkOpen() && Date.now() - lastProxyContact > PROXY_SILENCE_MS) {
+    console.error(`[WebSocket] No word from the proxy for ${secs(Date.now() - lastProxyContact)}; dropping the link`);
+    connectedPlugin!.terminate();
+  }
+}, Math.max(1000, Math.floor(PROXY_SILENCE_MS / 3))).unref();
 
 /** Startup sequence: connect to proxy → spawn proxy → direct fallback → degraded */
 async function startConnection() {
@@ -3439,7 +3641,7 @@ async function startConnection() {
   }
 
   // 2. No proxy — spawn one, then connect
-  if (await spawnProxyAndConnect()) {
+  if (SPAWN_ALLOWED && await spawnProxyAndConnect()) {
     console.error("[WebSocket] Mode: proxy client (spawned)");
     return;
   }
@@ -3450,9 +3652,28 @@ async function startConnection() {
     return;
   }
 
-  // 4. Degraded — no Figma connection
-  console.error("[WebSocket] Mode: degraded (no Figma connection)");
+  // 4. Degraded — no Figma connection yet; keep looking for a proxy
+  linkMode = "degraded";
+  console.error("[WebSocket] Mode: degraded (no Figma connection); retrying the proxy in the background");
+  scheduleReconnect();
 }
+
+function shutdown(reason: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`[WebSocket] ${reason}; shutting down`);
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  failAllPending("the MCP server is shutting down");
+  try { connectedPlugin?.close(); } catch { /* closing anyway */ }
+  wsServer?.close();
+  process.exit(0);
+}
+
+// The MCP client closing stdin means this session is gone. Exit, rather than
+// keep reconnecting to (and respawning) a proxy on behalf of nobody.
+process.stdin.on("end", () => shutdown("stdin closed"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 // Start the server
 async function main() {
