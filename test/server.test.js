@@ -12,7 +12,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { startFakePlugin } from './fake-plugin.js';
-import { startProxy, startMcp, connectUpstream, freePort, portOpen, waitUntil, sleep, REPO } from './harness.js';
+import { startProxy, startMcp, connectUpstream, freePort, portOpen, waitUntil, sleep, REPO, pairingCode, freshHome } from './harness.js';
 
 const cleanups = [];
 const later = (fn) => cleanups.push(fn);
@@ -322,5 +322,44 @@ describe('cancel', () => {
     assert.equal(r.isError, false, r.text);
     assert.ok(r.ms < 2000, `took ${r.ms}ms (was up to the 30s TTL, then BUSY)`);
     assert.ok(plugin.control.some((m) => m.type === 'cancel' && m.requestId === plugin.requests[0].requestId));
+  });
+});
+
+describe('who may connect', () => {
+  test('a server with the wrong token is refused, and says so in status and on every call', async () => {
+    const { proxy } = await setup();
+    const stranger = await startMcp({ env: mcpEnv(proxy, { MONORAIL_HOME: freshHome().home }), label: 'stranger' });
+    later(() => stranger.close());
+    const st = await stranger.call('monorail_status');
+    assert.match(st.text, /^✗ The monorail proxy refused this session: monorail proxy: wrong token/);
+    const r = await stranger.call('monorail_css', { node_id: 'x' });
+    assert.equal(r.isError, true);
+    assert.match(r.text, /wrong token/);
+  });
+
+  test('status prints the pairing code while the plugin can pair but has not', async () => {
+    const { mcp } = await setup({ plugin: { features: ['pairing', 'serial'] } });
+    const r = await mcp.call('monorail_status');
+    assert.match(r.text, /· not paired/);
+    const m = /Pairing: not set up\. .*paste this code into the Monorail plugin window \(Pair\): ([0-9a-f-]+)/.exec(r.text);
+    assert.ok(m, r.text);
+    assert.equal(m[1], pairingCode());
+  });
+
+  test('without a proxy, and with spawning off, the server waits for one instead of taking the plugin port', async () => {
+    const wsPort = await freePort();
+    const proxyPort = await freePort();
+    const mcp = await startMcp({ env: mcpEnv({ wsPort, proxyPort }) });
+    later(() => mcp.close());
+    await sleep(800);
+    assert.equal(await portOpen(wsPort), false, 'no direct-mode server on the plugin port');
+    assert.match((await mcp.call('monorail_status')).text, /Not connected to the monorail proxy/);
+    const proxy = await startProxy({ wsPort, proxyPort });
+    later(() => proxy.stop());
+    const plugin = startFakePlugin({ port: wsPort });
+    later(() => plugin.close());
+    await plugin.ready;
+    const r = await mcp.call('monorail_css', { node_id: 'n' });
+    assert.equal(r.isError, false, r.text);
   });
 });

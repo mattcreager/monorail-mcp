@@ -306,6 +306,19 @@
     }
     .settings-input:focus { outline: none; border-color: var(--figma-color-bg-brand, #0d99ff); }
 
+    /* ── Pairing ── */
+    .pair-bar {
+      display: none;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--figma-color-border, #333);
+      background: var(--figma-color-bg-warning-tertiary, #3a3220);
+      flex-shrink: 0;
+    }
+    .pair-bar.required { background: var(--figma-color-bg-danger-tertiary, #3a2020); }
+    .pair-text { font-size: 10px; line-height: 1.35; color: var(--figma-color-text, #e0e0e0); }
+    .pair-row { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+    .pair-row .settings-input { margin-top: 0; user-select: text; }
+
     .settings-disconnect {
       width: 100%;
       margin-top: 6px;
@@ -366,6 +379,15 @@
     <div class="status-gear" id="settings-toggle" title="Settings">&#9881;</div>
   </div>
 
+  <!-- Pairing: shown until this plugin is paired with the proxy -->
+  <div class="pair-bar" id="pair-bar">
+    <div class="pair-text" id="pair-text">Not paired.</div>
+    <div class="pair-row">
+      <input class="settings-input" id="pair-input" placeholder="xxxx-xxxx-xxxx-xxxx" spellcheck="false" autocomplete="off">
+      <button class="action-btn" id="pair-btn">Pair</button>
+    </div>
+  </div>
+
   <!-- Settings Overlay -->
   <div class="settings-overlay" id="settings-overlay">
     <div class="settings-row">
@@ -421,6 +443,10 @@
     const activityFeed = document.getElementById('activity-feed');
     const copyIdBtn = document.getElementById('copy-id-btn');
     const toast = document.getElementById('toast');
+    const pairBar = document.getElementById('pair-bar');
+    const pairText = document.getElementById('pair-text');
+    const pairInput = document.getElementById('pair-input');
+    const pairBtn = document.getElementById('pair-btn');
 
     // ── State ──
     let ws = null;
@@ -431,6 +457,13 @@
     let selectionNodes = [];
     let fileContext = {};
     let userScrolled = false;
+    // Pairing (see src/auth.ts): the code is stored by code.ts in clientStorage.
+    let pairingCode = null;      // the stored code, once code.ts has sent it
+    let pairingLoaded = false;   // code.ts has answered (with a code or null)
+    let pairingPending = null;   // { code, auto } while a pair request is out
+    let pairState = 'hidden';    // 'hidden' | 'paired' | 'optional' | 'required'
+    let ackReceived = false;
+    let helloHadCode = false;    // the last hello carried the stored code
 
     // ── Toast ──
     function showToast(message, isError = false) {
@@ -533,6 +566,37 @@
       statusLabel.innerHTML = label;
     }
 
+    // ── Pairing ──
+    // The proxy only sends requests to a paired plugin, once any plugin has
+    // paired, so no web page can pose as this one. The user pastes the code
+    // monorail_status prints once; code.ts keeps it and it's sent on connect.
+    function showPairing(state) {
+      pairState = state;
+      if (state === 'hidden' || state === 'paired') {
+        pairBar.style.display = 'none';
+        return;
+      }
+      pairBar.style.display = 'block';
+      pairBar.className = 'pair-bar' + (state === 'required' ? ' required' : '');
+      pairText.textContent = state === 'required'
+        ? 'Not paired: Claude can\u2019t reach this plugin until you pair it. Ask Claude to run monorail_status, and paste the code it shows here.'
+        : 'Not paired. So that only Claude can drive this plugin, ask Claude to run monorail_status and paste the code it shows here.';
+    }
+
+    function sendPair(code, auto) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        if (!auto) showToast('Not connected to monorail', true);
+        return;
+      }
+      pairingPending = { code, auto };
+      ws.send(JSON.stringify({ type: 'pair', code }));
+    }
+
+    pairBtn.onclick = () => {
+      const code = (pairInput.value || '').trim();
+      if (code) sendPair(code, false);
+    };
+
     // ── Settings ──
     settingsToggle.onclick = (e) => {
       e.stopPropagation();
@@ -628,11 +692,14 @@
           startUptime();
           addActivity('\u25cf', 'Connected');
 
+          ackReceived = false;
+          helloHadCode = !!pairingCode;
           ws.send(JSON.stringify({
             type: 'hello',
             plugin: 'monorail-figma',
             version: '0.3.0',
-            features: ['request-id', 'auto-reconnect', 'serial', 'cancel'],
+            features: ['request-id', 'auto-reconnect', 'serial', 'cancel', 'pairing'],
+            pairingCode: pairingCode || null,
             fileKey: fileContext.fileKey || null,
             fileName: fileContext.fileName || null,
             pageName: fileContext.pageName || null
@@ -650,6 +717,40 @@
                 ? `<span class="sep">\u00b7</span><span class="task">${msg.task}</span>`
                 : '';
               setStatus('connected', `<span class="host">${host}</span>${taskHtml}`);
+              ackReceived = true;
+              if (typeof msg.paired !== 'boolean') showPairing('hidden'); // a proxy from before pairing
+              else if (msg.paired) showPairing('paired');
+              else {
+                showPairing(msg.pairingRequired ? 'required' : 'optional');
+                if (helloHadCode) {
+                  // The stored code no longer matches (the token was replaced): forget it.
+                  pairingCode = null;
+                  parent.postMessage({ pluginMessage: { type: 'save-pairing', code: null } }, '*');
+                } else if (pairingCode) {
+                  // The code arrived from code.ts after the hello went out.
+                  sendPair(pairingCode, true);
+                }
+              }
+            } else if (msg.type === 'pair-result') {
+              const attempt = pairingPending;
+              pairingPending = null;
+              if (msg.ok) {
+                if (attempt) {
+                  pairingCode = attempt.code;
+                  parent.postMessage({ pluginMessage: { type: 'save-pairing', code: attempt.code } }, '*');
+                }
+                pairInput.value = '';
+                showPairing('paired');
+                addActivity('\u2713', 'Paired with monorail');
+                if (!attempt || !attempt.auto) showToast('Paired');
+              } else {
+                if (attempt && attempt.auto) {
+                  pairingCode = null;
+                  parent.postMessage({ pluginMessage: { type: 'save-pairing', code: null } }, '*');
+                }
+                showPairing(msg.pairingEnforced ? 'required' : 'optional');
+                if (!attempt || !attempt.auto) showToast(msg.message || 'That code doesn\u2019t match', true);
+              }
             } else if (msg.type === 'push-ir') {
               const count = msg.ir?.slides?.length || 0;
               const modeText = msg.mode === 'replace' ? ' (replacing)' : '';
@@ -761,6 +862,14 @@
         return;
       }
 
+      // The stored pairing code (on plugin init). If the socket opened first,
+      // the hello went without it: pair now.
+      if (msg.type === 'pairing-code') {
+        pairingLoaded = true;
+        pairingCode = typeof msg.code === 'string' && msg.code ? msg.code : null;
+        if (pairingCode && ackReceived && pairState !== 'paired' && pairState !== 'hidden') sendPair(pairingCode, true);
+        return;
+      }
 
       // Applied IR
       if (msg.type === 'applied') {

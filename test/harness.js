@@ -3,11 +3,15 @@
  * process, raw upstream clients, and an MCP client over stdio.
  *
  * Everything runs on ephemeral ports, so tests never touch a live proxy on
- * 9876/9877 or the Figma plugin connected to it.
+ * 9876/9877 or the Figma plugin connected to it. The token and the pairing
+ * flag live in a fresh MONORAIL_HOME per test process (never ~/.monorail),
+ * which every proxy and server started from here inherits.
  */
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
@@ -15,6 +19,32 @@ import WebSocket from 'ws';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(here, '..');
 export const DIST = path.join(REPO, 'dist');
+
+if (!process.env.MONORAIL_HOME) {
+  process.env.MONORAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'monorail-test-'));
+  const home = process.env.MONORAIL_HOME;
+  process.once('exit', () => { try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ } });
+}
+
+const auth = await import(path.join(DIST, 'src', 'auth.js'));
+/** The token this test process's proxies and servers share. */
+export const token = () => auth.readOrCreateToken();
+/** The code a plugin must send to pair. */
+export const pairingCode = () => auth.pairingCodeFor(auth.readOrCreateToken());
+
+/** A separate MONORAIL_HOME (for tests that turn pairing on), with its token and pairing code. */
+export function freshHome() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'monorail-test-'));
+  process.once('exit', () => { try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ } });
+  const prev = process.env.MONORAIL_HOME;
+  process.env.MONORAIL_HOME = home;
+  try {
+    const tok = auth.readOrCreateToken();
+    return { home, token: tok, code: auth.pairingCodeFor(tok) };
+  } finally {
+    process.env.MONORAIL_HOME = prev;
+  }
+}
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -98,10 +128,11 @@ async function spawnProxy(wsPort, proxyPort, dist, env) {
 
 /**
  * A raw upstream client, the way an MCP server or a script talks to the proxy.
- * `protocol: 3` makes it a sender that hears `queued`.
+ * It registers with the token unless `token: null`; `protocol: 3` asks for
+ * queueing instead of busy.
  */
-export async function connectUpstream(port, { id, label = 'test', register = true, protocol } = {}) {
-  const ws = new WebSocket(`ws://localhost:${port}`);
+export async function connectUpstream(port, { id, label = 'test', register = true, token: tok = token(), protocol, headers } = {}) {
+  const ws = new WebSocket(`ws://localhost:${port}`, headers ? { headers } : undefined);
   const messages = [];
   const waiters = [];
   ws.on('message', (data) => {
@@ -122,16 +153,16 @@ export async function connectUpstream(port, { id, label = 'test', register = tru
         waiters.push(w);
       });
     },
-    async status() {
+    async status({ withToken = true } = {}) {
       const sent = Date.now();
-      client.send({ type: 'status-query' });
+      client.send({ type: 'status-query', ...(withToken ? { token: tok ?? token() } : {}) });
       return client.waitFor((m) => m.type === 'status-response' && m.at >= sent, 2000, { past: false });
     },
     close() { ws.terminate(); },
   };
   if (register) {
-    client.send({ type: 'register', id: id ?? `${label}-${Math.random().toString(36).slice(2, 8)}`, label, ...(protocol ? { protocol } : {}) });
-    await client.waitFor((m) => m.type === 'registered');
+    client.send({ type: 'register', id: id ?? `${label}-${Math.random().toString(36).slice(2, 8)}`, label, ...(tok ? { token: tok } : {}), ...(protocol ? { protocol } : {}) });
+    await client.waitFor((m) => m.type === 'registered' || (m.type === 'error' && m.requestType === 'register'));
   }
   return client;
 }

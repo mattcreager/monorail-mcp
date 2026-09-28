@@ -10,7 +10,10 @@ import assert from 'node:assert/strict';
 import WebSocket from 'ws';
 
 import { startFakePlugin, RESPONSE_FOR as FAKE_RESPONSE_FOR } from './fake-plugin.js';
-import { startProxy, connectUpstream, freePort, portOpen, waitUntil, sleep } from './harness.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { startProxy, connectUpstream, freePort, portOpen, waitUntil, sleep, token, pairingCode, freshHome } from './harness.js';
 import { RESPONSE_FOR, LEGACY_TTL_MS } from '../dist/shared/protocol.js';
 
 const cleanups = [];
@@ -570,5 +573,181 @@ describe('writes past their TTL', () => {
     a.send({ type: 'get-css', nodeId: 'hang', requestId: 'a1', timeoutMs: 1000 });
     assert.equal((await reply(a, 'a1', ['error'], 3000)).code, 'PROXY_TTL_EXPIRED');
     assert.equal((await a.status()).inflight.length, 0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Who may connect (src/auth.ts).
+
+function handshake(port, headers) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`ws://localhost:${port}`, { headers });
+    ws.once('open', () => { ws.terminate(); resolve('open'); });
+    ws.once('unexpected-response', (_req, res) => { resolve(`refused ${res.statusCode}`); ws.terminate(); });
+    ws.once('error', (e) => resolve(`error ${e.message}`));
+  });
+}
+
+function lanAddress() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) return a.address;
+  }
+  return null;
+}
+
+describe('who may connect', () => {
+  test('both ports listen on loopback only', async (t) => {
+    const { proxy } = await setup({ plugin: null });
+    const lan = lanAddress();
+    if (!lan) { t.skip('no non-loopback IPv4 address on this machine'); return; }
+    const net = await import('node:net');
+    for (const port of [proxy.proxyPort, proxy.wsPort]) {
+      const r = await new Promise((resolve) => {
+        const s = net.connect(port, lan);
+        s.once('connect', () => { s.destroy(); resolve('connected'); });
+        s.once('error', (e) => resolve(e.code));
+      });
+      assert.equal(r, 'ECONNREFUSED', `${lan}:${port} should refuse`);
+    }
+    assert.equal(await handshake(proxy.proxyPort, {}), 'open', 'loopback still works');
+  });
+
+  test('the MCP server port refuses any browser handshake', async () => {
+    const { proxy } = await setup({ plugin: null });
+    assert.equal(await handshake(proxy.proxyPort, { Origin: 'https://evil.example' }), 'refused 401');
+    assert.equal(await handshake(proxy.proxyPort, { Origin: 'null' }), 'refused 401', 'a sandboxed iframe too');
+    assert.equal(await handshake(proxy.proxyPort, {}), 'open');
+  });
+
+  test('the plugin port refuses a web page, and accepts what a Figma plugin sends', async () => {
+    const { proxy } = await setup({ plugin: null });
+    assert.equal(await handshake(proxy.wsPort, { Origin: 'https://evil.example' }), 'refused 401');
+    assert.equal(await handshake(proxy.wsPort, { Origin: 'http://localhost:3000' }), 'refused 401');
+    assert.equal(await handshake(proxy.wsPort, { Origin: 'null' }), 'open');
+    assert.equal(await handshake(proxy.wsPort, { Origin: 'https://www.figma.com' }), 'open');
+    assert.equal(await handshake(proxy.wsPort, {}), 'open');
+  });
+
+  test('a Host that is not a loopback name is refused on both ports (DNS rebinding)', async () => {
+    const { proxy } = await setup({ plugin: null });
+    assert.equal(await handshake(proxy.proxyPort, { Host: `evil.example:${proxy.proxyPort}` }), 'refused 401');
+    assert.equal(await handshake(proxy.wsPort, { Host: `evil.example:${proxy.wsPort}` }), 'refused 401');
+  });
+
+  test('register without the token is refused, and so is every request on that socket', async () => {
+    const { upstream, plugin } = await setup();
+    const old = await upstream('old-server', { token: null });
+    const refused = await old.waitFor((m) => m.type === 'error' && m.requestType === 'register');
+    assert.equal(refused.code, 'UNAUTHORIZED');
+    assert.match(refused.message, /restart its Claude session, or run \/mcp and reconnect monorail/);
+    old.send({ type: 'apply-probe', action: 'eval', code: 'return 1', requestId: 'o1', timeoutMs: 5000 });
+    const r = await reply(old, 'o1', ['error']);
+    assert.equal(r.code, 'UNAUTHORIZED');
+    await sleep(100);
+    assert.equal(plugin.requests.length, 0, 'nothing reached the plugin');
+  });
+
+  test('register with a wrong token is refused', async () => {
+    const { upstream } = await setup({ plugin: null });
+    const u = await upstream('guess', { token: 'f'.repeat(64) });
+    const r = await u.waitFor((m) => m.type === 'error' && m.requestType === 'register');
+    assert.equal(r.code, 'UNAUTHORIZED');
+    assert.match(r.message, /wrong token/);
+  });
+
+  test('status without the token says only that a proxy is there', async () => {
+    const { proxy } = await setup();
+    const u = await connectUpstream(proxy.proxyPort, { register: false });
+    later(() => u.close());
+    const st = await u.status({ withToken: false });
+    assert.equal(st.authRequired, true);
+    for (const k of ['plugins', 'upstreams', 'inflight', 'queue', 'files', 'activeUpstream']) assert.equal(k in st, false, k);
+    assert.equal((await u.status()).plugins.length, 1, 'with the token, everything');
+  });
+
+  test('the token never reaches the plugin', async () => {
+    const { upstream, plugin } = await setup();
+    const a = await p3(upstream, 'agent-a');
+    a.send({ type: 'get-css', nodeId: 'n', requestId: 'a1', timeoutMs: 5000, token: token() });
+    await reply(a, 'a1', ['css-extracted']);
+    assert.equal('token' in plugin.requests[0], false);
+  });
+
+  test('the token file is 0600 in a 0700 directory', async () => {
+    const { upstream } = await setup({ plugin: null });
+    await p3(upstream, 'agent-a');
+    const home = process.env.MONORAIL_HOME;
+    assert.equal(fs.statSync(path.join(home, 'token')).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(home).mode & 0o777, 0o700);
+  });
+});
+
+describe('pairing', () => {
+  // Pairing, once it happens, is remembered in MONORAIL_HOME: each test gets its own.
+  async function pairedSetup(opts = {}) {
+    const h = freshHome();
+    const ctx = await setup({ ...opts, env: { MONORAIL_HOME: h.home, MONORAIL_NO_PLUGIN_WAIT_MS: '400', ...(opts.env ?? {}) } });
+    const up = (label) => p3(ctx.upstream, label, { token: h.token });
+    return { ...ctx, h, up };
+  }
+
+  test('before any plugin has paired, an unpaired plugin is served (upgrading the proxy cuts nobody off)', async () => {
+    const { up, plugin } = await pairedSetup();
+    const a = await up('agent-a');
+    a.send({ type: 'get-css', nodeId: 'n', requestId: 'a1', timeoutMs: 5000 });
+    assert.equal((await reply(a, 'a1', ['css-extracted'])).type, 'css-extracted');
+    const st = await a.status();
+    assert.equal(st.pairingEnforced, false);
+    assert.equal(st.plugins[0].paired, false);
+    assert.equal(st.plugins[0].routable, true);
+    assert.equal(plugin.control.find((m) => m.type === 'hello-ack').pairingRequired, false);
+  });
+
+  test('once a plugin pairs, only paired plugins get requests', async () => {
+    const { proxy, up, plugin, h } = await pairedSetup({ plugin: { pairingCode: null } });
+    const a = await up('agent-a');
+    // A plugin pairs by sending the code (as the UI does after the user pastes it).
+    plugin.send({ type: 'pair', code: h.code.toUpperCase() });
+    await waitUntil(() => plugin.control.find((m) => m.type === 'pair-result'));
+    assert.equal(plugin.control.find((m) => m.type === 'pair-result').ok, true);
+    assert.equal((await a.status()).pairingEnforced, true);
+
+    // A page posing as the plugin connects later (so it is the most recent) without the code.
+    const impostor = startFakePlugin({ port: proxy.wsPort, name: 'impostor', headers: { Origin: 'null' } });
+    later(() => impostor.close());
+    await impostor.ready;
+    await waitUntil(() => impostor.control.find((m) => m.type === 'hello-ack'));
+    assert.equal(impostor.control.find((m) => m.type === 'hello-ack').pairingRequired, true);
+    a.send({ type: 'get-css', nodeId: 'n', requestId: 'a1', timeoutMs: 5000 });
+    await reply(a, 'a1', ['css-extracted']);
+    assert.equal(plugin.requests.length, 1, 'the paired plugin got it');
+    assert.equal(impostor.requests.length, 0, 'the impostor got nothing');
+    assert.equal(a.messages.filter((m) => m.type === 'hello' && m.plugin === 'impostor').length, 0, 'and its hello reached no session');
+
+    // With only the unpaired one left, requests fail and say why.
+    plugin.close();
+    a.send({ type: 'get-css', nodeId: 'n', requestId: 'a2', timeoutMs: 5000 });
+    const r = await reply(a, 'a2', ['error'], 3000);
+    assert.equal(r.code, 'NO_PLUGIN');
+    assert.match(r.message, /isn't paired with this proxy/);
+    assert.equal(impostor.requests.length, 0);
+  });
+
+  test('a plugin that sends the stored code in its hello is paired at once', async () => {
+    const h = freshHome();
+    const { plugin } = await setup({ plugin: { pairingCode: h.code }, env: { MONORAIL_HOME: h.home } });
+    await waitUntil(() => plugin.control.find((m) => m.type === 'hello-ack'));
+    const ack = plugin.control.find((m) => m.type === 'hello-ack');
+    assert.equal(ack.paired, true);
+    assert.equal(ack.pairingEnforced, true);
+    assert.ok(fs.existsSync(path.join(h.home, 'pairing-enforced')));
+  });
+
+  test('wrong codes are refused, and the fifth closes the socket', async () => {
+    const { plugin } = await pairedSetup();
+    for (let i = 0; i < 5; i++) plugin.send({ type: 'pair', code: '0000-0000-0000-0000' });
+    await waitUntil(() => !plugin.connected, { what: 'the proxy to close the socket' });
+    const results = plugin.control.filter((m) => m.type === 'pair-result');
+    assert.ok(results.length >= 4 && results.every((m) => m.ok === false));
   });
 });

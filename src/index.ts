@@ -604,7 +604,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_status",
         description:
-          "Check the connection to the Figma plugin. Reports whether a plugin is connected (and which build), the shared proxy this session goes through, who holds the plugin right now (request type, session, age), what is queued behind it, and recent requests the plugin never answered, plus the current selection.",
+          "Check the connection to the Figma plugin. Reports whether a plugin is connected (and which build, and whether it is paired), the shared proxy this session goes through, who holds the plugin right now (request type, session, age), what is queued behind it, and recent requests the plugin never answered, plus the current selection. When the plugin isn't paired it prints the pairing code: give that code to the user to paste into the Monorail plugin window themselves; never pair on the user's behalf.",
         inputSchema: {
           type: "object" as const,
           properties: {},
@@ -2956,7 +2956,7 @@ After pushing slides, use \`monorail_screenshot\` to see what was rendered:
 //   proxy (src/proxy.ts) on PROXY_PORT; the plugin connects to the proxy on
 //   WS_PORT. If the proxy goes away, this server reconnects with backoff and
 //   starts a new proxy when none is listening.
-// - direct mode (fallback, when no proxy can run): this server listens on
+// - direct mode (only with MONORAIL_DIRECT=1): this server listens on
 //   WS_PORT itself, and only this session can use the plugin.
 //
 // Every request goes through pluginRequest(). It carries a requestId, a
@@ -2965,8 +2965,8 @@ After pushing slides, use \`monorail_screenshot\` to see what was rendered:
 // sharing this process don't block each other. A protocol 3 proxy queues the
 // request until the plugin is free (`queued`), within its timeoutMs; an older
 // proxy answers `busy`, which is retried until that same deadline. A tool call
-// that is cancelled withdraws its request (`cancel`). See
-// docs/proxy-wedge-2026-09.md.
+// that is cancelled withdraws its request (`cancel`). The server registers
+// with the token in ~/.monorail/token. See docs/proxy-wedge-2026-09.md.
 
 import { spawn } from "child_process";
 import { AsyncLocalStorage } from "async_hooks";
@@ -2978,6 +2978,9 @@ import {
   PROTOCOL_VERSION, RESPONSE_FOR, RESPONSE_TYPES, DEFAULT_TIMEOUT_MS, WRITE_REQUEST_TYPES,
   MIN_TIMEOUT_MS, clampTimeout, type RequestErrorCode,
 } from "../shared/protocol.js";
+import {
+  readOrCreateToken, pairingCodeFor, tokenPath, LOOPBACK_ADDRESSES, isLoopbackHost, downstreamOriginAllowed,
+} from "./auth.js";
 import { describeTruncation } from "../shared/probe.js";
 
 function envInt(name: string, fallback: number): number {
@@ -3010,12 +3013,20 @@ const RECONNECT_MAX_MS = envInt("MONORAIL_RECONNECT_MAX_MS", 10_000);
 const SPAWN_COOLDOWN_MS = envInt("MONORAIL_SPAWN_COOLDOWN_MS", 15_000);
 /** MONORAIL_PROXY_SPAWN=0: never start a proxy, only connect to one (e.g. one run by launchd). */
 const SPAWN_ALLOWED = process.env.MONORAIL_PROXY_SPAWN !== "0";
+/**
+ * MONORAIL_DIRECT=1: when no proxy can be reached, listen on WS_PORT for the
+ * plugin directly (one session only). Off by default: a direct-mode server
+ * holding the plugin port keeps every proxy other sessions start from binding
+ * it, and it has no token or pairing checks.
+ */
+const DIRECT_ALLOWED = process.env.MONORAIL_DIRECT === "1";
 /** How long a tool call waits for a reconnect in progress before failing. */
 const LINK_WAIT_MS = envInt("MONORAIL_LINK_WAIT_MS", 3_000);
 /** The proxy pings every heartbeat; this long without a word from it means the link is dead. */
 const PROXY_SILENCE_MS = 3 * envInt("MONORAIL_HEARTBEAT_MS", 15_000);
 
 let wsServer: WebSocketServer | null = null;
+let directServers: WebSocketServer[] = [];
 /** The socket requests go out on: the proxy in proxy mode, the plugin in direct mode. */
 let connectedPlugin: WebSocket | null = null;
 let pluginInfo: { name?: string; version?: string; connectedAt?: string; features?: string[]; fileName?: string | null } = {};
@@ -3030,6 +3041,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let nextReconnectAt = 0;
 let lastSpawnAt = 0;
 let lastLinkError: string | null = null;
+/** The proxy refused this server's registration (no or wrong token). */
+let authError: string | null = null;
 let lastProxyContact = 0;
 let shuttingDown = false;
 let linkWaiters: Array<() => void> = [];
@@ -3373,6 +3386,14 @@ function handlePluginMessage(data: string, sender: WebSocket) {
   }
   if (!parsed || typeof parsed.type !== "string") return;
 
+  // The proxy refused this server's registration. Requests on this socket get
+  // the same explanation one by one; record it for monorail_status.
+  if (parsed.type === "error" && parsed.requestType === "register") {
+    authError = typeof parsed.message === "string" ? parsed.message : `the proxy refused registration (${parsed.code})`;
+    console.error(`[WebSocket] Proxy refused registration: ${authError}`);
+    return;
+  }
+
   // A protocol 3 proxy is holding the request until the plugin is free. Keep waiting.
   if (parsed.type === "queued") {
     const p = typeof parsed.requestId === "string" ? pendingRequests.get(parsed.requestId) : undefined;
@@ -3414,6 +3435,7 @@ function handlePluginMessage(data: string, sender: WebSocket) {
       return;
     case "registered":
       proxyProtocol = typeof parsed.protocol === "number" ? parsed.protocol : 1;
+      authError = null;
       console.error(`[WebSocket] Registered with proxy as ${parsed.id} (protocol ${proxyProtocol})`);
       return;
     case "status-response": {
@@ -3448,6 +3470,11 @@ function queryProxyStatus(timeoutMs = 2000): Promise<any | null> {
   });
 }
 
+/** The code to paste into the plugin window, or null if the token can't be read. */
+function pairingCode(): string | null {
+  try { return pairingCodeFor(readOrCreateToken()); } catch { return null; }
+}
+
 /** The text of monorail_status. */
 async function statusText(): Promise<string> {
   const selectionText = currentSelection.count > 0
@@ -3468,24 +3495,39 @@ async function statusText(): Promise<string> {
   }
 
   if (!isLinkOpen()) return `✗ ${notConnectedMessage().replace(/^Error: /, "")}\n${me}`;
+  if (authError) return `✗ The monorail proxy refused this session: ${authError}\n${me}`;
 
   const st = await queryProxyStatus();
   const lines: string[] = [];
   const plugins: any[] = Array.isArray(st?.plugins) ? st.plugins : [];
   const pluginCount: number = typeof st?.pluginCount === "number" ? st.pluginCount : (pluginInfo.name ? 1 : 0);
+  const usable = plugins.filter((p) => p.routable !== false);
 
-  if (pluginCount > 0) {
+  if (pluginCount > 0 && (plugins.length === 0 || usable.length > 0)) {
     lines.push("✓ Figma plugin connected (via proxy)");
+  } else if (pluginCount > 0) {
+    lines.push("✗ A Figma plugin is connected, but it isn't paired, so it gets no requests");
   } else {
     lines.push("✗ No Figma plugin connected to the proxy");
   }
   if (plugins.length > 0) {
     for (const p of plugins) {
       const feats = Array.isArray(p.features) && p.features.length ? ` · features: ${p.features.join(", ")}` : "";
-      lines.push(`  Plugin: ${p.plugin || "unknown"} ${p.version || ""}${p.fileName ? ` · file "${p.fileName}"` : ""}${p.pageName ? ` · page "${p.pageName}"` : ""} · connected ${p.connectedAt}${feats}`);
+      const pairing = p.paired === true ? " · paired" : p.paired === false ? " · not paired" : "";
+      lines.push(`  Plugin: ${p.plugin || "unknown"} ${p.version || ""}${p.fileName ? ` · file "${p.fileName}"` : ""}${p.pageName ? ` · page "${p.pageName}"` : ""} · connected ${p.connectedAt}${pairing}${feats}`);
     }
     if (plugins.some((p) => !Array.isArray(p.features) || !p.features.includes("serial"))) {
-      lines.push("  Note: this plugin build predates its request queue and cancelling (2026-09-28). Re-run the plugin in Figma once to load them.");
+      lines.push("  Note: this plugin build predates the request queue, cancelling and pairing (2026-09-28). Re-run the plugin in Figma once to load them.");
+    }
+    const unpaired = plugins.filter((p) => p.paired === false);
+    if (unpaired.length > 0) {
+      const code = pairingCode();
+      const where = code ? `paste this code into the Monorail plugin window (Pair): ${code}` : `the pairing code can't be made: ${tokenPath()} is unreadable`;
+      if (st?.pairingEnforced) {
+        lines.push(`  Pairing: required. Requests only go to paired plugins; ${where}`);
+      } else if (unpaired.some((p) => Array.isArray(p.features) && p.features.includes("pairing"))) {
+        lines.push(`  Pairing: not set up. So that no other page can pose as the plugin, ${where}`);
+      }
     }
   } else if (pluginCount > 0) {
     lines.push(`  Plugin: ${pluginInfo.name || "unknown"} ${pluginInfo.version || ""}`);
@@ -3554,6 +3596,7 @@ function setupProxySocket(ws: WebSocket) {
   proxyProtocol = 0;
   reconnectAttempt = 0;
   lastLinkError = null;
+  authError = null;
   lastProxyContact = Date.now();
   ws.on("message", (data) => handlePluginMessage(data.toString(), ws));
   ws.on("ping", () => { lastProxyContact = Date.now(); });
@@ -3569,14 +3612,22 @@ function setupProxySocket(ws: WebSocket) {
   ws.on("error", (err) => {
     console.error("[WebSocket] Proxy socket error:", err.message);
   });
-  ws.send(JSON.stringify({ type: "register", id: `mcp-${process.pid}`, label: CLIENT_LABEL, protocol: PROTOCOL_VERSION }));
+  let token: string | undefined;
+  try {
+    token = readOrCreateToken();
+  } catch (e) {
+    authError = `this server can't read or create ${tokenPath()} (${(e as Error).message}), so the proxy won't accept it`;
+    console.error(`[WebSocket] ${authError}`);
+  }
+  ws.send(JSON.stringify({ type: "register", id: `mcp-${process.pid}`, label: CLIENT_LABEL, protocol: PROTOCOL_VERSION, token }));
   linkUp();
 }
 
 /** Connect to a proxy that is already listening. Resolves false (and records why) if none is. */
 function connectToProxy(): Promise<boolean> {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://localhost:${PROXY_PORT}`);
+    // 127.0.0.1, not localhost: the proxy listens on loopback only, and IPv4 always.
+    const ws = new WebSocket(`ws://127.0.0.1:${PROXY_PORT}`);
     let settled = false;
     const fail = (why: string) => {
       if (settled) return;
@@ -3602,33 +3653,36 @@ function connectToProxy(): Promise<boolean> {
   });
 }
 
-/** Mode 2: Direct WebSocket server (original behavior) */
-function startDirectServer(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = new WebSocketServer({ port: WS_PORT });
-
-    srv.on("listening", () => {
-      wsServer = srv;
-      linkMode = "direct";
-      console.error(`[WebSocket] Direct server listening on ws://localhost:${WS_PORT}`);
-      resolve(true);
+/** Direct mode (MONORAIL_DIRECT=1): listen for the plugin ourselves, on loopback, with the proxy's handshake checks. */
+async function startDirectServer(): Promise<boolean> {
+  const verifyClient = (info: { req: import("http").IncomingMessage }) =>
+    isLoopbackHost(info.req.headers.host) && downstreamOriginAllowed(info.req.headers.origin);
+  const listenOn = (host: string) => new Promise<WebSocketServer | null>((resolve) => {
+    const srv = new WebSocketServer({ port: WS_PORT, host, verifyClient });
+    srv.once("listening", () => resolve(srv));
+    srv.once("error", (err: NodeJS.ErrnoException) => {
+      console.error(`[WebSocket] Can't listen on [${host}]:${WS_PORT} (${err.code ?? err.message})`);
+      srv.close();
+      resolve(null);
     });
-
+  });
+  const primary = await listenOn(LOOPBACK_ADDRESSES[0]);
+  if (!primary) return false;
+  const servers = [primary];
+  const v6 = await listenOn(LOOPBACK_ADDRESSES[1]);
+  if (v6) servers.push(v6);
+  for (const srv of servers) {
     srv.on("connection", (ws) => {
       console.error("[WebSocket] Plugin connected!");
       setupPluginSocket(ws);
     });
-
-    srv.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE") {
-        console.error(`[WebSocket] Port ${WS_PORT} in use, cannot start direct server`);
-        srv.close();
-        resolve(false);
-      } else {
-        console.error("[WebSocket] Server error:", err.message);
-      }
-    });
-  });
+    srv.on("error", (err) => console.error("[WebSocket] Server error:", err.message));
+  }
+  wsServer = primary;
+  directServers = servers;
+  linkMode = "direct";
+  console.error(`[WebSocket] Direct server listening on ws://localhost:${WS_PORT} (loopback)`);
+  return true;
 }
 
 function proxyLogPath(): string {
@@ -3711,7 +3765,7 @@ setInterval(() => {
   }
 }, Math.max(1000, Math.floor(PROXY_SILENCE_MS / 3))).unref();
 
-/** Startup sequence: connect to proxy → spawn proxy → direct fallback → degraded */
+/** Startup sequence: connect to proxy → spawn proxy → (direct, if MONORAIL_DIRECT=1) → keep retrying */
 async function startConnection() {
   // 1. Try connecting to existing proxy
   if (await connectToProxy()) {
@@ -3725,13 +3779,13 @@ async function startConnection() {
     return;
   }
 
-  // 3. Proxy failed — fall back to direct server (single instance, no multi-session)
-  if (await startDirectServer()) {
-    console.error("[WebSocket] Mode: direct server (fallback)");
+  // 3. Only if asked: listen for the plugin ourselves (single session)
+  if (DIRECT_ALLOWED && await startDirectServer()) {
+    console.error("[WebSocket] Mode: direct server (MONORAIL_DIRECT=1)");
     return;
   }
 
-  // 4. Degraded — no Figma connection yet; keep looking for a proxy
+  // 4. Degraded — no Figma connection yet; keep looking for (and starting) a proxy
   linkMode = "degraded";
   console.error("[WebSocket] Mode: degraded (no Figma connection); retrying the proxy in the background");
   scheduleReconnect();
@@ -3744,7 +3798,7 @@ function shutdown(reason: string): void {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   failAllPending("the MCP server is shutting down");
   try { connectedPlugin?.close(); } catch { /* closing anyway */ }
-  wsServer?.close();
+  for (const srv of directServers) srv.close();
   process.exit(0);
 }
 

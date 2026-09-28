@@ -15,7 +15,7 @@
  * Senders that omit them (protocol 1 servers, scripts) still work.
  *
  * Protocol 3 (2026-09-28):
- *   register     carries `protocol`
+ *   register     carries `token` (from ~/.monorail/token) and `protocol`
  *   queued       a request waits its turn in the proxy's queue instead of
  *                being answered `busy`; `queued` tells a protocol 3 sender
  *                where it stands
@@ -141,6 +141,7 @@ export type RequestErrorCode =
   | 'NO_PLUGIN'            // no Figma plugin is connected
   | 'NOT_CONNECTED'        // the server has no link to a proxy or plugin right now
   | 'NOT_REGISTERED'
+  | 'UNAUTHORIZED'         // register without the right token (or a request on such a socket)
   | 'QUEUE_TIMEOUT'        // waited in the proxy's queue until its deadline; nothing reached Figma
   | 'QUEUE_FULL'
   | 'CANCELLED'            // the caller cancelled the tool call

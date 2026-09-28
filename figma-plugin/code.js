@@ -389,6 +389,8 @@
     fileName: figma.root.name,
     pageName: figma.currentPage.name
   });
+  var PAIRING_KEY = "monorail-pairing-code";
+  figma.clientStorage.getAsync(PAIRING_KEY).then((code) => figma.ui.postMessage({ type: "pairing-code", code: typeof code === "string" ? code : null })).catch(() => figma.ui.postMessage({ type: "pairing-code", code: null }));
   figma.on("selectionchange", () => {
     const sel = figma.currentPage.selection;
     figma.ui.postMessage({
@@ -2634,6 +2636,10 @@
         withdrawn.add(msg.requestId);
       }
       return;
+    }
+    if (msg.type === "save-pairing") {
+      const code = typeof msg.code === "string" ? msg.code : null;
+      return (code ? figma.clientStorage.setAsync(PAIRING_KEY, code) : figma.clientStorage.deleteAsync(PAIRING_KEY)).catch((e) => console.error("Could not save the pairing code:", e));
     }
     if (!PLUGIN_REPLY_FOR[msg.type]) return handleMessage(msg);
     const run = requestChain.then(() => runQueued(msg));

@@ -7,7 +7,14 @@
  * instances (upstream, port 9877), so several Claude sessions can share one
  * plugin.
  *
- * Downstream routing: by fileKey if present, else most-recently-connected.
+ * Who may connect (src/auth.ts): both ports listen on loopback only. The
+ * upstream port refuses browser handshakes and requires the token in
+ * ~/.monorail/token on `register`. The plugin port accepts only a Figma
+ * plugin's origins, and once a plugin has been paired, only paired plugins get
+ * requests.
+ *
+ * Downstream routing: by fileKey if present, else the most recently connected
+ * plugin that may receive requests.
  *
  * Each plugin serves one request at a time. The others wait their turn in a
  * FIFO queue, each with its own deadline (its timeoutMs, counted from arrival,
@@ -20,10 +27,15 @@
  */
 
 import { WebSocketServer, WebSocket } from "ws";
+import type { IncomingMessage } from "http";
 import {
   PROTOCOL_VERSION, RESPONSE_FOR, REQUEST_TYPES, RESPONSE_TYPES, WRITE_REQUEST_TYPES,
   WRITE_HOLD_MS, LEGACY_TTL_MS, clampTimeout, type RequestErrorCode,
 } from "../shared/protocol.js";
+import {
+  readOrCreateToken, safeEqual, pairingCodeMatches, pairingEnforced, enforcePairing,
+  isLoopbackHost, upstreamOriginAllowed, downstreamOriginAllowed, LOOPBACK_ADDRESSES, tokenPath,
+} from "./auth.js";
 
 function envInt(name: string, fallback: number): number {
   const v = parseInt(process.env[name] ?? "", 10);
@@ -42,6 +54,7 @@ const QUEUE_LIMIT = envInt("MONORAIL_QUEUE_LIMIT", 64);
 /** How long a queued request waits for a plugin when none is connected (a plugin reconnecting takes ~0.5s). */
 const NO_PLUGIN_WAIT_MS = envInt("MONORAIL_NO_PLUGIN_WAIT_MS", 3000);
 const WRITE_HOLD = envInt("MONORAIL_WRITE_HOLD_MS", WRITE_HOLD_MS);
+const MAX_PAIR_FAILURES = 5;
 const startedAt = Date.now();
 
 function log(...args: unknown[]): void {
@@ -61,8 +74,11 @@ interface Downstream {
   pluginName: string | null;
   pluginVersion: string | null;
   features: string[];
+  origin: string | null;
   connectedAt: number;
   missedPongs: number;
+  paired: boolean;
+  pairFailures: number;
   /** Wire id of the request this plugin is serving, if any. */
   inflightId: string | null;
 }
@@ -133,6 +149,7 @@ const recentLate: HistoryEntry[] = [];
 let orphanReplies = 0;
 let activeUpstreamId: string | null = null;
 let nextId = 1;
+let enforced = false;
 
 function genId(prefix: string): string {
   return `${prefix}-${nextId++}`;
@@ -171,10 +188,21 @@ function broadcastUpstream(payload: string): void {
   }
 }
 
+/** The token, read fresh so that deleting ~/.monorail/token rotates it without a proxy restart. */
+function currentToken(): string | null {
+  try {
+    return readOrCreateToken();
+  } catch (e) {
+    log(`cannot read or create ${tokenPath()}:`, (e as Error).message);
+    return null;
+  }
+}
+
 // --- Downstream routing ---
 
+/** A plugin may get requests if it is paired, or if no plugin has paired yet. */
 function routable(d: Downstream): boolean {
-  return d.ws.readyState === WebSocket.OPEN;
+  return d.ws.readyState === WebSocket.OPEN && (d.paired || !enforced);
 }
 
 function findDownstream(fileKey?: string | null): Downstream | null {
@@ -188,6 +216,11 @@ function findDownstream(fileKey?: string | null): Downstream | null {
 }
 
 function noPluginMessage(fileKey: unknown): string {
+  const unpaired = [...downstreams.values()].filter((d) => d.ws.readyState === WebSocket.OPEN && !routable(d)).length;
+  if (unpaired > 0) {
+    return `A Figma plugin is connected but isn't paired with this proxy, so it gets no requests. ` +
+      `Run monorail_status for the pairing code and paste it into the Monorail plugin window.`;
+  }
   return "No Figma plugin connected" + (typeof fileKey === "string" && fileKey ? ` for file ${fileKey}` : "") +
     ". Run the Monorail plugin in Figma.";
 }
@@ -252,8 +285,8 @@ function failReq(r: Req, code: RequestErrorCode, retryable: boolean, message: st
 }
 
 function newReq(msg: any, upstream: Upstream, ws: WebSocket, label: string, timeoutMs: number): Req {
-  // The proxy owns these on the way to the plugin.
-  const { requestId, clientLabel: _c, timeoutMs: _t, ...body } = msg;
+  // The proxy owns these on the way to the plugin; a token never leaves this process.
+  const { requestId, clientLabel: _c, timeoutMs: _t, token: _k, ...body } = msg;
   const now = Date.now();
   return {
     wireId: "", requestId: typeof requestId === "string" ? requestId : null,
@@ -425,31 +458,84 @@ function abandon(r: Req, why: string): void {
   pump();
 }
 
+// --- Handshake checks ---
+
+const rejectLog = new Map<string, { count: number; lastLogAt: number }>();
+
+function refuse(kind: string, req: IncomingMessage, why: string): void {
+  const key = `${kind} ${why}`;
+  const e = rejectLog.get(key) ?? { count: 0, lastLogAt: 0 };
+  e.count++;
+  rejectLog.set(key, e);
+  if (Date.now() - e.lastLogAt > 10_000) {
+    log(`Refused ${kind} handshake: ${why} (host ${req.headers.host ?? "none"}, origin ${req.headers.origin ?? "none"}; ${e.count} so far)`);
+    e.lastLogAt = Date.now();
+  }
+}
+
+function verifyUpstream(info: { req: IncomingMessage }): boolean {
+  const { host, origin } = info.req.headers;
+  if (!isLoopbackHost(host)) { refuse("upstream", info.req, "Host is not a loopback name"); return false; }
+  if (!upstreamOriginAllowed(origin)) { refuse("upstream", info.req, "a browser Origin on the MCP server port"); return false; }
+  return true;
+}
+
+function verifyDownstream(info: { req: IncomingMessage }): boolean {
+  const { host, origin } = info.req.headers;
+  if (!isLoopbackHost(host)) { refuse("plugin", info.req, "Host is not a loopback name"); return false; }
+  if (!downstreamOriginAllowed(origin)) { refuse("plugin", info.req, "an Origin a Figma plugin can't have"); return false; }
+  return true;
+}
+
 // --- Servers ---
 //
-// Bind the upstream port first, then the downstream port. When several MCP servers
+// Loopback only: 127.0.0.1 and ::1 (`localhost` resolves to either). Bind the
+// upstream port first, then the downstream port. When several MCP servers
 // find no proxy and each spawns one, they race: binding one port at a time
 // means the loser fails on the first port and exits without holding the
 // second, so the race can't leave each proxy with one port and neither usable.
 
-function listen(port: number, name: string): Promise<WebSocketServer[]> {
+function listenOne(port: number, host: string, verifyClient: (info: { req: IncomingMessage }) => boolean): Promise<WebSocketServer> {
   return new Promise((resolve, reject) => {
-    const wss = new WebSocketServer({ port });
+    const wss = new WebSocketServer({ port, host, verifyClient });
     const onError = (err: NodeJS.ErrnoException) => { wss.close(); reject(err); };
     wss.once("error", onError);
     wss.once("listening", () => {
       wss.off("error", onError);
-      wss.on("error", (err) => log(`${name} server error:`, err.message));
-      resolve([wss]);
+      wss.on("error", (err) => log(`server error on [${host}]:${port}:`, err.message));
+      resolve(wss);
     });
   });
 }
+
+async function listenLoopback(port: number, name: string, verifyClient: (info: { req: IncomingMessage }) => boolean): Promise<WebSocketServer[]> {
+  const servers: WebSocketServer[] = [];
+  for (const host of LOOPBACK_ADDRESSES) {
+    try {
+      servers.push(await listenOne(port, host, verifyClient));
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (host === LOOPBACK_ADDRESSES[0] || err.code === "EADDRINUSE") {
+        for (const s of servers) s.close();
+        throw err;
+      }
+      log(`${name}: not listening on [${host}]:${port} (${err.code ?? err.message}); IPv4 loopback only`);
+    }
+  }
+  return servers;
+}
+
+if (currentToken() === null) {
+  log(`exiting: MCP servers can't authenticate without ${tokenPath()}`);
+  process.exit(1);
+}
+enforced = pairingEnforced();
 
 let upstreamServers: WebSocketServer[];
 let downstreamServers: WebSocketServer[];
 
 try {
-  upstreamServers = await listen(UPSTREAM_PORT, "upstream");
+  upstreamServers = await listenLoopback(UPSTREAM_PORT, "upstream", verifyUpstream);
 } catch (e) {
   const err = e as NodeJS.ErrnoException;
   if (err.code === "EADDRINUSE") {
@@ -460,7 +546,7 @@ try {
   process.exit(1);
 }
 try {
-  downstreamServers = await listen(DOWNSTREAM_PORT, "downstream");
+  downstreamServers = await listenLoopback(DOWNSTREAM_PORT, "downstream", verifyDownstream);
 } catch (e) {
   const err = e as NodeJS.ErrnoException;
   log(`cannot listen on ${DOWNSTREAM_PORT} (${err.code ?? err.message}): another process holds the plugin port ` +
@@ -470,20 +556,22 @@ try {
 }
 
 log(`monorail-proxy ${VERSION} (protocol ${PROTOCOL_VERSION}), pid ${process.pid}`);
-log(`Downstream (Figma) listening on ws://localhost:${DOWNSTREAM_PORT}`);
-log(`Upstream (MCP servers) listening on ws://localhost:${UPSTREAM_PORT}`);
+log(`Downstream (Figma) listening on ws://localhost:${DOWNSTREAM_PORT} (loopback only)`);
+log(`Upstream (MCP servers) listening on ws://localhost:${UPSTREAM_PORT} (loopback only, token required)`);
+log(`Plugin pairing: ${enforced ? "enforced (only paired plugins get requests)" : "not yet enforced (no plugin has paired)"}`);
 
 // --- Downstream (Figma plugin) connections ---
 
-function onDownstreamConnection(ws: WebSocket): void {
+function onDownstreamConnection(ws: WebSocket, req: IncomingMessage): void {
   const id = genId("ds");
   const downstream: Downstream = {
     ws, id, fileKey: null, fileName: null, pageName: null,
     pluginName: null, pluginVersion: null, features: [],
-    connectedAt: Date.now(), missedPongs: 0, inflightId: null,
+    origin: typeof req.headers.origin === "string" ? req.headers.origin : null,
+    connectedAt: Date.now(), missedPongs: 0, paired: false, pairFailures: 0, inflightId: null,
   };
   downstreams.set(id, downstream);
-  log(`Figma plugin connected: ${id}`);
+  log(`Figma plugin connected: ${id} (origin ${downstream.origin ?? "none"})`);
 
   const helloForUpstreams = () => ({
     type: "hello",
@@ -493,6 +581,26 @@ function onDownstreamConnection(ws: WebSocket): void {
     fileName: downstream.fileName,
     features: downstream.features,
   });
+
+  const checkPairing = (code: unknown): boolean => {
+    const token = currentToken();
+    const ok = token !== null && pairingCodeMatches(code, token);
+    if (ok) {
+      downstream.paired = true;
+      if (!enforced) {
+        try { enforcePairing(); } catch (e) { log("could not record pairing:", (e as Error).message); }
+        enforced = true;
+        log(`Plugin ${id} paired; from now on only paired plugins get requests`);
+      } else {
+        log(`Plugin ${id} paired`);
+      }
+    } else {
+      downstream.pairFailures++;
+      log(`Plugin ${id} sent a pairing code that doesn't match (${downstream.pairFailures} of ${MAX_PAIR_FAILURES})`);
+      if (downstream.pairFailures >= MAX_PAIR_FAILURES) ws.close(1008, "too many pairing attempts");
+    }
+    return ok;
+  };
 
   ws.on("pong", () => { downstream.missedPongs = 0; });
 
@@ -508,7 +616,8 @@ function onDownstreamConnection(ws: WebSocket): void {
         downstream.pluginName = msg.plugin || null;
         downstream.pluginVersion = msg.version || null;
         downstream.features = Array.isArray(msg.features) ? msg.features.filter((f: unknown) => typeof f === "string") : [];
-        log(`Plugin ${id} hello: ${downstream.pluginName} ${downstream.pluginVersion} file=${downstream.fileName} key=${downstream.fileKey} features=[${downstream.features.join(",")}]`);
+        if (msg.pairingCode !== undefined && msg.pairingCode !== null && msg.pairingCode !== "") checkPairing(msg.pairingCode);
+        log(`Plugin ${id} hello: ${downstream.pluginName} ${downstream.pluginVersion} file=${downstream.fileName} key=${downstream.fileKey} features=[${downstream.features.join(",")}] paired=${downstream.paired}`);
 
         sendJson(ws, {
           type: "hello-ack",
@@ -517,12 +626,30 @@ function onDownstreamConnection(ws: WebSocket): void {
           protocol: PROTOCOL_VERSION,
           timestamp: new Date().toISOString(),
           upstreamCount: upstreams.size,
-          activeLabel: activeUpstreamId ? upstreams.get(activeUpstreamId)?.label : null,
+          activeLabel: routable(downstream) && activeUpstreamId ? upstreams.get(activeUpstreamId)?.label : null,
+          paired: downstream.paired,
+          pairingEnforced: enforced,
+          pairingRequired: enforced && !downstream.paired,
         });
 
         // Every session should see the plugin, not only the last one to make a request.
-        broadcastUpstream(JSON.stringify(helloForUpstreams()));
+        if (routable(downstream)) broadcastUpstream(JSON.stringify(helloForUpstreams()));
         pump();
+        return;
+      }
+
+      if (msg.type === "pair") {
+        const ok = checkPairing(msg.code);
+        sendJson(ws, {
+          type: "pair-result", ok, paired: downstream.paired, pairingEnforced: enforced,
+          message: ok
+            ? "Paired. Only paired plugins get requests from now on."
+            : "That code doesn't match this proxy's. Run monorail_status in Claude for the current code.",
+        });
+        if (ok) {
+          broadcastUpstream(JSON.stringify(helloForUpstreams()));
+          pump();
+        }
         return;
       }
 
@@ -530,6 +657,9 @@ function onDownstreamConnection(ws: WebSocket): void {
         sendJson(ws, { type: "pong" });
         return;
       }
+
+      // Nothing from a plugin that may not get requests reaches the sessions.
+      if (!routable(downstream)) return;
 
       if (msg.type === "selection-changed") {
         broadcastUpstream(data.toString());
@@ -632,9 +762,18 @@ for (const s of downstreamServers) s.on("connection", onDownstreamConnection);
 
 // --- Upstream (MCP server) connections ---
 
+function unauthorizedMessage(noToken: boolean): string {
+  return noToken
+    ? `monorail proxy: this client didn't send a token, and since 2026-09-28 the proxy only serves clients that do. ` +
+      `An MCP server started before then runs old code: restart its Claude session, or run /mcp and reconnect monorail. ` +
+      `A script: send { type: 'register', id, label, token } with the token in ${tokenPath()}.`
+    : `monorail proxy: wrong token. Use the one in ${tokenPath()} (read it again: it changes if the file is deleted).`;
+}
+
 function onUpstreamConnection(ws: WebSocket): void {
   const tempId = genId("us");
   let upstream: Upstream | null = null;
+  let refused: "no-token" | "bad-token" | null = null;
   const beat = { missedPongs: 0 };
   upstreamSockets.set(ws, beat);
 
@@ -649,6 +788,13 @@ function onUpstreamConnection(ws: WebSocket): void {
 
       // Registration
       if (msg.type === "register") {
+        const token = currentToken();
+        if (token === null || !safeEqual(msg.token, token)) {
+          refused = msg.token === undefined || msg.token === null ? "no-token" : "bad-token";
+          log(`Refused register from "${msg.label || "unknown"}" (${refused === "no-token" ? "no token: a client from before 2026-09-28?" : "wrong token"})`);
+          sendError(ws, requestId, "register", "UNAUTHORIZED", false, unauthorizedMessage(refused === "no-token"));
+          return;
+        }
         const id = typeof msg.id === "string" && msg.id ? msg.id : tempId;
         const existing = upstreams.get(id);
         if (existing && existing.ws !== ws) {
@@ -656,6 +802,7 @@ function onUpstreamConnection(ws: WebSocket): void {
           log(`Upstream ${id} re-registered; dropping its previous socket`);
           existing.ws.terminate();
         }
+        refused = null;
         upstream = {
           ws, id, label: msg.label || "unknown",
           protocol: typeof msg.protocol === "number" ? msg.protocol : 1,
@@ -684,9 +831,23 @@ function onUpstreamConnection(ws: WebSocket): void {
         return;
       }
 
-      // Status query (allowed before registration, for scripts and monitoring)
+      // Status query: in full for a registered client or one that sends the
+      // token; otherwise only what a client needs to see it's talking to a proxy.
       if (msg.type === "status-query") {
         const now = Date.now();
+        const token = upstream ? null : currentToken();
+        const trusted = upstream !== null || (token !== null && safeEqual(msg.token, token));
+        if (!trusted) {
+          sendJson(ws, {
+            type: "status-response",
+            ...(requestId ? { requestId } : {}),
+            protocol: PROTOCOL_VERSION, version: VERSION, pid: process.pid, uptimeMs: now - startedAt,
+            pluginCount: downstreams.size, upstreamCount: upstreams.size,
+            authRequired: true,
+            message: refused ? unauthorizedMessage(refused === "no-token") : `Send the token in ${tokenPath()} for the full status.`,
+          });
+          return;
+        }
         sendJson(ws, {
           type: "status-response",
           ...(requestId ? { requestId } : {}),
@@ -700,9 +861,11 @@ function onUpstreamConnection(ws: WebSocket): void {
           version: VERSION,
           pid: process.pid,
           uptimeMs: now - startedAt,
+          pairingEnforced: enforced,
           plugins: [...downstreams.values()].map(d => ({
             id: d.id, plugin: d.pluginName, version: d.pluginVersion, features: d.features,
             fileName: d.fileName, pageName: d.pageName, connectedAt: new Date(d.connectedAt).toISOString(),
+            origin: d.origin, paired: d.paired, routable: routable(d),
             busy: d.inflightId !== null,
           })),
           upstreams: [...upstreams.values()].map(u => ({
@@ -731,8 +894,9 @@ function onUpstreamConnection(ws: WebSocket): void {
       }
 
       if (!upstream) {
-        sendError(ws, requestId, typeof msg.type === "string" ? msg.type : null, "NOT_REGISTERED", false,
-          "Not registered. Send { type: 'register', id, label } first.");
+        const type = typeof msg.type === "string" ? msg.type : null;
+        if (refused) sendError(ws, requestId, type, "UNAUTHORIZED", false, unauthorizedMessage(refused === "no-token"));
+        else sendError(ws, requestId, type, "NOT_REGISTERED", false, "Not registered. Send { type: 'register', id, label, token } first.");
         return;
       }
 
@@ -756,7 +920,8 @@ function onUpstreamConnection(ws: WebSocket): void {
         if (msg.type === "push-ir" && msg.autoApply === false) {
           const target = findDownstream(msg.fileKey);
           if (!target) { sendError(ws, requestId, msg.type, "NO_PLUGIN", true, noPluginMessage(msg.fileKey)); return; }
-          target.ws.send(data.toString());
+          const { token: _k, ...body } = msg;
+          sendJson(target.ws, body);
           return;
         }
 
@@ -790,7 +955,8 @@ function onUpstreamConnection(ws: WebSocket): void {
       // Non-request messages (hello-ack forwarding, etc) — route to default downstream
       const target = findDownstream(msg.fileKey);
       if (target && target.ws.readyState === WebSocket.OPEN) {
-        target.ws.send(data.toString());
+        const { token: _k, ...body } = msg;
+        sendJson(target.ws, body);
       }
     } catch (e) {
       log(`Bad message from upstream ${upstream?.id || tempId}:`, (e as Error).message);

@@ -7,7 +7,7 @@
  * the request's id. A request that got no reply held the proxy's lock for
  * every session (docs/proxy-wedge-2026-09.md). Requests run one at a time, so
  * two handlers never interleave at their awaits, and a withdrawn request that
- * hasn't started never does.
+ * hasn't started never does. The pairing code is kept in clientStorage.
  */
 
 import { test, describe } from 'node:test';
@@ -213,5 +213,21 @@ describe('plugin request queue', () => {
     p.post({ type: 'get-css', nodeId: 'A', requestId: 'px-1', timeoutMs: 60000 });
     await p.post({ type: 'get-slide-reference' });
     assert.ok(p.posted.some((m) => m.type === 'slide-reference'), 'answered while get-css hangs');
+  });
+});
+
+describe('plugin pairing storage', () => {
+  test('the stored code is sent to the UI at startup, and can be saved and cleared', async () => {
+    const p = loadPlugin({ storage: { 'monorail-pairing-code': '1111-2222-3333-4444' } });
+    await tick(10);
+    assert.equal(p.posted.find((m) => m.type === 'pairing-code').code, '1111-2222-3333-4444');
+    await p.post({ type: 'save-pairing', code: null });
+    assert.equal('monorail-pairing-code' in p.storage, false);
+  });
+
+  test('with nothing stored, the UI hears null', async () => {
+    const p = loadPlugin();
+    await tick(10);
+    assert.equal(p.posted.find((m) => m.type === 'pairing-code').code, null);
   });
 });

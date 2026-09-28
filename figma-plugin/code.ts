@@ -30,6 +30,13 @@ figma.ui.postMessage({
   pageName: figma.currentPage.name
 });
 
+// The pairing code the user pasted once (see ui.html): the proxy only sends
+// requests to a paired plugin, so no web page can pose as this one.
+const PAIRING_KEY = 'monorail-pairing-code';
+figma.clientStorage.getAsync(PAIRING_KEY)
+  .then((code) => figma.ui.postMessage({ type: 'pairing-code', code: typeof code === 'string' ? code : null }))
+  .catch(() => figma.ui.postMessage({ type: 'pairing-code', code: null }));
+
 // Forward selection changes to UI
 figma.on('selectionchange', () => {
   const sel = figma.currentPage.selection;
@@ -3105,7 +3112,7 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
 // document at once (2026-09-28). A request that runs past its time lets the
 // queue move on (a read after its timeout, a write only WRITE_HOLD_MS later,
 // as the proxy does), and a request withdrawn while it waited never starts.
-type PluginMessage = { type: string; ir?: string; patches?: PatchRequest; mode?: 'append' | 'replace'; startIndex?: number; requestId?: string; timeoutMs?: number };
+type PluginMessage = { type: string; ir?: string; patches?: PatchRequest; mode?: 'append' | 'replace'; startIndex?: number; requestId?: string; timeoutMs?: number; code?: string };
 let requestChain: Promise<void> = Promise.resolve();
 const withdrawn = new Set<string>();
 
@@ -3134,6 +3141,11 @@ figma.ui.onmessage = (msg: PluginMessage) => {
       withdrawn.add(msg.requestId);
     }
     return;
+  }
+  if (msg.type === 'save-pairing') {
+    const code = typeof msg.code === 'string' ? msg.code : null;
+    return (code ? figma.clientStorage.setAsync(PAIRING_KEY, code) : figma.clientStorage.deleteAsync(PAIRING_KEY))
+      .catch((e: unknown) => console.error('Could not save the pairing code:', e));
   }
   if (!PLUGIN_REPLY_FOR[msg.type]) return handleMessage(msg); // not a request (UI chores): run it now
   const run = requestChain.then(() => runQueued(msg));

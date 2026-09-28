@@ -17,7 +17,9 @@
  *
  * `echoRequestId: false` imitates a plugin build from before request ids, which
  * answers without them. `reconnect: true` imitates the auto-reconnecting UI.
- * `features` adds to the hello's feature list (e.g. 'cancel').
+ * `features` adds to the hello's feature list (e.g. 'cancel', 'pairing'), and
+ * `pairingCode` is sent in the hello the way a paired plugin does.
+ * `headers` are sent on the handshake (e.g. an Origin).
  *
  * Library:  import { startFakePlugin } from './fake-plugin.js'
  * CLI:      node test/fake-plugin.js [--port 9876] [--delay 500|never] [--legacy] [--reconnect]
@@ -84,11 +86,13 @@ export function startFakePlugin({
   respond = null,
   name = 'fake-plugin',
   features = [],
+  pairingCode = null,
+  headers = undefined,
   log = () => {},
 } = {}) {
   const requests = [];
   const replies = [];
-  /** Everything else the proxy sent: hello-ack, cancel. */
+  /** Everything else the proxy sent: hello-ack, pair-result, cancel. */
   const control = [];
   const timers = new Set();
   // How many requests the plugin is working on at once. The proxy should
@@ -105,18 +109,18 @@ export function startFakePlugin({
   }
 
   function connect() {
-    const sock = new WebSocket(`ws://localhost:${port}`);
+    const sock = new WebSocket(`ws://localhost:${port}`, headers ? { headers } : undefined);
     ws = sock;
     sock.on('open', () => {
       connections++;
-      sock.send(JSON.stringify({ type: 'hello', plugin: name, version: '0.0.0-fake', fileKey: null, fileName: 'Fake file', pageName: 'Page 1', features: [...(echoRequestId ? ['request-id'] : []), ...features] }));
+      sock.send(JSON.stringify({ type: 'hello', plugin: name, version: '0.0.0-fake', fileKey: null, fileName: 'Fake file', pageName: 'Page 1', features: [...(echoRequestId ? ['request-id'] : []), ...features], ...(pairingCode ? { pairingCode } : {}) }));
       log(`[${name}] connected (#${connections})`);
       resolveReady();
     });
     sock.on('message', (data) => {
       let msg;
       try { msg = JSON.parse(data.toString()); } catch { return; }
-      if (!RESPONSE_FOR[msg.type]) { control.push({ ...msg, receivedAt: Date.now() }); return; } // hello-ack, cancel
+      if (!RESPONSE_FOR[msg.type]) { control.push({ ...msg, receivedAt: Date.now() }); return; } // hello-ack, pair-result, cancel
       requests.push({ ...msg, receivedAt: Date.now() });
       log(`[${name}] ← ${msg.type} ${msg.nodeId ?? ''} ${msg.requestId ?? ''}`);
       const plan = respond ? respond(msg) : { delayMs: plannedDelay(msg, delayMs), payload: defaultPayload(msg) };
