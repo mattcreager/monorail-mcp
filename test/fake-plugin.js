@@ -17,6 +17,7 @@
  *
  * `echoRequestId: false` imitates a plugin build from before request ids, which
  * answers without them. `reconnect: true` imitates the auto-reconnecting UI.
+ * `features` adds to the hello's feature list (e.g. 'cancel').
  *
  * Library:  import { startFakePlugin } from './fake-plugin.js'
  * CLI:      node test/fake-plugin.js [--port 9876] [--delay 500|never] [--legacy] [--reconnect]
@@ -82,10 +83,13 @@ export function startFakePlugin({
   reconnectMs = 100,
   respond = null,
   name = 'fake-plugin',
+  features = [],
   log = () => {},
 } = {}) {
   const requests = [];
   const replies = [];
+  /** Everything else the proxy sent: hello-ack, cancel. */
+  const control = [];
   const timers = new Set();
   // How many requests the plugin is working on at once. The proxy should
   // never let this pass 1 for requests it answers.
@@ -105,14 +109,14 @@ export function startFakePlugin({
     ws = sock;
     sock.on('open', () => {
       connections++;
-      sock.send(JSON.stringify({ type: 'hello', plugin: name, version: '0.0.0-fake', fileKey: null, fileName: 'Fake file', pageName: 'Page 1', features: echoRequestId ? ['request-id'] : [] }));
+      sock.send(JSON.stringify({ type: 'hello', plugin: name, version: '0.0.0-fake', fileKey: null, fileName: 'Fake file', pageName: 'Page 1', features: [...(echoRequestId ? ['request-id'] : []), ...features] }));
       log(`[${name}] connected (#${connections})`);
       resolveReady();
     });
     sock.on('message', (data) => {
       let msg;
       try { msg = JSON.parse(data.toString()); } catch { return; }
-      if (!RESPONSE_FOR[msg.type]) return; // hello-ack, pong, etc.
+      if (!RESPONSE_FOR[msg.type]) { control.push({ ...msg, receivedAt: Date.now() }); return; } // hello-ack, cancel
       requests.push({ ...msg, receivedAt: Date.now() });
       log(`[${name}] ← ${msg.type} ${msg.nodeId ?? ''} ${msg.requestId ?? ''}`);
       const plan = respond ? respond(msg) : { delayMs: plannedDelay(msg, delayMs), payload: defaultPayload(msg) };
@@ -147,7 +151,9 @@ export function startFakePlugin({
   return {
     requests,
     replies,
+    control,
     stats,
+    send,
     get ready() { return ready; },
     get connected() { return !!ws && ws.readyState === WebSocket.OPEN; },
     get connections() { return connections; },

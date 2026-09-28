@@ -25,7 +25,6 @@ function mcpEnv(proxy, extra = {}) {
     MONORAIL_PROXY_LOG: path.join(REPO, 'tmp', 'test-proxy.log'),
     MONORAIL_RECONNECT_MIN_MS: '50',
     MONORAIL_RECONNECT_MAX_MS: '400',
-    MONORAIL_BUSY_RETRY_MS: '800',
     MONORAIL_PROXY_SPAWN: '0',
     ...extra,
   };
@@ -48,27 +47,49 @@ async function setup({ plugin: pluginOpts = {}, env = {}, proxyEnv } = {}) {
 
 const timed = async (fn) => { const t = Date.now(); const r = await fn(); return { ...r, ms: Date.now() - t }; };
 
-describe('busy', () => {
-  test('retries briefly, then fails with an explicit, retryable error naming the holder', async () => {
+describe('waiting for the plugin', () => {
+  test('waits its turn behind another session\'s request, then succeeds', async () => {
     const { mcp, upstream } = await setup();
-    const holder = await upstream('holder');
-    holder.send({ type: 'get-css', nodeId: 'hang', requestId: 'h1', timeoutMs: 20000, clientLabel: 'other-session pid 9' });
-    await sleep(50);
-    const r = await timed(() => mcp.call('monorail_css', { node_id: 'x' }));
-    assert.equal(r.isError, true);
-    assert.match(r.text, /the Figma plugin is busy: get-css from "other-session pid 9" has held it for \d+\.\ds/);
-    assert.match(r.text, /retryable/);
-    assert.ok(r.ms >= 800 && r.ms < 3000, `took ${r.ms}ms: the whole 800ms retry window, then an answer (was a silent 30s before)`);
-  });
-
-  test('waits out a short holder and then succeeds', async () => {
-    const { mcp, upstream } = await setup({ env: { MONORAIL_BUSY_RETRY_MS: '4000' } });
     const holder = await upstream('holder');
     holder.send({ type: 'get-css', nodeId: 'slow:600', requestId: 'h1', timeoutMs: 5000 });
     await sleep(50);
     const r = await mcp.call('monorail_css', { node_id: 'mine' });
     assert.equal(r.isError, false, r.text);
     assert.match(r.text, /CSS for "node mine"/);
+  });
+
+  test('behind a holder that never answers, it fails at its own deadline and names the holder', async () => {
+    const { mcp, upstream, plugin } = await setup();
+    const holder = await upstream('holder');
+    holder.send({ type: 'get-css', nodeId: 'hang', requestId: 'h1', timeoutMs: 20000, clientLabel: 'other-session pid 9' });
+    await waitUntil(() => plugin.requests.length === 1);
+    const r = await timed(() => mcp.call('monorail_css', { node_id: 'x', timeout_ms: 1500 }));
+    assert.equal(r.isError, true);
+    assert.match(r.text, /waited its whole 1\.5s in the queue and never reached the plugin \(held by get-css from "other-session pid 9"/);
+    assert.match(r.text, /Nothing was sent to Figma/);
+    assert.ok(r.ms >= 1400 && r.ms < 3500, `took ${r.ms}ms: its own 1.5s, then an answer`);
+    assert.equal(plugin.requests.length, 1, 'the call never reached the plugin');
+  });
+
+  test('against an older proxy that answers busy, it retries until its own deadline, then names the holder', async () => {
+    const wsPort = await freePort();
+    const proxyPort = await freePort();
+    const old = new WebSocketServer({ port: proxyPort });
+    later(() => new Promise((r) => { for (const c of old.clients) c.terminate(); old.close(r); }));
+    let busies = 0;
+    old.on('connection', (ws) => ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      if (m.type === 'register') ws.send(JSON.stringify({ type: 'registered', id: m.id, protocol: 2 }));
+      else if (m.requestId) { busies++; ws.send(JSON.stringify({ type: 'busy', requestId: m.requestId, retryAfterMs: 100, holder: { type: 'get-css', label: 'old-holder', ageMs: 5000, expiresInMs: 25000 } })); }
+    }));
+    const mcp = await startMcp({ env: mcpEnv({ wsPort, proxyPort }) });
+    later(() => mcp.close());
+    const r = await timed(() => mcp.call('monorail_css', { node_id: 'x', timeout_ms: 3000 }));
+    assert.equal(r.isError, true);
+    assert.match(r.text, /the Figma plugin is busy: get-css from "old-holder" has held it for 5\.0s/);
+    assert.match(r.text, /until this call's deadline/);
+    assert.ok(r.ms >= 1800 && r.ms < 4500, `took ${r.ms}ms`);
+    assert.ok(busies > 5, `retried ${busies}×`);
   });
 });
 
@@ -104,16 +125,18 @@ describe('timeouts', () => {
     await mcp.call('monorail_probe', { action: 'eval', code: 'return 1', node_id: 'b' });
     await mcp.call('monorail_css', { node_id: 'c', timeout_ms: 5000 });
     const [css, probe, cssCustom] = plugin.requests;
-    assert.equal(css.timeoutMs, 90000);
-    assert.equal(probe.timeoutMs, 120000);
-    assert.equal(cssCustom.timeoutMs, 5000);
+    // The plugin is told what is left of the deadline when the request reaches it.
+    const near = (v, want) => assert.ok(v <= want && v > want - 1000, `${v} ≈ ${want}`);
+    near(css.timeoutMs, 90000);
+    near(probe.timeoutMs, 120000);
+    near(cssCustom.timeoutMs, 5000);
     for (const r of plugin.requests) assert.match(r.clientLabel, /^mcp-test pid \d+$/);
   });
 });
 
 describe('request ids', () => {
   test('sibling calls in one server process each get their own reply', async () => {
-    const { mcp, plugin } = await setup({ plugin: { delayMs: 30 }, env: { MONORAIL_BUSY_RETRY_MS: '8000' } });
+    const { mcp, plugin } = await setup({ plugin: { delayMs: 30 } });
     const nodes = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6'];
     const results = await Promise.all(nodes.map((n) => mcp.call('monorail_css', { node_id: n })));
     results.forEach((r, i) => {
@@ -124,7 +147,7 @@ describe('request ids', () => {
   });
 
   test('a late reply to a timed-out call does not resolve the next call', async () => {
-    const { mcp } = await setup({ env: { MONORAIL_BUSY_RETRY_MS: '5000' } });
+    const { mcp } = await setup();
     const a = await mcp.call('monorail_css', { node_id: 'slow:1600', timeout_ms: 1000 });
     assert.match(a.text, /proxy TTL/);
     // The plugin answers a's request at 1.6s, while b's is in flight.
@@ -207,7 +230,7 @@ describe('monorail_status', () => {
     await sleep(100);
     const r = await mcp.call('monorail_status');
     assert.match(r.text, /^✓ Figma plugin connected \(via proxy\)/);
-    assert.match(r.text, /Proxy: ws:\/\/localhost:\d+ · pid \d+ · monorail-proxy 0\.2\.0 \(protocol 2\)/);
+    assert.match(r.text, /Proxy: ws:\/\/localhost:\d+ · pid \d+ · monorail-proxy 0\.3\.0 \(protocol 3\)/);
     assert.match(r.text, /This session: mcp-test pid \d+/);
     assert.match(r.text, /Plugin lock: apply-probe from "holder pid 9" for \d+\.\ds \(released within \d+\.\ds\)/);
   });
@@ -224,6 +247,19 @@ describe('monorail_status', () => {
     await mcp.call('monorail_css', { node_id: 'hang', timeout_ms: 1000 });
     const r = await mcp.call('monorail_status');
     assert.match(r.text, /Recent TTL expiries \(the plugin never answered\):\n\s+- get-css from "mcp-test pid \d+" after 1\.\ds/);
+  });
+
+  test('status shows the queue', async () => {
+    const { mcp, upstream, plugin, proxy } = await setup();
+    const holder = await upstream('holder');
+    holder.send({ type: 'get-css', nodeId: 'hang', requestId: 'h1', timeoutMs: 20000, clientLabel: 'holder pid 9' });
+    await waitUntil(() => plugin.requests.length === 1);
+    const waiter = await connectUpstream(proxy.proxyPort, { label: 'waiter', protocol: 3 });
+    later(() => waiter.close());
+    waiter.send({ type: 'get-css', nodeId: 'x', requestId: 'w1', timeoutMs: 20000, clientLabel: 'waiter pid 8' });
+    await waiter.waitFor((m) => m.type === 'queued');
+    const r = await mcp.call('monorail_status');
+    assert.match(r.text, /Queue: 1 waiting: get-css from "waiter pid 8" for \d+\.\ds/);
   });
 });
 
@@ -257,14 +293,13 @@ describe('monorail_probe truncation', () => {
 
 describe('monorail_push', () => {
   test('with autoApply it waits for the plugin, so a refused push is not reported as done', async () => {
-    const { mcp, upstream } = await setup();
+    let refuse = false;
+    const { mcp } = await setup({ plugin: { respond: (msg) => ({ delayMs: 0, payload: refuse ? { type: 'applied', success: false, error: 'font missing' } : undefined }) } });
     const ok = await mcp.call('monorail_push', { ir: JSON.stringify({ deck: { title: 't' }, slides: [] }) });
     assert.equal(ok.isError, false, ok.text);
-    const holder = await upstream('holder');
-    holder.send({ type: 'get-css', nodeId: 'hang', requestId: 'h1', timeoutMs: 20000 });
-    await sleep(50);
+    refuse = true;
     const refused = await mcp.call('monorail_push', { ir: JSON.stringify({ deck: { title: 't' }, slides: [] }) });
     assert.equal(refused.isError, true);
-    assert.match(refused.text, /busy/);
+    assert.match(refused.text, /font missing/);
   });
 });

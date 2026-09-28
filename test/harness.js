@@ -48,10 +48,26 @@ export async function waitUntil(pred, { timeoutMs = 5000, stepMs = 25, what = 'c
   }
 }
 
-/** Spawn a proxy on the given ports and wait until both are listening. */
+/**
+ * Spawn a proxy on the given ports and wait until both are listening. With no
+ * ports given it picks free ones, and picks again if another process takes
+ * one before the proxy binds it (a race between parallel test files).
+ */
 export async function startProxy({ wsPort, proxyPort, dist = DIST, env = {} } = {}) {
-  wsPort ??= await freePort();
-  proxyPort ??= await freePort();
+  const pick = wsPort === undefined && proxyPort === undefined;
+  for (let attempt = 0; ; attempt++) {
+    const ws = wsPort ?? await freePort();
+    let px = proxyPort ?? await freePort();
+    while (px === ws) px = await freePort();
+    try {
+      return await spawnProxy(ws, px, dist, env);
+    } catch (e) {
+      if (!pick || attempt >= 3 || !/is taken|cannot listen/.test(e.message)) throw e;
+    }
+  }
+}
+
+async function spawnProxy(wsPort, proxyPort, dist, env) {
   const logs = [];
   const child = spawn(process.execPath, [path.join(dist, 'src', 'proxy.js')], {
     env: { ...process.env, MONORAIL_WS_PORT: String(wsPort), MONORAIL_PROXY_PORT: String(proxyPort), ...env },
@@ -59,7 +75,16 @@ export async function startProxy({ wsPort, proxyPort, dist = DIST, env = {} } = 
   });
   child.stdout.on('data', (d) => logs.push(d.toString()));
   child.stderr.on('data', (d) => logs.push(d.toString()));
-  await waitUntil(async () => (await portOpen(proxyPort)) && (await portOpen(wsPort)), { what: 'proxy to listen' });
+  try {
+    await waitUntil(async () => {
+      if (child.exitCode !== null) throw new Error('the proxy exited');
+      return (await portOpen(proxyPort)) && (await portOpen(wsPort));
+    }, { what: 'proxy to listen' });
+  } catch (e) {
+    child.kill();
+    await new Promise((r) => setTimeout(r, 50)); // let its last log line arrive
+    throw new Error(`${e.message} (ports ${proxyPort}/${wsPort}, exit ${child.exitCode ?? child.signalCode}): ${logs.join('').slice(-800)}`);
+  }
   return {
     child, wsPort, proxyPort, logs,
     async stop(signal = 'SIGTERM') {
@@ -71,8 +96,11 @@ export async function startProxy({ wsPort, proxyPort, dist = DIST, env = {} } = 
   };
 }
 
-/** A raw upstream client, the way an MCP server or a script talks to the proxy. */
-export async function connectUpstream(port, { id, label = 'test', register = true } = {}) {
+/**
+ * A raw upstream client, the way an MCP server or a script talks to the proxy.
+ * `protocol: 3` makes it a sender that hears `queued`.
+ */
+export async function connectUpstream(port, { id, label = 'test', register = true, protocol } = {}) {
   const ws = new WebSocket(`ws://localhost:${port}`);
   const messages = [];
   const waiters = [];
@@ -102,7 +130,7 @@ export async function connectUpstream(port, { id, label = 'test', register = tru
     close() { ws.terminate(); },
   };
   if (register) {
-    client.send({ type: 'register', id: id ?? `${label}-${Math.random().toString(36).slice(2, 8)}`, label });
+    client.send({ type: 'register', id: id ?? `${label}-${Math.random().toString(36).slice(2, 8)}`, label, ...(protocol ? { protocol } : {}) });
     await client.waitFor((m) => m.type === 'registered');
   }
   return client;

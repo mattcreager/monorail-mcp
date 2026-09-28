@@ -603,7 +603,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_status",
         description:
-          "Check the connection to the Figma plugin. Reports whether a plugin is connected (and which build), the shared proxy this session goes through, who holds the plugin right now (request type, session, age) and recent requests the plugin never answered, plus the current selection.",
+          "Check the connection to the Figma plugin. Reports whether a plugin is connected (and which build), the shared proxy this session goes through, who holds the plugin right now (request type, session, age), what is queued behind it, and recent requests the plugin never answered, plus the current selection.",
         inputSchema: {
           type: "object" as const,
           properties: {},
@@ -747,7 +747,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             timeout_ms: {
               type: "number",
-              description: "How long to wait for the plugin, in ms (default 90000; 1000–600000). A big node can take longer. While a request runs, other sessions get told the plugin is busy, for up to this long if it never answers.",
+              description: "The most this call may take, in ms (default 90000; 1000–600000): waiting its turn behind other sessions' requests plus the plugin's own work. A big node can take longer. The call returns by about timeout_ms + 2s (+ up to 3s if the proxy link is reconnecting), with an error naming the limit that ran out. While it runs, other sessions' requests queue behind it.",
             },
           },
         },
@@ -1054,7 +1054,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             max_items: { type: "number", description: "Items kept per list in the result (default 50, up to 10000). Cut lists end with a \"[… N more items]\" marker and the reply carries a truncation report." },
             max_keys: { type: "number", description: "Keys kept per object (default 80, up to 10000). A cut object gets a \"…\" key." },
             max_depth: { type: "number", description: "Levels serialised (default 4 for eval, 2 per property for node; up to 12). Deeper values show as [array n] / [object T]." },
-            timeout_ms: { type: "number", description: "How long to wait for the plugin, in ms (default 120000; 1000–600000). Other sessions are told the plugin is busy while the probe runs." },
+            timeout_ms: { type: "number", description: "The most this call may take, in ms (default 120000; 1000–600000): waiting its turn behind other sessions' requests plus the probe itself. It returns by about timeout_ms + 2s (+ up to 3s if the proxy link is reconnecting). Other sessions' requests queue behind the probe while it runs; a synchronous eval can't be interrupted, so keep heavy walks bounded." },
           },
           required: ["action"],
         },
@@ -1083,7 +1083,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             timeout_ms: {
               type: "number",
-              description: "How long to wait for the plugin, in ms (default 90000; 1000–600000). A big node can take longer. While a request runs, other sessions get told the plugin is busy, for up to this long if it never answers.",
+              description: "The most this call may take, in ms (default 90000; 1000–600000): waiting its turn behind other sessions' requests plus the plugin's own work. A big node can take longer. The call returns by about timeout_ms + 2s (+ up to 3s if the proxy link is reconnecting), with an error naming the limit that ran out. While it runs, other sessions' requests queue behind it.",
             },
           },
         },
@@ -2955,11 +2955,12 @@ After pushing slides, use \`monorail_screenshot\` to see what was rendered:
 //   WS_PORT itself, and only this session can use the plugin.
 //
 // Every request goes through pluginRequest(). It carries a requestId, a
-// timeoutMs and a clientLabel (protocol 2, shared/protocol.ts), and its reply
-// is matched by id: a late reply can't resolve a different call, and sibling
-// sub-agents sharing this process don't block each other. A `busy` from the
-// proxy is retried for a few seconds, then reported with who holds the plugin.
-// See docs/proxy-wedge-2026-09.md.
+// timeoutMs and a clientLabel (shared/protocol.ts), and its reply is matched
+// by id: a late reply can't resolve a different call, and sibling sub-agents
+// sharing this process don't block each other. A protocol 3 proxy queues the
+// request until the plugin is free (`queued`), within its timeoutMs; an older
+// proxy answers `busy`, which is retried until that same deadline. See
+// docs/proxy-wedge-2026-09.md.
 
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -2967,8 +2968,8 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import {
-  PROTOCOL_VERSION, RESPONSE_FOR, RESPONSE_TYPES, DEFAULT_TIMEOUT_MS,
-  clampTimeout, type RequestErrorCode,
+  PROTOCOL_VERSION, RESPONSE_FOR, RESPONSE_TYPES, DEFAULT_TIMEOUT_MS, WRITE_REQUEST_TYPES,
+  MIN_TIMEOUT_MS, clampTimeout, type RequestErrorCode,
 } from "../shared/protocol.js";
 import { describeTruncation } from "../shared/probe.js";
 
@@ -2987,8 +2988,11 @@ const PROXY_PORT = envInt("MONORAIL_PROXY_PORT", 9877);
 const HOST_LABEL = process.env.MONORAIL_HOST_LABEL
   || `${path.basename(process.cwd())}@${process.env.TERM_PROGRAM || "claude"}`;
 const CLIENT_LABEL = `${HOST_LABEL} pid ${process.pid}`;
-/** How long to keep retrying while the plugin serves someone else's request. */
-const BUSY_RETRY_MS = envInt("MONORAIL_BUSY_RETRY_MS", 10_000);
+/**
+ * How long to keep retrying `busy` from a proxy older than protocol 3. By
+ * default the request's own timeout: its turn may come at any point before.
+ */
+const BUSY_RETRY_MS: number | null = process.env.MONORAIL_BUSY_RETRY_MS ? envInt("MONORAIL_BUSY_RETRY_MS", 10_000) : null;
 /** Overrides every per-type default timeout in DEFAULT_TIMEOUT_MS. */
 const TIMEOUT_OVERRIDE_MS = process.env.MONORAIL_TIMEOUT_MS ? envInt("MONORAIL_TIMEOUT_MS", 30_000) : null;
 /** Extra wait past the proxy's TTL, so the proxy's report (which names the cause) lands first. */
@@ -3060,7 +3064,10 @@ interface PendingRequest {
   timeoutMs: number;
   timer: ReturnType<typeof setTimeout>;
   settle: (o: Outcome) => void;
+  /** Set when a protocol 3 proxy said the request is waiting its turn. */
+  queued: { position: number; at: number; holder?: any } | null;
 }
+
 
 // Result types for each request (some imported from shared/types.ts)
 // These are local types not in shared:
@@ -3135,7 +3142,7 @@ function sendOnce(message: Record<string, unknown> & { type: string }, timeoutMs
     const id = `${process.pid}-${++requestSeq}`;
     const waitMs = timeoutMs + (linkMode === "proxy" ? SERVER_TIMEOUT_GRACE_MS : 0);
     const p: PendingRequest = {
-      id, type: message.type, responseType: RESPONSE_FOR[message.type], sentAt: Date.now(), timeoutMs,
+      id, type: message.type, responseType: RESPONSE_FOR[message.type], sentAt: Date.now(), timeoutMs, queued: null,
       timer: setTimeout(() => p.settle({ kind: "timeout", waitedMs: waitMs }), waitMs),
       settle: (o) => {
         if (pendingRequests.get(id) !== p) return;
@@ -3157,7 +3164,7 @@ function busyMessage(type: string, msg: any, tries: number, waitedMs: number): s
     ? `${h.type} from "${h.label}" has held it for ${secs(h.ageMs ?? 0)}` +
       (typeof h.expiresInMs === "number" ? ` (released within ${secs(h.expiresInMs)})` : "")
     : "another session holds it (this proxy build doesn't say who)";
-  return `${type}: the Figma plugin is busy: ${who}. Retried ${tries}× over ${secs(waitedMs)}; this is retryable, so try again shortly.`;
+  return `${type}: the Figma plugin is busy: ${who}. Retried ${tries}× over ${secs(waitedMs)}, until this call's deadline; this is retryable, so try again shortly, or pass a longer timeout_ms.`;
 }
 
 function errorFromProxy(type: string, msg: any): PluginRequestError {
@@ -3244,13 +3251,18 @@ async function pluginRequest<T = any>(message: Record<string, unknown> & { type:
   const type = message.type;
   const timeoutMs = timeoutFor(type, opts.timeoutMs);
   const started = Date.now();
-  const busyDeadline = started + Math.min(BUSY_RETRY_MS, timeoutMs);
+  // One deadline for the whole call: waiting for a busy plugin and the
+  // plugin's own work both come out of timeoutMs.
+  const deadline = started + timeoutMs;
+  const busyDeadline = started + Math.min(BUSY_RETRY_MS ?? timeoutMs, timeoutMs);
   let busyTries = 0;
+  let attempts = 0;
   for (;;) {
     if (!(await linkReady())) {
       throw new PluginRequestError(`${type}: ${notConnectedMessage().replace(/^Error: /, "")}`, "NOT_CONNECTED", true);
     }
-    const outcome = localHolder() ?? await sendOnce(message, timeoutMs);
+    const left = attempts++ === 0 ? timeoutMs : Math.max(MIN_TIMEOUT_MS, deadline - Date.now());
+    const outcome = localHolder() ?? await sendOnce(message, left);
     switch (outcome.kind) {
       case "reply":
         return mapReply(type, outcome.msg) as T;
@@ -3259,19 +3271,29 @@ async function pluginRequest<T = any>(message: Record<string, unknown> & { type:
         const hint = Number(outcome.msg?.retryAfterMs);
         const base = Number.isFinite(hint) ? Math.min(2000, Math.max(100, hint)) : 250;
         const wait = Math.round(base * (0.75 + Math.random() * 0.75));
-        const left = busyDeadline - Date.now();
-        if (left > 0) {
-          // The last try lands on the deadline, so the whole window is used.
-          await sleep(Math.min(wait, left));
+        // Leave the last try enough time to be served.
+        const room = Math.min(busyDeadline, deadline - MIN_TIMEOUT_MS) - Date.now();
+        if (room > 0) {
+          await sleep(Math.min(wait, room));
           continue;
         }
         throw new PluginRequestError(busyMessage(type, outcome.msg, busyTries, Date.now() - started), "BUSY", true);
       }
-      case "error":
+      case "error": {
+        // An older proxy says NO_PLUGIN at once, even while the plugin is
+        // reconnecting (about half a second): give it a moment. (A protocol 3
+        // proxy waits for the plugin itself.)
+        const code = outcome.msg?.code;
+        const retryableGap = code === "NO_PLUGIN" || (code === "PLUGIN_DISCONNECTED" && !WRITE_REQUEST_TYPES.has(type));
+        if (retryableGap && proxyProtocol < 3 && Date.now() - started < LINK_WAIT_MS && deadline - Date.now() > MIN_TIMEOUT_MS) {
+          await sleep(250);
+          continue;
+        }
         throw errorFromProxy(type, outcome.msg);
+      }
       case "timeout": {
         const why = linkMode !== "proxy" ? "server-side timeout"
-          : proxyProtocol >= 2 ? `server-side timeout; the proxy should have reported its own ${secs(timeoutMs)} TTL first, so it may be unresponsive`
+          : proxyProtocol >= 2 ? `server-side timeout; the proxy should have reported its own ${secs(outcome.waitedMs - SERVER_TIMEOUT_GRACE_MS)} TTL first, so it may be unresponsive`
           : "server-side timeout; this proxy build has no request TTL";
         throw new PluginRequestError(
           `${type}: no reply from the Figma plugin within ${secs(outcome.waitedMs)} (${why}). If that was an edit, check Figma before retrying.`,
@@ -3316,6 +3338,13 @@ function handlePluginMessage(data: string, sender: WebSocket) {
   }
   if (!parsed || typeof parsed.type !== "string") return;
 
+  // A protocol 3 proxy is holding the request until the plugin is free. Keep waiting.
+  if (parsed.type === "queued") {
+    const p = typeof parsed.requestId === "string" ? pendingRequests.get(parsed.requestId) : undefined;
+    if (p) p.queued = { position: Number(parsed.position) || 0, at: Date.now(), holder: parsed.holder };
+    return;
+  }
+
   if (parsed.type === "busy" || parsed.type === "error" || RESPONSE_TYPES.has(parsed.type)) {
     logIncoming(data);
     const p = findPending(parsed);
@@ -3341,7 +3370,7 @@ function handlePluginMessage(data: string, sender: WebSocket) {
         sender.send(JSON.stringify({
           type: "hello-ack",
           server: "monorail-mcp",
-          version: "0.2.0",
+          version: "0.3.0",
           protocol: PROTOCOL_VERSION,
           timestamp: new Date().toISOString(),
         }));
@@ -3412,19 +3441,19 @@ async function statusText(): Promise<string> {
 
   if (pluginCount > 0) {
     lines.push("✓ Figma plugin connected (via proxy)");
-    if (plugins.length > 0) {
-      for (const p of plugins) {
-        const feats = Array.isArray(p.features) && p.features.length ? ` · features: ${p.features.join(", ")}` : "";
-        lines.push(`  Plugin: ${p.plugin || "unknown"} ${p.version || ""}${p.fileName ? ` · file "${p.fileName}"` : ""}${p.pageName ? ` · page "${p.pageName}"` : ""} · connected ${p.connectedAt}${feats}`);
-      }
-      if (plugins.some((p) => !Array.isArray(p.features) || !p.features.includes("auto-reconnect"))) {
-        lines.push("  Note: this plugin build predates auto-reconnect and request ids. Re-run the plugin in Figma once to load them.");
-      }
-    } else {
-      lines.push(`  Plugin: ${pluginInfo.name || "unknown"} ${pluginInfo.version || ""}`);
-    }
   } else {
     lines.push("✗ No Figma plugin connected to the proxy");
+  }
+  if (plugins.length > 0) {
+    for (const p of plugins) {
+      const feats = Array.isArray(p.features) && p.features.length ? ` · features: ${p.features.join(", ")}` : "";
+      lines.push(`  Plugin: ${p.plugin || "unknown"} ${p.version || ""}${p.fileName ? ` · file "${p.fileName}"` : ""}${p.pageName ? ` · page "${p.pageName}"` : ""} · connected ${p.connectedAt}${feats}`);
+    }
+    if (plugins.some((p) => !Array.isArray(p.features) || !p.features.includes("serial"))) {
+      lines.push("  Note: this plugin build predates its request queue (2026-09-28). Re-run the plugin in Figma once to load it.");
+    }
+  } else if (pluginCount > 0) {
+    lines.push(`  Plugin: ${pluginInfo.name || "unknown"} ${pluginInfo.version || ""}`);
   }
 
   if (st && typeof st.protocol === "number") {
@@ -3440,7 +3469,13 @@ async function statusText(): Promise<string> {
   if (st && Array.isArray(st.inflight)) {
     lines.push(held.length === 0
       ? "  Plugin lock: free"
-      : held.map((h) => `  Plugin lock: ${h.type} from "${h.label}" for ${secs(h.ageMs)} (released within ${secs(h.expiresInMs)})`).join("\n"));
+      : held.map((h) => h.state === "overdue"
+          ? `  Plugin lock: ${h.type} from "${h.label}" for ${secs(h.ageMs)}, past its ${secs(h.ttlMs)} TTL (a write: held until it answers, at most ${secs(h.expiresInMs)} more)`
+          : `  Plugin lock: ${h.type} from "${h.label}" for ${secs(h.ageMs)} (released within ${secs(h.expiresInMs)})`).join("\n"));
+  }
+  const queued: any[] = Array.isArray(st?.queue) ? st.queue : [];
+  if (queued.length > 0) {
+    lines.push(`  Queue: ${queued.length} waiting: ` + queued.slice(0, 5).map((q) => `${q.type} from "${q.label}" for ${secs(q.waitedMs)}`).join(", ") + (queued.length > 5 ? ", …" : ""));
   }
   const expired: any[] = Array.isArray(st?.recentExpired) ? st.recentExpired.slice(0, 3) : [];
   if (expired.length > 0) {

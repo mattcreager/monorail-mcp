@@ -12,11 +12,18 @@
  *   timeoutMs    how long the sender will wait; the proxy uses it as the
  *                request's TTL, so a lost reply can't hold the plugin forever
  *   clientLabel  who is asking; shown to anyone the request makes wait
- * Senders that omit them (protocol 1 servers, scripts) still work. See
+ * Senders that omit them (protocol 1 servers, scripts) still work.
+ *
+ * Protocol 3 (2026-09-28):
+ *   register     carries `protocol`
+ *   queued       a request waits its turn in the proxy's queue instead of
+ *                being answered `busy`; `queued` tells a protocol 3 sender
+ *                where it stands
+ * Older senders wait in the same queue without being told. See
  * docs/proxy-wedge-2026-09.md.
  */
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Wire request type (server → proxy → plugin UI) → the reply type the plugin sends. */
 export const RESPONSE_FOR: Readonly<Record<string, string>> = {
@@ -132,4 +139,6 @@ export type RequestErrorCode =
   | 'NO_PLUGIN'            // no Figma plugin is connected
   | 'NOT_CONNECTED'        // the server has no link to a proxy or plugin right now
   | 'NOT_REGISTERED'
+  | 'QUEUE_TIMEOUT'        // waited in the proxy's queue until its deadline; nothing reached Figma
+  | 'QUEUE_FULL'
   | 'PLUGIN_ERROR';        // the plugin answered with an error
