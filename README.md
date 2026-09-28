@@ -255,12 +255,22 @@ replays the 2026-09-27 proxy wedge against any build
 Every MCP server connects to a shared proxy (`src/proxy.ts`, ws://localhost:9877;
 the plugin connects to it on 9876). The first server that finds none starts it,
 logging to `~/Library/Logs/monorail-proxy.log`. The plugin serves one request at
-a time: a request that arrives while it's busy fails fast with who holds it, and
-the server retries for up to 10s. A request the plugin never answers is released
-after its timeout. If the proxy restarts, servers and the plugin reconnect by
-themselves. `monorail_status` shows the proxy, who holds the plugin and for how
-long. Knobs: `MONORAIL_HOST_LABEL`, `MONORAIL_TIMEOUT_MS`, `MONORAIL_BUSY_RETRY_MS`,
-`MONORAIL_PROXY_SPAWN=0`, `MONORAIL_PROXY_LOG`.
+a time: the others wait in the proxy's queue, oldest first, each for at most its
+own timeout, and fail with who held the plugin if their turn never comes. A read
+the plugin never answers is released at its timeout; an edit keeps the plugin
+until it answers (up to 2 minutes more), so two edits never interleave. A
+cancelled tool call withdraws its request. If the proxy restarts, servers and
+the plugin reconnect by themselves. `monorail_status` shows the proxy, who holds
+the plugin, the queue, and whether the plugin is paired. Knobs:
+`MONORAIL_HOST_LABEL`, `MONORAIL_TIMEOUT_MS`, `MONORAIL_PROXY_SPAWN=0`,
+`MONORAIL_PROXY_LOG`, `MONORAIL_DIRECT=1`.
+
+Both ports listen on this machine only. The proxy refuses browser handshakes on
+9877, and an MCP server (or script) must send the token in `~/.monorail/token`
+when it registers. The plugin pairs once: `monorail_status` prints a pairing
+code; paste it into the plugin window. From then on only paired plugins get
+requests, so no web page can pose as the plugin. See
+`docs/proxy-wedge-2026-09.md` §8.
 
 For anything that needs the canvas, use `examples/primitives-smoke.json` — 13
 labelled visual checks, one per behaviour, each stating what PASS looks like.
@@ -318,14 +328,28 @@ monorail-mcp/
 
 ### "No plugin connected" but plugin shows green
 
-Multiple MCP processes may be running — only one can bind port 9876.
+Something other than the proxy may hold port 9876 (an old direct-mode MCP
+server, or a proxy from before 2026-09-28).
 
 ```bash
-ps aux | grep monorail    # Find rogue processes
-kill <PID>                # Kill the extra one
+lsof -nP -iTCP:9876 -sTCP:LISTEN   # Who holds the plugin port
 ```
 
-Your MCP client will restart its process automatically.
+If it isn't `dist/src/proxy.js`, stop it; a running MCP server starts a new
+proxy within a few seconds.
+
+### "isn't paired" or "refused this session"
+
+- **"A Figma plugin is connected but isn't paired"**: run `monorail_status`,
+  copy the pairing code it prints, and paste it into the Pair field in the
+  Monorail plugin window. The plugin remembers it.
+- **"The monorail proxy refused this session"**: that MCP server started
+  before the token existed (2026-09-28). Restart the Claude session, or run
+  `/mcp` and reconnect monorail. A script talking to 9877 directly must send
+  `token` (the contents of `~/.monorail/token`) in its `register` message.
+- Deleting `~/.monorail/token` rotates the token and the pairing code: restart
+  the sessions and pair the plugin again. Deleting
+  `~/.monorail/pairing-enforced` lets unpaired plugins back in.
 
 ### Plugin won't connect
 

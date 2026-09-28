@@ -4,8 +4,9 @@ MCP server for real-time design collaboration in Figma. 15 tools across 5 catego
 
 ## Architecture
 
-- MCP server: `src/index.ts` (one per Claude session; connects to the proxy on 9877, reconnecting if it goes away)
-- Proxy: `src/proxy.ts` (shared by all sessions; plugin on 9876, servers on 9877; one request in flight per plugin, with a TTL)
+- MCP server: `src/index.ts` (one per Claude session; connects to the proxy on 9877 with the token in ~/.monorail/token, reconnecting if it goes away)
+- Proxy: `src/proxy.ts` (shared by all sessions; plugin on 9876, servers on 9877, loopback only; one request in flight per plugin with a TTL, the rest queued; writes hold the plugin until they answer)
+- Who may connect: `src/auth.ts` (token, plugin pairing, handshake checks)
 - Wire protocol: `shared/protocol.ts` (request → reply types, per-type timeouts). A new request type goes there, nowhere else.
 - Figma plugin: `figma-plugin/` (WebSocket client)
 - Shared types: `shared/types.ts`

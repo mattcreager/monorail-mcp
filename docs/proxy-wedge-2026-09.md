@@ -15,6 +15,14 @@ monorail proxy. Two things went wrong:
 This note gives the causes (file:line at `4f70a20`, the code before the fix),
 how they were reproduced, what changed, and what still needs a person.
 
+The first round of fixes (§3) was reviewed and stress-tested the same night.
+The review found that the proxy was open to any web page and the local
+network, that the fix traded wedges for interleaved edits and for callers
+failing instead of waiting, and that a cancelled call still held the plugin.
+A second round on 2026-09-28 closed those findings (§8). Where §3 and §8
+differ (`busy`, what a sender's disconnect does, direct mode), §8 is current.
+§4 to §7 describe the state after both rounds.
+
 Earlier diagnoses: `www-redesign/eval-2026-09-27/design-how.md` §7,
 `design-integrate.md` §5.2 and `tooling.md` §1.1. They were right about the
 proxy lock and the ignored `busy`. What they missed is the plugin paths that
@@ -186,9 +194,10 @@ and were read as complete.
 - **The proxy logs went nowhere.** A spawned proxy ran with
   `stdio: "ignore"` (`index.ts:3415`).
 
-## 3. What changed
+## 3. What changed (first round)
 
-The same repro on the current build (condensed):
+The same repro on the first-round build (condensed; the second round answers
+agent-2 with `queued` instead of `busy`, see §8):
 
 ```
 A  agent-2 got busy in 1ms: {"type":"busy","retryable":true,"retryAfterMs":250,
@@ -212,6 +221,8 @@ E  5s after proxy restart: pluginCount=1
 | `feat: plugin UI reconnects to the proxy with backoff` | `figma-plugin/ui.html` |
 | `fix: monorail_probe marks every cut instead of stopping at 50 silently` | `shared/probe.ts`, plugin and server |
 | `test: fake-plugin harness, bridge tests and the proxy wedge write-up` | this note, the fake plugin, the repro, and the tests |
+
+The second round's commits are listed in §8.
 
 ### Protocol 2
 
@@ -325,58 +336,180 @@ The proxy's replies to a sender:
 
 | Sender ↔ receiver | Works? | Notes |
 |---|---|---|
-| new server ↔ new proxy ↔ new plugin | yes | ids end to end |
-| new server ↔ new proxy ↔ **old plugin** (no ids) | yes | the proxy matches by reply type, one request at a time. A reply that arrives after its TTL, while a request of the *same* type is in flight, can still be misattributed. Re-running the plugin closes that gap. |
-| **old server** ↔ new proxy | yes | legacy requests get a 30s TTL (the old server's own timeout). Its `busy` handling is still the old one (a 30-second wait), and it ignores the new `error` replies. |
-| script (`lib/monorail.mjs` style) ↔ new proxy | yes | no id is needed. `busy` still has `type: "busy"`, and a TTL expiry arrives as `type: "error"`, which such scripts already treat as failure. |
-| new server ↔ **old proxy** (protocol 1) | yes | the server sends one request at a time and matches by type. |
+| new server ↔ new proxy ↔ new plugin | yes | ids end to end, the queue, cancel, writes held past their TTL, the plugin's own queue |
+| new server ↔ new proxy ↔ **plugin 0.2.0** (ids, no queue) | yes | the proxy still holds writes past their TTL, so edits don't interleave. A read released at its TTL can run alongside the next request in that build. |
+| new server ↔ new proxy ↔ **plugin 0.1.x** (no ids) | yes | matched by reply type, one request at a time; a sender's cancel or disconnect doesn't release the plugin early. A reply after its TTL, while a request of the same type is in flight, can still be misattributed. |
+| **server from before 2026-09-28** ↔ new proxy | **no** | it sends no token: every call fails with `UNAUTHORIZED` and says to restart the session or `/mcp` reconnect |
+| script ↔ new proxy | with a token | it must send `token` (the contents of `~/.monorail/token`) in `register`. Without `protocol: 3` it waits in the queue silently and gets its reply without a requestId, as before; it never sees `busy`. |
+| new server ↔ **older proxy** (protocol 1-2) | yes | the server retries `busy` until its own deadline and `NO_PLUGIN` for 3s. An older proxy has none of the checks in §8. |
 
 ## 5. What happens to the servers that are already running
 
-The eleven MCP server processes alive on 2026-09-27 (some from 2026-09-23)
-loaded the old `dist/` into memory. Rebuilding doesn't change them. Their
-sockets closed when the proxy was restarted, and old code never reconnects,
-so **they stay without a plugin until their session restarts.** Restarting
-the Claude session, or reconnecting the server with `/mcp` in Claude Code,
-starts a new process on the new code. Nothing on the proxy side can reach
-them, because they no longer hold a socket to it.
+An MCP server loads `dist/` into memory when its session starts. Rebuilding
+doesn't change it, and nothing on the proxy side can upgrade it: **every
+session started before the second round needs a restart, or `/mcp` and
+reconnect monorail, to use the plugin.**
 
-Restarting the proxy again can't hurt them further. It only strands old-code
-servers that happen to be connected at that moment.
+At the second-round restart (2026-09-28 04:56 UTC) twelve MCP server
+processes were alive:
+
+- Ten started on 2026-09-23 to 09-27 (nine tōryō sessions in `~/Code/www`,
+  one shisho session in `~/Code/bigboss`). They run code from before the
+  first round, lost their socket at the first restart on 09-27, and never
+  reconnect.
+- Two banto sessions in `~/Code/bigboss` (server pids 4929 and 7300, started
+  09-28 00:21 local) run the first-round build. They reconnected to the new
+  proxy at once and were refused: they send no token. Their calls fail with
+  `UNAUTHORIZED` and an explanation until those sessions restart.
+
+A new session, or `/mcp` reconnect, starts the current build, which
+registers with the token.
 
 ## 6. Operating it
 
-- **Restart the proxy:** `pkill -f 'monorail-mcp/dist/src/proxy.js'`, or
-  kill the pid that `monorail_status` shows. New-code servers bring it back
-  by themselves within about 15 seconds, or start it by hand with
-  `nohup node dist/src/proxy.js >> ~/Library/Logs/monorail-proxy.log 2>&1 &`.
-- **Plugin:** re-run it in Figma once to load this build. After that, proxy
-  restarts need no manual step. `monorail_status` says "this plugin build
-  predates auto-reconnect" until you do.
-- **Who holds the plugin:** run `monorail_status`, or send
-  `{"type":"status-query"}` to :9877.
-- **Logs:** `~/Library/Logs/monorail-proxy.log` has timestamps, TTL expiries,
-  late and orphan replies, and dropped sockets.
+- **Restart the proxy:** `kill` the pid that `lsof -nP -iTCP:9877 -sTCP:LISTEN`
+  (or `monorail_status`) shows. A running server brings one back within
+  about a second, or start it by hand:
+  `cd ~/Code/monorail-mcp && nohup node dist/src/proxy.js >> ~/Library/Logs/monorail-proxy.log 2>&1 &`.
+  Sessions and the plugin reconnect by themselves.
+- **Pair the plugin (once):** run `monorail_status` in any current session.
+  It prints a pairing code; paste it into the Pair field in the Monorail
+  plugin window. From then on only paired plugins get requests
+  (`~/.monorail/pairing-enforced` records that). Without a session at hand:
+  `node -e "import('$HOME/Code/monorail-mcp/dist/src/auth.js').then(a=>console.log(a.pairingCodeFor(a.readOrCreateToken())))"`.
+- **The token:** `~/.monorail/token` (mode 0600), created on first use.
+  Deleting it rotates the token and the pairing code: restart the sessions
+  and pair again.
+- **Plugin build:** re-run the plugin in Figma after `code.ts` or `ui.html`
+  changes. `monorail_status` flags a build without the request queue.
+- **Who holds the plugin, and who waits:** `monorail_status`, or send
+  `{"type":"status-query","token":"…"}` to :9877.
+- **Logs:** `~/Library/Logs/monorail-proxy.log` has timestamps, refused
+  handshakes and registrations (with their Origin), pairing, queue
+  timeouts, TTL expiries, writes held past their TTL, cancels, and late or
+  orphan replies.
+- **Knobs:** `MONORAIL_TIMEOUT_MS`, `MONORAIL_WRITE_HOLD_MS` (120000),
+  `MONORAIL_NO_PLUGIN_WAIT_MS` (3000), `MONORAIL_QUEUE_LIMIT` (64),
+  `MONORAIL_HEARTBEAT_MS`, `MONORAIL_SPAWN_COOLDOWN_MS` (1000, doubling),
+  `MONORAIL_PROXY_SPAWN=0`, `MONORAIL_DIRECT=1`, `MONORAIL_HOME`.
 
 ## 7. Not fixed here
 
 - **An eval that blocks the plugin's thread.** A synchronous `findAll` on a
-  huge page blocks the plugin itself. The TTL frees the *lock*, but the
-  plugin can't answer anyone until the work finishes. A time budget inside
-  the probe can't interrupt synchronous code.
-- **Plugin builds without ids and late replies of the same type:** see the
-  compatibility table. Re-running the plugin fixes it.
-- **The proxy listens on all interfaces** (`WebSocketServer({ port })`
-  binds `::`). Anyone on the local network can connect to :9877 and drive the
-  plugin, including `monorail_probe` eval. Binding to loopback needs care:
-  `localhost` resolves to `::1` first on recent Node, and the server treats
-  a refused connect as "no proxy" and spawns one. That makes it a separate
-  change.
+  huge page blocks the plugin itself. A read's TTL frees the queue, but the
+  plugin can't answer anyone until the work finishes, and a time budget
+  inside the probe can't interrupt synchronous code.
+- **Pairing isn't enforced until someone pairs.** Until the code is pasted
+  once, a page that opens a sandboxed iframe (Origin `null`) can still
+  connect to :9876 as the plugin and receive requests. Pairing closes that;
+  it was left opt-in so that the upgrade didn't cut off the plugin that was
+  running.
+- **Local processes of the same user** can read the token and drive the
+  plugin. The token keeps out browsers, other users and sandboxed apps, not
+  code already running as you.
+- **Scripts that talk to :9877 directly** must now send the token.
+  `www-redesign/eval-2026-09-27/harness/lib/monorail.mjs` doesn't (it's in
+  another repo, so it wasn't changed here): it fails with the proxy's
+  `UNAUTHORIZED` message until its `register` carries
+  `token: fs.readFileSync(os.homedir() + '/.monorail/token', 'utf8').trim()`.
+- **Plugin 0.1.x builds and late replies of the same type:** see §4.
 - **`ui.html` drops `stepSeconds`, `buildMode` and `transition`** on its
   `apply-primitives` relay (`ui.html:646` at `4f70a20`), although `code.ts`
   reads them. `monorail_primitives`' `step_seconds`, `build_mode` and
-  `transition` never reach the plugin. That is unrelated to the wedge, and
-  it's a Figma write path, so it's left for its own change.
+  `transition` never reach the plugin. It's unrelated to the wedge and it's a
+  Figma write path, so it's left for its own change.
 - **`fileKey` is always null** without `enablePrivatePluginApi`
   (`tooling.md` §1.1), so routing by file can't work. With two files open,
-  requests go to the plugin that connected last.
+  requests go to the (paired) plugin that connected last.
+
+## 8. The second round (2026-09-28)
+
+An independent review of the first round (verdict: ship with fixes) reran the
+fixer's claims and stress-tested the build: 8 real MCP servers, raw
+protocol 1 clients, rude clients that disconnect mid-request, a fake plugin
+that is fast, slow, silent or late, and four faults (proxy SIGTERM, SIGSTOP
+for 20s, SIGKILL, plugin socket dropped). Nothing hung and nothing was
+misrouted, but it found the problems below. Each fix is its own commit.
+
+| Severity | Finding | Fix | Commit |
+|---|---|---|---|
+| high | Both ports listened on every interface and took any handshake. A web page could register on :9877 and run `apply-probe` eval in the plugin, or connect to :9876 as a fake plugin and receive every session's requests (browsers don't apply CORS to WebSockets). | Loopback only (127.0.0.1 and ::1). :9877 refuses any Origin; both refuse a non-loopback Host. `register` needs the token in `~/.monorail/token`. :9876 accepts Origin `null` or figma.com, and once a plugin has paired, only paired plugins get requests. Direct mode is opt-in. | `e0798e7` |
+| medium | When a TTL expired the proxy sent the next request while the plugin was still working, and the async handlers interleaved at every await: two writes could land on one document at once. | The plugin runs one request at a time (`3562467`). The proxy holds the plugin for a write past its TTL until it answers, up to `WRITE_HOLD_MS` (`bb8112c`). | `3562467`, `bb8112c` |
+| medium | Cancelling a tool call didn't release the plugin: an aborted 30s probe still held it, and other sessions failed BUSY. | Each call's abort signal withdraws its request: dropped from the queue, released at once if it's a read in flight, kept until it answers if it's a write. A sender's disconnect is handled the same way. | `0753f0f` |
+| medium | No queue, only polling: a busy caller retried for 10s and failed even with a 120s timeout, so 117 of 338 calls failed BUSY, and protocol 1 clients got 7 answers from 408 sends. | One FIFO queue; each request keeps its own deadline (its timeoutMs from arrival) and hears `queued`. The worst-case wait is stated in the `timeout_ms` descriptions. | `bb8112c` |
+| low | NO_PLUGIN failed at once, so every call failed during a 0.5s plugin reconnect. | A request waits up to 3s for a plugin; a read in flight when the plugin drops is re-queued. | `bb8112c` |
+| low | One server in direct mode trapped every other server in an endless respawn loop. | No automatic direct mode. Spawning backs off (1s doubling to 60s) and resets on connect. | `e0798e7`, `80b31be` |
+| low | The watchdog used the server's own heartbeat setting, not the proxy's. | The proxy says `heartbeatMs` in `registered`. | `80b31be` |
+| low | After two proxy deaths within 15s, nobody restarted the proxy until the 15s cooldown ended. | The cooldown starts at 1s. | `80b31be` |
+
+The stress run also showed that queueing protocol 3 senders while answering
+older ones `busy` starved the older ones completely (0 answers from 386
+sends). They now wait in the same queue, silently. That is part of `bb8112c`.
+
+### Protocol 3
+
+- `register` carries `token` and `protocol: 3`, and `registered` returns `heartbeatMs`.
+- A request waits in the queue. A protocol 3 sender hears
+  `{ type: "queued", requestId, position, holder, deadlineInMs, message }`.
+  Its reply, or an error, arrives within its `timeoutMs`.
+- `{ type: "cancel", requestId }` withdraws a request.
+- New error codes: `QUEUE_TIMEOUT` (nothing was sent to Figma), `QUEUE_FULL`,
+  `UNAUTHORIZED`, `CANCELLED`.
+- For a write, `PROXY_TTL_EXPIRED` now says that the plugin may still be
+  applying it and that other requests wait until it answers.
+- The plugin's hello carries `pairingCode` and the features `serial`,
+  `cancel` and `pairing`. `{ type: "pair", code }` pairs a connected plugin.
+  `hello-ack` and `pair-result` say `paired`, `pairingEnforced` and
+  `pairingRequired`.
+- `status-response` adds `queue`, `inflight[].state` (`inflight` or
+  `overdue`), `plugins[].paired`, `routable` and `origin`, and
+  `pairingEnforced`. Without the token it holds only the version and counts.
+
+### Tests and the stress rerun
+
+`npm test` passes 156 of 156, including 48 new tests. They cover the queue,
+deadlines, write holds, cancel, handshake checks, the token, pairing (proxy,
+plugin UI and clientStorage), and the plugin's request queue. Each of the
+five commits builds and passes the suite on its own. The plugin typecheck is
+clean, and `check:bundle` matches.
+
+The reviewer's scenario was rerun against the final build with production
+defaults, except a 5s heartbeat, an 8s timeout for tools without
+`timeout_ms`, and a 4s write hold so that silent writes release within the
+run. It added writes (12% of calls, some slow, late or silent), callers that
+cancel after 0.1 to 3s (16%), a browser-Origin client and a tokenless client
+every 5s, and an impostor plugin (Origin `null`, not paired) next to the
+paired one. Two minutes, the same four faults:
+
+| | reviewer's run (first round) | this run |
+|---|---|---|
+| calls | 338 | 371 |
+| unfinished, misrouted, unrecognised errors | 0, 0, 0 | 0, 0, 0 |
+| BUSY | 117 | 0 |
+| NO_PLUGIN | 64 (34 in a 0.5s plugin reconnect) | 0 |
+| failed at their own deadline in the queue (QUEUE_TIMEOUT) | — | 121 |
+| cancelled by the caller | — | 64 |
+| protocol 1 client answers | 7 of 408 sends | 20 of 24 sends (the rest lost to the two proxy kills) |
+| a request reaching the plugin while a write was still running | not measured | 0 |
+| attacker or impostor requests that reached the plugin | not measured | 0 (36 refused) |
+| recovery after SIGTERM / SIGCONT / SIGKILL | 205ms / 525ms / 307ms | 207ms / 725ms / 309ms |
+
+The fake plugin answers one request in ten after 1.5 to 4s, and one in eight
+never or after its TTL. Under that load there is more demand than the plugin
+can serve, so queue timeouts replace the busy failures. Each one comes at the
+call's own deadline and says who held the plugin. The slowest call finished
+2.7s past its timeout, during the SIGSTOP, inside the stated
+timeout + 2s grace + 3s link wait.
+
+### The live restart
+
+At 04:56:32 UTC the first-round proxy (pid 20114) was stopped with nothing
+in flight, and the current build was started by hand (pid 30429, 0.3.0,
+protocol 3). It listens on 127.0.0.1 and ::1 for both ports, and created
+`~/.monorail/token` (0600). Within 60ms the two banto sessions reconnected and
+were refused, since they send no token. The Figma plugin reconnected by
+itself 0.9s later. It was already the current build (0.3.0: `serial`,
+`cancel`, `pairing`, re-run in Figma at 04:54), with Origin `null`, unpaired.
+A new-build server registered, `monorail_status` reported the plugin, and a
+`find-nodes` read returned in 183ms. A connection to the LAN address was
+refused, and browser-Origin handshakes on both ports got 401.
