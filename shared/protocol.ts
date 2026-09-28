@@ -91,6 +91,26 @@ export const DEFAULT_TIMEOUT_MS: Readonly<Record<string, number>> = {
   'apply-probe': 120_000,
 };
 
+/**
+ * Requests that change the document. The proxy never lets another request
+ * reach the plugin while one of these is running, even past its TTL (up to
+ * WRITE_HOLD_MS more): two edits interleaving at every await in the plugin
+ * could corrupt a document. Reads are released at their TTL.
+ */
+export const WRITE_REQUEST_TYPES: ReadonlySet<string> = new Set([
+  'push-ir', 'patch-elements', 'instantiate-template', 'create-styled-slide',
+  'delete-slides', 'reorder-slides', 'apply-primitives', 'apply-motion',
+]);
+
+/** The same set under the names code.ts sees (the UI renames push-ir to apply-ir). */
+export const PLUGIN_WRITE_TYPES: ReadonlySet<string> = new Set([
+  'apply-ir', 'patch-elements', 'instantiate-template', 'create-styled-slide',
+  'delete-slides', 'reorder-slides', 'apply-primitives', 'apply-motion',
+]);
+
+/** How long past its TTL a write may keep the plugin before everyone else is let back in. */
+export const WRITE_HOLD_MS = 120_000;
+
 /** TTL for a request that carries no timeoutMs: protocol 1 servers gave up after 30s. */
 export const LEGACY_TTL_MS = 30_000;
 export const MIN_TIMEOUT_MS = 1_000;

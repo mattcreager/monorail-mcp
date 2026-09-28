@@ -6,7 +6,7 @@ import type { SlideContent, Slide, DeckIR, ElementInfo, AddableContainer } from 
 import { normaliseReveal, pickAnimationStyle, revealEndsAt, stepFromReveal, normaliseTransition } from '../shared/motion';
 import type { NormalisedReveal, RevealSpec } from '../shared/motion';
 import { normaliseWeight, styleCandidates, resolveLineHeight, resolveLetterSpacing } from '../shared/typography';
-import { PLUGIN_REPLY_FOR } from '../shared/protocol';
+import { PLUGIN_REPLY_FOR, PLUGIN_WRITE_TYPES, WRITE_HOLD_MS } from '../shared/protocol';
 import { createSafeJson, clampDepth } from '../shared/probe';
 // Pure geometry, factored out so test/geometry.test.js can pin it without Figma.
 // esbuild bundles this in; keep it free of Figma API calls.
@@ -3097,8 +3097,52 @@ async function applyPatches(patches: PatchRequest): Promise<PatchResult> {
   return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
 }
 
-// Main message handler
-figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchRequest; mode?: 'append' | 'replace'; startIndex?: number }) => {
+// ── Request queue ──
+// Requests run one at a time, in the order they arrive. The handlers await
+// all the time (fonts, getNodeByIdAsync, exportAsync), so without this two of
+// them would interleave at every await: after the proxy gave up on a slow
+// request and sent the next one, two edits could be half-applied to one
+// document at once (2026-09-28). A request that runs past its time lets the
+// queue move on (a read after its timeout, a write only WRITE_HOLD_MS later,
+// as the proxy does), and a request withdrawn while it waited never starts.
+type PluginMessage = { type: string; ir?: string; patches?: PatchRequest; mode?: 'append' | 'replace'; startIndex?: number; requestId?: string; timeoutMs?: number };
+let requestChain: Promise<void> = Promise.resolve();
+const withdrawn = new Set<string>();
+
+async function runQueued(msg: PluginMessage): Promise<void> {
+  if (msg.requestId && withdrawn.delete(msg.requestId)) {
+    figma.ui.postMessage({ type: PLUGIN_REPLY_FOR[msg.type], success: false, error: `${msg.type} was cancelled before it started`, requestId: msg.requestId });
+    return;
+  }
+  const write = PLUGIN_WRITE_TYPES.has(msg.type);
+  const ttl = typeof msg.timeoutMs === 'number' && msg.timeoutMs > 0 ? msg.timeoutMs : (write ? 60000 : 90000);
+  const cap = ttl + (write ? WRITE_HOLD_MS : 1000);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const overran = new Promise<'overran'>((resolve) => { timer = setTimeout(() => resolve('overran'), cap); });
+  const outcome = await Promise.race([handleMessage(msg).then(() => 'done' as const), overran]);
+  if (timer !== undefined) clearTimeout(timer);
+  if (outcome === 'overran') {
+    console.warn(`Monorail: ${msg.type} still running after ${Math.round(cap / 1000)}s; starting the next request`);
+  }
+}
+
+figma.ui.onmessage = (msg: PluginMessage) => {
+  if (msg.type === 'cancel') {
+    // The proxy withdrew it: skip it if it hasn't started. (One that's running can't be stopped.)
+    if (msg.requestId) {
+      if (withdrawn.size > 200) withdrawn.clear();
+      withdrawn.add(msg.requestId);
+    }
+    return;
+  }
+  if (!PLUGIN_REPLY_FOR[msg.type]) return handleMessage(msg); // not a request (UI chores): run it now
+  const run = requestChain.then(() => runQueued(msg));
+  requestChain = run.catch(() => {});
+  return run;
+};
+
+// Main message handler (one request at a time; see runQueued)
+async function handleMessage(msg: PluginMessage): Promise<void> {
   // Replies echo the request's id (protocol 2), so the proxy and the server
   // can match a reply that arrives after its request timed out. And every
   // request gets exactly one reply: one that got none held the proxy's lock,
@@ -5519,6 +5563,6 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
       });
     }
   }
-};
+}
 
 console.log(`Monorail loaded. Editor: ${figma.editorType}`);

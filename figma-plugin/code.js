@@ -231,6 +231,17 @@
     "apply-motion": "motion-result",
     "apply-probe": "probe-result"
   };
+  var PLUGIN_WRITE_TYPES = /* @__PURE__ */ new Set([
+    "apply-ir",
+    "patch-elements",
+    "instantiate-template",
+    "create-styled-slide",
+    "delete-slides",
+    "reorder-slides",
+    "apply-primitives",
+    "apply-motion"
+  ]);
+  var WRITE_HOLD_MS = 12e4;
   var MAX_TIMEOUT_MS = 10 * 6e4;
 
   // ../shared/probe.ts
@@ -2596,7 +2607,41 @@
     }
     return { updated, added, deleted, failed, fontSubstitutions, newElements, deletedElements };
   }
-  figma.ui.onmessage = async (msg) => {
+  var requestChain = Promise.resolve();
+  var withdrawn = /* @__PURE__ */ new Set();
+  async function runQueued(msg) {
+    if (msg.requestId && withdrawn.delete(msg.requestId)) {
+      figma.ui.postMessage({ type: PLUGIN_REPLY_FOR[msg.type], success: false, error: `${msg.type} was cancelled before it started`, requestId: msg.requestId });
+      return;
+    }
+    const write = PLUGIN_WRITE_TYPES.has(msg.type);
+    const ttl = typeof msg.timeoutMs === "number" && msg.timeoutMs > 0 ? msg.timeoutMs : write ? 6e4 : 9e4;
+    const cap = ttl + (write ? WRITE_HOLD_MS : 1e3);
+    let timer;
+    const overran = new Promise((resolve) => {
+      timer = setTimeout(() => resolve("overran"), cap);
+    });
+    const outcome = await Promise.race([handleMessage(msg).then(() => "done"), overran]);
+    if (timer !== void 0) clearTimeout(timer);
+    if (outcome === "overran") {
+      console.warn(`Monorail: ${msg.type} still running after ${Math.round(cap / 1e3)}s; starting the next request`);
+    }
+  }
+  figma.ui.onmessage = (msg) => {
+    if (msg.type === "cancel") {
+      if (msg.requestId) {
+        if (withdrawn.size > 200) withdrawn.clear();
+        withdrawn.add(msg.requestId);
+      }
+      return;
+    }
+    if (!PLUGIN_REPLY_FOR[msg.type]) return handleMessage(msg);
+    const run = requestChain.then(() => runQueued(msg));
+    requestChain = run.catch(() => {
+    });
+    return run;
+  };
+  async function handleMessage(msg) {
     var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _l, _m;
     const requestId = msg.requestId;
     const expected = PLUGIN_REPLY_FOR[msg.type];
@@ -4439,6 +4484,6 @@
         });
       }
     }
-  };
+  }
   console.log(`Monorail loaded. Editor: ${figma.editorType}`);
 })();

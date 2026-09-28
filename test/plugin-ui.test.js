@@ -3,8 +3,8 @@
  * elements and Node's `ws` as the browser WebSocket, against a real proxy.
  *
  * What it pins: after the proxy restarts, the UI reconnects by itself (no
- * re-run of the plugin), a deliberate Disconnect stays disconnected, and a
- * request id survives the round trip UI → code.ts → UI → proxy.
+ * re-run of the plugin), a deliberate Disconnect stays disconnected, a
+ * request id and its time survive the round trip UI → code.ts → UI → proxy.
  */
 
 import { test, describe, after } from 'node:test';
@@ -28,8 +28,8 @@ describe('plugin UI socket', () => {
     cleanup.push(async () => { ui.stop(); await proxy.stop(); await proxy2?.stop(); });
 
     const first = await waitUntil(async () => { const p = await pluginCount(proxy.proxyPort); return p.length === 1 && p[0].plugin && p; }, { what: 'the UI to connect and say hello' });
-    assert.deepEqual(first[0].features, ['request-id', 'auto-reconnect']);
-    assert.equal(first[0].version, '0.2.0');
+    assert.deepEqual(first[0].features, ['request-id', 'auto-reconnect', 'serial', 'cancel']);
+    assert.equal(first[0].version, '0.3.0');
 
     await proxy.stop();
     await waitUntil(() => /Reconnecting|Disconnected|Connection failed/.test(ui.status()), { what: 'the UI to notice' });
@@ -49,6 +49,7 @@ describe('plugin UI socket', () => {
     const req = await waitUntil(() => ui.toPlugin.find((m) => m.type === 'get-css'), { what: 'the UI to relay get-css' });
     assert.equal(req.nodeId, '1:2');
     assert.match(req.requestId, /^px-/, 'the plugin sees the proxy\'s id');
+    assert.ok(req.timeoutMs > 4000 && req.timeoutMs <= 5000, `and its time (${req.timeoutMs}), so code.ts's queue gives up when the proxy does`);
 
     ui.fromPlugin({ type: 'css-extracted', success: true, css: { width: '1px' }, raw: { name: 'n' }, requestId: req.requestId });
     const reply = await up.waitFor((m) => m.type === 'css-extracted');

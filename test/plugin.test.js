@@ -5,7 +5,9 @@
  *
  * What it pins: every request gets exactly one reply, and the reply echoes
  * the request's id. A request that got no reply held the proxy's lock for
- * every session (docs/proxy-wedge-2026-09.md).
+ * every session (docs/proxy-wedge-2026-09.md). Requests run one at a time, so
+ * two handlers never interleave at their awaits, and a withdrawn request that
+ * hasn't started never does.
  */
 
 import { test, describe } from 'node:test';
@@ -17,7 +19,7 @@ import { REPO } from './harness.js';
 
 const CODE = fs.readFileSync(path.join(REPO, 'figma-plugin', 'code.js'), 'utf8');
 
-function loadPlugin({ nodes = {}, storage = {}, storageThrows = false } = {}) {
+function loadPlugin({ nodes = {}, storage = {}, storageThrows = false, loadFontAsync } = {}) {
   const posted = [];
   const ui = { postMessage: (m) => posted.push(m), onmessage: null };
   const page = { name: 'Page 1', selection: [], children: [], findAll: () => [] };
@@ -34,21 +36,29 @@ function loadPlugin({ nodes = {}, storage = {}, storageThrows = false } = {}) {
     notify() {},
     closePlugin() {},
     getNodeByIdAsync: async (id) => nodes[id] ?? null,
+    loadFontAsync: loadFontAsync ?? (async () => {}),
     clientStorage: {
       getAsync: async (k) => { if (storageThrows) throw new Error('storage unavailable'); return storage[k]; },
-      setAsync: async () => {},
+      setAsync: async (k, v) => { storage[k] = v; },
+      deleteAsync: async (k) => { delete storage[k]; },
     },
   };
-  const context = vm.createContext({ figma, __html__: '', console: { log() {}, error() {}, warn() {} }, setTimeout, clearTimeout });
+  // Unref'd, so a queue timer (a write's is two minutes) doesn't keep the test process alive.
+  const unrefTimeout = (fn, ms, ...a) => { const t = setTimeout(fn, ms, ...a); t.unref?.(); return t; };
+  const context = vm.createContext({ figma, __html__: '', console: { log() {}, error() {}, warn() {} }, setTimeout: unrefTimeout, clearTimeout });
   vm.runInContext(CODE, context);
   assert.equal(typeof ui.onmessage, 'function', 'code.js should install figma.ui.onmessage');
+  // Replies only: what code.ts posts at startup (file context, the stored pairing code) isn't one.
+  const replies = () => posted.filter((m) => m.type !== 'pairing-code' && m.type !== 'file-context');
   return {
-    figma, posted,
+    figma, posted, storage, replies,
     async send(msg) {
-      const before = posted.length;
+      const before = replies().length;
       await ui.onmessage(msg);
-      return posted.slice(before);
+      return replies().slice(before);
     },
+    /** Deliver without waiting, the way several messages arrive from the UI. */
+    post(msg) { return ui.onmessage(msg); },
   };
 }
 
@@ -126,5 +136,82 @@ describe('plugin request loop', () => {
     const p = loadPlugin();
     const out = await p.send({ type: 'get-slide-reference' });
     assert.ok(out.every((m) => m.type === 'slide-reference'));
+  });
+});
+
+const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+
+function cssNode(id, getCSSAsync) {
+  return { id, name: id, type: 'FRAME', width: 1, height: 1, getCSSAsync, fills: [], strokes: [], effects: [] };
+}
+
+describe('plugin request queue', () => {
+  test('requests run one at a time, in arrival order', async () => {
+    const events = [];
+    let releaseA;
+    const nodes = {
+      A: cssNode('A', () => { events.push('A start'); return new Promise((r) => { releaseA = () => { events.push('A end'); r({}); }; }); }),
+      B: cssNode('B', async () => { events.push('B start'); return {}; }),
+    };
+    const p = loadPlugin({ nodes });
+    const a = p.post({ type: 'get-css', nodeId: 'A', requestId: 'px-1' });
+    const b = p.post({ type: 'get-css', nodeId: 'B', requestId: 'px-2' });
+    await tick(20);
+    assert.deepEqual(events, ['A start'], 'B waits while A is between awaits');
+    releaseA();
+    await Promise.all([a, b]);
+    assert.deepEqual(events, ['A start', 'A end', 'B start']);
+    assert.deepEqual(p.replies().map((m) => m.requestId), ['px-1', 'px-2']);
+  });
+
+  test('a request withdrawn before it starts never runs, and says so', async () => {
+    let calledB = false;
+    let releaseA;
+    const nodes = {
+      A: cssNode('A', () => new Promise((r) => { releaseA = () => r({}); })),
+      B: cssNode('B', async () => { calledB = true; return {}; }),
+    };
+    const p = loadPlugin({ nodes });
+    const a = p.post({ type: 'get-css', nodeId: 'A', requestId: 'px-1' });
+    const b = p.post({ type: 'get-css', nodeId: 'B', requestId: 'px-2' });
+    p.post({ type: 'cancel', requestId: 'px-2' });
+    await tick(10);
+    releaseA();
+    await Promise.all([a, b]);
+    assert.equal(calledB, false);
+    const rb = p.replies().find((m) => m.requestId === 'px-2');
+    assert.equal(rb.success, false);
+    assert.match(rb.error, /cancelled before it started/);
+  });
+
+  test('a read that hangs past its time lets the next request run', async () => {
+    let calledB = false;
+    const nodes = {
+      A: cssNode('A', () => new Promise(() => {})),
+      B: cssNode('B', async () => { calledB = true; return {}; }),
+    };
+    const p = loadPlugin({ nodes });
+    p.post({ type: 'get-css', nodeId: 'A', requestId: 'px-1', timeoutMs: 100 });
+    const b = p.post({ type: 'get-css', nodeId: 'B', requestId: 'px-2', timeoutMs: 5000 });
+    await b;
+    assert.equal(calledB, true, 'the queue moved on after 100ms + 1s');
+  });
+
+  test('a write that runs past its time still keeps the next request out', async () => {
+    let calledB = false;
+    const nodes = { B: cssNode('B', async () => { calledB = true; return {}; }) };
+    // apply-ir waits for fonts before it touches the document; a font that never loads keeps it there.
+    const p = loadPlugin({ nodes, loadFontAsync: () => new Promise(() => {}) });
+    p.post({ type: 'apply-ir', ir: JSON.stringify({ deck: { title: 't' }, slides: [] }), requestId: 'px-1', timeoutMs: 100 });
+    p.post({ type: 'get-css', nodeId: 'B', requestId: 'px-2', timeoutMs: 5000 });
+    await tick(1500);
+    assert.equal(calledB, false, 'a read would have moved on by now; a write holds for WRITE_HOLD_MS');
+  });
+
+  test('messages that are not requests are not queued behind one', async () => {
+    const p = loadPlugin({ nodes: { A: cssNode('A', () => new Promise(() => {})) } });
+    p.post({ type: 'get-css', nodeId: 'A', requestId: 'px-1', timeoutMs: 60000 });
+    await p.post({ type: 'get-slide-reference' });
+    assert.ok(p.posted.some((m) => m.type === 'slide-reference'), 'answered while get-css hangs');
   });
 });

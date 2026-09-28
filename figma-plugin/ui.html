@@ -362,7 +362,7 @@
       <span class="host">Disconnected</span>
     </div>
     <span class="status-uptime" id="status-uptime"></span>
-    <span style="font-size:9px;opacity:0.3;margin-left:auto;margin-right:4px">v2</span>
+    <span style="font-size:9px;opacity:0.3;margin-left:auto;margin-right:4px">v3</span>
     <div class="status-gear" id="settings-toggle" title="Settings">&#9881;</div>
   </div>
 
@@ -631,8 +631,8 @@
           ws.send(JSON.stringify({
             type: 'hello',
             plugin: 'monorail-figma',
-            version: '0.2.0',
-            features: ['request-id', 'auto-reconnect'],
+            version: '0.3.0',
+            features: ['request-id', 'auto-reconnect', 'serial', 'cancel'],
             fileKey: fileContext.fileKey || null,
             fileName: fileContext.fileName || null,
             pageName: fileContext.pageName || null
@@ -655,55 +655,55 @@
               const modeText = msg.mode === 'replace' ? ' (replacing)' : '';
               addActivity('\u2193', `Push ${count} slides${modeText}`);
               if (msg.autoApply) {
-                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), mode: msg.mode || 'append', startIndex: msg.startIndex, requestId: msg.requestId } }, '*');
+                parent.postMessage({ pluginMessage: { type: 'apply-ir', ir: JSON.stringify(msg.ir), mode: msg.mode || 'append', startIndex: msg.startIndex, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
               } else {
                 showToast(`Received ${count} slides`);
               }
             } else if (msg.type === 'request-export') {
               addActivity('\u2191', 'Pulling deck');
-              parent.postMessage({ pluginMessage: { type: 'export-ir', requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'export-ir', requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'patch-elements') {
               const count = msg.patches?.changes?.length || 0;
               addActivity('\u270e', `Patching ${count} elements`);
-              parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'patch-elements', patches: msg.patches, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'capture-template') {
               addActivity('\u25cb', msg.slideId ? `Capturing ${msg.slideId}` : 'Capturing template');
-              parent.postMessage({ pluginMessage: { type: 'capture-template', slideId: msg.slideId, maxDepth: msg.maxDepth, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'capture-template', slideId: msg.slideId, maxDepth: msg.maxDepth, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'instantiate-template') {
               addActivity('+', 'Creating from template');
-              parent.postMessage({ pluginMessage: { type: 'instantiate-template', sourceId: msg.sourceId, contentMap: msg.contentMap, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'instantiate-template', sourceId: msg.sourceId, contentMap: msg.contentMap, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'create-styled-slide') {
               addActivity('+', `Creating "${msg.layout}" slide`);
-              parent.postMessage({ pluginMessage: { type: 'create-styled-slide', layout: msg.layout, content: msg.content, designSystem: msg.designSystem, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'create-styled-slide', layout: msg.layout, content: msg.content, designSystem: msg.designSystem, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'delete-slides') {
               const count = msg.slideIds?.length || 0;
               addActivity('\u00d7', `Deleting ${count} slides`);
-              parent.postMessage({ pluginMessage: { type: 'delete-slides', slideIds: msg.slideIds, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'delete-slides', slideIds: msg.slideIds, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'reorder-slides') {
               const count = msg.slideIds?.length || 0;
               addActivity('\u2195', `Reordering ${count} slides`);
-              parent.postMessage({ pluginMessage: { type: 'reorder-slides', slideIds: msg.slideIds, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'reorder-slides', slideIds: msg.slideIds, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'request-screenshot') {
               addActivity('\u25ce', msg.slideId ? `Screenshot ${msg.slideId}` : 'Screenshot');
-              parent.postMessage({ pluginMessage: { type: 'export-screenshot', slideId: msg.slideId, scale: msg.scale, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'export-screenshot', slideId: msg.slideId, scale: msg.scale, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'apply-primitives') {
               const count = msg.operations?.length || 0;
               const target = msg.slideId ? ` on ${msg.slideId}` : '';
               addActivity('\u25a0', `${count} primitives${target}`);
-              parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations, minFontSize: msg.minFontSize, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'apply-primitives', slideId: msg.slideId, operations: msg.operations, minFontSize: msg.minFontSize, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'get-css') {
               addActivity('\u25a1', msg.nodeId ? `CSS for ${msg.nodeId}` : 'CSS for selection');
-              parent.postMessage({ pluginMessage: { type: 'get-css', nodeId: msg.nodeId, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'get-css', nodeId: msg.nodeId, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'export-node') {
               addActivity('\u2b07', msg.nodeId ? `Export ${msg.format || 'SVG'} ${msg.nodeId}` : 'Export node');
-              parent.postMessage({ pluginMessage: { type: 'export-node', nodeId: msg.nodeId, format: msg.format, scale: msg.scale, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'export-node', nodeId: msg.nodeId, format: msg.format, scale: msg.scale, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'get-component-info') {
               addActivity('\u25c6', msg.nodeId ? `Component ${msg.nodeId}` : 'Component info');
-              parent.postMessage({ pluginMessage: { type: 'get-component-info', nodeId: msg.nodeId, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'get-component-info', nodeId: msg.nodeId, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else if (msg.type === 'find-nodes') {
               const desc = [msg.nodeType, msg.name].filter(Boolean).join(' ');
               addActivity('\u25c9', `Find ${desc || 'nodes'}`);
-              parent.postMessage({ pluginMessage: { type: 'find-nodes', nodeType: msg.nodeType, name: msg.name, parentId: msg.parentId, limit: msg.limit, requestId: msg.requestId } }, '*');
+              parent.postMessage({ pluginMessage: { type: 'find-nodes', nodeType: msg.nodeType, name: msg.name, parentId: msg.parentId, limit: msg.limit, requestId: msg.requestId, timeoutMs: msg.timeoutMs } }, '*');
             } else {
               // Generic relay — forward any unrecognized message types to plugin
               // This prevents needing ui.html updates for every new tool
@@ -760,6 +760,7 @@
         fileContext = { fileKey: msg.fileKey, fileName: msg.fileName, pageName: msg.pageName };
         return;
       }
+
 
       // Applied IR
       if (msg.type === 'applied') {
