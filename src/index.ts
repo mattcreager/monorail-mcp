@@ -1043,7 +1043,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "monorail_probe",
         description:
-          "Explore the live Figma Plugin API from inside the plugin sandbox — including undocumented surface. 'globals' lists every own property of `figma` and its namespaces plus non-standard globals; 'node' lists every property up a node's prototype chain with its current value (optional regex filter, e.g. 'anim|transition|reveal'); 'eval' runs an async JS function body with `figma`, `node` (nodeId or selection), `protoNames(obj)` and `safeJson(v)` in scope and returns what it returns. Development plugin only.",
+          "Explore the live Figma Plugin API from inside the plugin sandbox — including undocumented surface. 'globals' lists every own property of `figma` and its namespaces plus non-standard globals; 'node' lists every property up a node's prototype chain with its current value (optional regex filter, e.g. 'anim|transition|reveal'); 'eval' runs an async JS function body with `figma`, `node` (nodeId or selection), `protoNames(obj)` and `safeJson(v, depth?)` in scope and returns what it returns. Results are capped (max_items, max_keys, max_depth); every cut is marked in the value and flagged at the top of the output. Development plugin only.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -1051,6 +1051,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             node_id: { type: "string", description: "For node/eval: Figma node ID. Defaults to the current selection." },
             filter: { type: "string", description: "For node: case-insensitive regex on property names." },
             code: { type: "string", description: "For eval: async function body. `return` a JSON-serialisable value." },
+            max_items: { type: "number", description: "Items kept per list in the result (default 50, up to 10000). Cut lists end with a \"[… N more items]\" marker and the reply carries a truncation report." },
+            max_keys: { type: "number", description: "Keys kept per object (default 80, up to 10000). A cut object gets a \"…\" key." },
+            max_depth: { type: "number", description: "Levels serialised (default 4 for eval, 2 per property for node; up to 12). Deeper values show as [array n] / [object T]." },
             timeout_ms: { type: "number", description: "How long to wait for the plugin, in ms (default 120000; 1000–600000). Other sessions are told the plugin is busy while the probe runs." },
           },
           required: ["action"],
@@ -2311,11 +2314,16 @@ ${createdList}${revealsText}${warningsText}
       try {
         const resultPromise = pluginRequest<Record<string, unknown> & { success: boolean; error?: string }>({
           type: 'apply-probe', action: args?.action, nodeId: args?.node_id, filter: args?.filter, code: args?.code,
+          maxItems: args?.max_items, maxKeys: args?.max_keys, maxDepth: args?.max_depth,
         }, { timeoutMs: args?.timeout_ms });
         const result = await resultPromise;
         if (!result.success) return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
         const { success, type, requestId, ...rest } = result as any;
-        return { content: [{ type: "text" as const, text: JSON.stringify(rest, null, 2) }] };
+        // Say so up front when a limit cut the result: the old caps cut lists at
+        // 50 items with no sign, and dumps were read as complete.
+        const warning = describeTruncation(result);
+        const body = JSON.stringify(rest, null, 2);
+        return { content: [{ type: "text" as const, text: warning ? `${warning}\n\n${body}` : body }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Error in monorail_probe: ${e instanceof Error ? e.message : "unknown error"}` }], isError: true };
       }
@@ -2962,6 +2970,7 @@ import {
   PROTOCOL_VERSION, RESPONSE_FOR, RESPONSE_TYPES, DEFAULT_TIMEOUT_MS,
   clampTimeout, type RequestErrorCode,
 } from "../shared/protocol.js";
+import { describeTruncation } from "../shared/probe.js";
 
 function envInt(name: string, fallback: number): number {
   const v = parseInt(process.env[name] ?? "", 10);

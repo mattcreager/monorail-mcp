@@ -7,6 +7,7 @@ import { normaliseReveal, pickAnimationStyle, revealEndsAt, stepFromReveal, norm
 import type { NormalisedReveal, RevealSpec } from '../shared/motion';
 import { normaliseWeight, styleCandidates, resolveLineHeight, resolveLetterSpacing } from '../shared/typography';
 import { PLUGIN_REPLY_FOR } from '../shared/protocol';
+import { createSafeJson, clampDepth } from '../shared/probe';
 // Pure geometry, factored out so test/geometry.test.js can pin it without Figma.
 // esbuild bundles this in; keep it free of Figma API calls.
 import {
@@ -5380,21 +5381,14 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
     // action 'eval'    → run an async function body with (figma, node, helpers)
     if (msg.type === 'apply-probe') {
       const action = (msg as any).action as 'globals' | 'node' | 'eval';
-      const reply = (payload: Record<string, unknown>) => post({ type: 'probe-result', action, ...payload });
-      const safeJson = (v: unknown, depth = 3): unknown => {
-        const seen = new WeakSet<object>();
-        const walk = (x: any, d: number): unknown => {
-          if (x === null || typeof x !== 'object') return typeof x === 'function' ? `[fn ${x.name || 'anonymous'}]` : typeof x === 'symbol' ? String(x) : x;
-          if (seen.has(x)) return '[circular]';
-          if (d <= 0) return Array.isArray(x) ? `[array ${x.length}]` : `[object ${x.type ?? x.constructor?.name ?? ''}]`;
-          seen.add(x);
-          if (Array.isArray(x)) return x.slice(0, 50).map(i => walk(i, d - 1));
-          const out: Record<string, unknown> = {};
-          for (const k of Object.keys(x).slice(0, 80)) { try { out[k] = walk(x[k], d - 1); } catch (e) { out[k] = `[throws: ${e instanceof Error ? e.message : String(e)}]`; } }
-          return out;
-        };
-        return walk(v, depth);
-      };
+      // safeJson caps lists and objects (max_items / max_keys, default 50 / 80)
+      // and depth (max_depth), marks every cut in the value itself, and reports
+      // them on the reply as `truncated` / `truncation` (shared/probe.ts).
+      const serialiser = createSafeJson({ maxItems: (msg as any).maxItems, maxKeys: (msg as any).maxKeys });
+      const safeJson = serialiser.safeJson;
+      const maxDepth = (msg as any).maxDepth;
+      const reply = (payload: Record<string, unknown>) =>
+        post({ type: 'probe-result', action, ...payload, ...(payload.success ? serialiser.report() : {}) });
       const protoNames = (obj: any): string[] => {
         const names = new Set<string>();
         let o = obj;
@@ -5413,7 +5407,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           for (const k of top) {
             try {
               const v = f[k];
-              if (v && typeof v === 'object') namespaces[k] = protoNames(v).slice(0, 200);
+              if (v && typeof v === 'object') namespaces[k] = serialiser.capList(protoNames(v), 200, `$.namespaces.${k}`);
             } catch { /* getter threw */ }
           }
           reply({ success: true, editorType: f.editorType, apiVersion: f.apiVersion, figma: top, namespaces, hasMotion: typeof f.motion, globals: protoNames(globalThis).filter(n => !/^(Array|Object|Function|String|Number|Boolean|Symbol|Math|JSON|Date|RegExp|Error|Promise|Map|Set|WeakMap|WeakSet|Reflect|Proxy|Intl|ArrayBuffer|DataView|Uint|Int|Float|BigInt|globalThis|undefined|NaN|Infinity|parseInt|parseFloat|isNaN|isFinite|decodeURI|encodeURI|escape|unescape|eval|console|setTimeout|clearTimeout|setInterval|clearInterval|TypeError|RangeError|SyntaxError|ReferenceError|EvalError|URIError|Atomics|SharedArrayBuffer|TextEncoder|TextDecoder|queueMicrotask|structuredClone)/.test(n)) });
@@ -5429,7 +5423,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           for (const n of names) {
             try {
               const v = (node as any)[n];
-              values[n] = typeof v === 'function' ? `[fn/${v.length}]` : safeJson(v, 2);
+              values[n] = typeof v === 'function' ? `[fn/${v.length}]` : safeJson(v, clampDepth(maxDepth, 2), `$.values.${n}`);
             } catch (e) { values[n] = `[throws: ${e instanceof Error ? e.message : String(e)}]`; }
           }
           reply({ success: true, id: node.id, name: node.name, type: node.type, count: names.length, values });
@@ -5443,7 +5437,7 @@ figma.ui.onmessage = async (msg: { type: string; ir?: string; patches?: PatchReq
           // eslint-disable-next-line no-new-func
           const fn = new Function('figma', 'node', 'protoNames', 'safeJson', `return (async () => { ${code} })();`);
           const result = await fn(figma, node, protoNames, safeJson);
-          reply({ success: true, result: safeJson(result, 4) });
+          reply({ success: true, result: safeJson(result, clampDepth(maxDepth, 4), '$.result') });
           return;
         }
         throw new Error(`Unknown probe action: ${action}`);

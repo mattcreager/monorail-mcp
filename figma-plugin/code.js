@@ -233,6 +233,90 @@
   };
   var MAX_TIMEOUT_MS = 10 * 6e4;
 
+  // ../shared/probe.ts
+  var DEFAULT_PROBE_LIMITS = { maxItems: 50, maxKeys: 80 };
+  var MAX_PROBE_ITEMS = 1e4;
+  var MAX_PROBE_KEYS = 1e4;
+  var MAX_PROBE_DEPTH = 12;
+  var MORE_KEYS = "\u2026";
+  function clampInt(v, fallback, min, max) {
+    const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : fallback;
+    return Math.min(max, Math.max(min, n));
+  }
+  function clampDepth(v, fallback) {
+    return clampInt(v, fallback, 1, MAX_PROBE_DEPTH);
+  }
+  function createSafeJson(limits = {}) {
+    const maxItems = clampInt(limits.maxItems, DEFAULT_PROBE_LIMITS.maxItems, 1, MAX_PROBE_ITEMS);
+    const maxKeys = clampInt(limits.maxKeys, DEFAULT_PROBE_LIMITS.maxKeys, 1, MAX_PROBE_KEYS);
+    let deepest = 0;
+    const truncation = { arrays: 0, objects: 0, depth: 0, examples: [], limits: { maxItems, maxKeys, depth: 0 } };
+    const note = (path, what) => {
+      if (truncation.examples.length < 5) truncation.examples.push(`${path}: ${what}`);
+    };
+    function safeJson(v, depth = 3, path = "$") {
+      deepest = Math.max(deepest, depth);
+      const seen = /* @__PURE__ */ new WeakSet();
+      const walk = (x, d, path2) => {
+        var _a2, _b, _c;
+        if (x === null || typeof x !== "object") {
+          if (typeof x === "function") return `[fn ${x.name || "anonymous"}]`;
+          if (typeof x === "symbol" || typeof x === "bigint") return String(x);
+          return x;
+        }
+        if (seen.has(x)) return "[circular]";
+        if (d <= 0) {
+          truncation.depth++;
+          note(path2, "depth limit");
+          return Array.isArray(x) ? `[array ${x.length}]` : `[object ${(_c = (_b = x.type) != null ? _b : (_a2 = x.constructor) == null ? void 0 : _a2.name) != null ? _c : ""}]`;
+        }
+        seen.add(x);
+        if (Array.isArray(x)) {
+          const out2 = x.slice(0, maxItems).map((item, i) => walk(item, d - 1, `${path2}[${i}]`));
+          if (x.length > maxItems) {
+            truncation.arrays++;
+            note(path2, `${x.length} items, kept ${maxItems}`);
+            out2.push(`[\u2026 ${x.length - maxItems} more items, ${x.length} in all: raise max_items, or return a string]`);
+          }
+          return out2;
+        }
+        const keys = Object.keys(x);
+        const out = {};
+        for (const k of keys.slice(0, maxKeys)) {
+          try {
+            out[k] = walk(x[k], d - 1, `${path2}.${k}`);
+          } catch (e) {
+            out[k] = `[throws: ${e instanceof Error ? e.message : String(e)}]`;
+          }
+        }
+        if (keys.length > maxKeys) {
+          truncation.objects++;
+          note(path2, `${keys.length} keys, kept ${maxKeys}`);
+          out[MORE_KEYS] = `${keys.length - maxKeys} more keys, ${keys.length} in all: raise max_keys, or return a string`;
+        }
+        return out;
+      };
+      return walk(v, depth, path);
+    }
+    function capList(names, max, path) {
+      if (names.length <= max) return names;
+      truncation.arrays++;
+      note(path, `${names.length} names, kept ${max}`);
+      return [...names.slice(0, max), `[\u2026 ${names.length - max} more, ${names.length} in all]`];
+    }
+    return {
+      safeJson,
+      capList,
+      /** The report for the reply, or undefined when nothing was cut. */
+      report() {
+        truncation.limits.depth = deepest;
+        const cut = truncation.arrays + truncation.objects;
+        if (cut === 0 && truncation.depth === 0) return { truncated: false };
+        return { truncated: cut > 0, truncation };
+      }
+    };
+  }
+
   // ../shared/geometry.ts
   function resolveDirectionDegrees(dir) {
     if (typeof dir === "number") return { degrees: dir };
@@ -4220,28 +4304,10 @@
       }
       if (msg.type === "apply-probe") {
         const action = msg.action;
-        const reply = (payload) => post(__spreadValues({ type: "probe-result", action }, payload));
-        const safeJson = (v, depth = 3) => {
-          const seen = /* @__PURE__ */ new WeakSet();
-          const walk = (x, d) => {
-            var _a3, _b2, _c2;
-            if (x === null || typeof x !== "object") return typeof x === "function" ? `[fn ${x.name || "anonymous"}]` : typeof x === "symbol" ? String(x) : x;
-            if (seen.has(x)) return "[circular]";
-            if (d <= 0) return Array.isArray(x) ? `[array ${x.length}]` : `[object ${(_c2 = (_b2 = x.type) != null ? _b2 : (_a3 = x.constructor) == null ? void 0 : _a3.name) != null ? _c2 : ""}]`;
-            seen.add(x);
-            if (Array.isArray(x)) return x.slice(0, 50).map((i) => walk(i, d - 1));
-            const out = {};
-            for (const k of Object.keys(x).slice(0, 80)) {
-              try {
-                out[k] = walk(x[k], d - 1);
-              } catch (e) {
-                out[k] = `[throws: ${e instanceof Error ? e.message : String(e)}]`;
-              }
-            }
-            return out;
-          };
-          return walk(v, depth);
-        };
+        const serialiser = createSafeJson({ maxItems: msg.maxItems, maxKeys: msg.maxKeys });
+        const safeJson = serialiser.safeJson;
+        const maxDepth = msg.maxDepth;
+        const reply = (payload) => post(__spreadValues(__spreadValues({ type: "probe-result", action }, payload), payload.success ? serialiser.report() : {}));
         const protoNames = (obj) => {
           const names = /* @__PURE__ */ new Set();
           let o = obj;
@@ -4260,7 +4326,7 @@
             for (const k of top) {
               try {
                 const v = f[k];
-                if (v && typeof v === "object") namespaces[k] = protoNames(v).slice(0, 200);
+                if (v && typeof v === "object") namespaces[k] = serialiser.capList(protoNames(v), 200, `$.namespaces.${k}`);
               } catch (e) {
               }
             }
@@ -4277,7 +4343,7 @@
             for (const n of names) {
               try {
                 const v = node[n];
-                values[n] = typeof v === "function" ? `[fn/${v.length}]` : safeJson(v, 2);
+                values[n] = typeof v === "function" ? `[fn/${v.length}]` : safeJson(v, clampDepth(maxDepth, 2), `$.values.${n}`);
               } catch (e) {
                 values[n] = `[throws: ${e instanceof Error ? e.message : String(e)}]`;
               }
@@ -4292,7 +4358,7 @@
             const node = id ? await figma.getNodeByIdAsync(id) : (_m = figma.currentPage.selection[0]) != null ? _m : null;
             const fn = new Function("figma", "node", "protoNames", "safeJson", `return (async () => { ${code} })();`);
             const result = await fn(figma, node, protoNames, safeJson);
-            reply({ success: true, result: safeJson(result, 4) });
+            reply({ success: true, result: safeJson(result, clampDepth(maxDepth, 4), "$.result") });
             return;
           }
           throw new Error(`Unknown probe action: ${action}`);
