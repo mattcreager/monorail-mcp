@@ -243,6 +243,25 @@ imports it, so these tests exercise shipped code.
 Each test names the bug it prevents, and all of them are regressions that
 actually shipped. Reverting the path fix turns 4 of them red.
 
+The bridge has its own tests: `test/proxy.test.js` and `test/server.test.js`
+drive the real proxy and MCP server with a fake plugin (`test/fake-plugin.js`)
+on ephemeral ports, and `test/plugin.test.js` / `test/plugin-ui.test.js` run
+the plugin's `code.js` and `ui.html` in a VM. `node test/repro-wedge.js`
+replays the 2026-09-27 proxy wedge against any build
+(see `docs/proxy-wedge-2026-09.md`).
+
+### Several sessions, one plugin
+
+Every MCP server connects to a shared proxy (`src/proxy.ts`, ws://localhost:9877;
+the plugin connects to it on 9876). The first server that finds none starts it,
+logging to `~/Library/Logs/monorail-proxy.log`. The plugin serves one request at
+a time: a request that arrives while it's busy fails fast with who holds it, and
+the server retries for up to 10s. A request the plugin never answers is released
+after its timeout. If the proxy restarts, servers and the plugin reconnect by
+themselves. `monorail_status` shows the proxy, who holds the plugin and for how
+long. Knobs: `MONORAIL_HOST_LABEL`, `MONORAIL_TIMEOUT_MS`, `MONORAIL_BUSY_RETRY_MS`,
+`MONORAIL_PROXY_SPAWN=0`, `MONORAIL_PROXY_LOG`.
+
 For anything that needs the canvas, use `examples/primitives-smoke.json` — 13
 labelled visual checks, one per behaviour, each stating what PASS looks like.
 

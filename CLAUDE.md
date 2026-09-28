@@ -4,7 +4,9 @@ MCP server for real-time design collaboration in Figma. 15 tools across 5 catego
 
 ## Architecture
 
-- MCP server: `src/index.ts` (WebSocket bridge on port 9876)
+- MCP server: `src/index.ts` (one per Claude session; connects to the proxy on 9877, reconnecting if it goes away)
+- Proxy: `src/proxy.ts` (shared by all sessions; plugin on 9876, servers on 9877; one request in flight per plugin, with a TTL)
+- Wire protocol: `shared/protocol.ts` (request → reply types, per-type timeouts). A new request type goes there, nowhere else.
 - Figma plugin: `figma-plugin/` (WebSocket client)
 - Shared types: `shared/types.ts`
 - Communication: MCP over stdio to Claude, WebSocket to Figma plugin
@@ -15,7 +17,8 @@ MCP server for real-time design collaboration in Figma. 15 tools across 5 catego
 - Build plugin: `cd figma-plugin && npm run build`
 - Watch server: `npm run dev`
 - Watch plugin: `cd figma-plugin && npm run watch`
-- Tests: `npm test` (node:test against dist/) — geometry and motion helpers
+- Tests: `npm test` (node:test against dist/) — geometry, motion, typography and probe helpers; the proxy and server end to end with `test/fake-plugin.js`; the plugin's code.js and ui.html in a VM
+- Proxy wedge post-mortem and the bridge protocol: `docs/proxy-wedge-2026-09.md`
 
 ## Key Files
 
