@@ -673,12 +673,13 @@ describe('who may connect', () => {
     assert.equal('token' in plugin.requests[0], false);
   });
 
-  test('the token file is 0600 in a 0700 directory', async () => {
-    const { upstream } = await setup({ plugin: null });
-    await p3(upstream, 'agent-a');
+  test('the token file is 0600 in a 0700 directory, and registered says the heartbeat', async () => {
+    const { upstream } = await setup({ plugin: null, env: { MONORAIL_HEARTBEAT_MS: '7000' } });
+    const a = await p3(upstream, 'agent-a');
     const home = process.env.MONORAIL_HOME;
     assert.equal(fs.statSync(path.join(home, 'token')).mode & 0o777, 0o600);
     assert.equal(fs.statSync(home).mode & 0o777, 0o700);
+    assert.equal(a.messages.find((m) => m.type === 'registered').heartbeatMs, 7000);
   });
 });
 

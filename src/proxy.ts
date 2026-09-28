@@ -812,7 +812,7 @@ function onUpstreamConnection(ws: WebSocket): void {
         // First upstream becomes active
         if (!activeUpstreamId || !upstreams.has(activeUpstreamId)) activeUpstreamId = id;
         log(`MCP server registered: ${id} (${upstream.label}, protocol ${upstream.protocol})`);
-        sendJson(ws, { type: "registered", id, protocol: PROTOCOL_VERSION, version: VERSION, proxyPid: process.pid });
+        sendJson(ws, { type: "registered", id, protocol: PROTOCOL_VERSION, version: VERSION, proxyPid: process.pid, heartbeatMs: HEARTBEAT_MS });
 
         // If a plugin is already connected, forward its hello so this upstream
         // gets pluginInfo immediately. This runs for every upstream, not just
@@ -861,6 +861,7 @@ function onUpstreamConnection(ws: WebSocket): void {
           version: VERSION,
           pid: process.pid,
           uptimeMs: now - startedAt,
+          heartbeatMs: HEARTBEAT_MS,
           pairingEnforced: enforced,
           plugins: [...downstreams.values()].map(d => ({
             id: d.id, plugin: d.pluginName, version: d.pluginVersion, features: d.features,

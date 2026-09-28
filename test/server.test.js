@@ -363,3 +363,13 @@ describe('who may connect', () => {
     assert.equal(r.isError, false, r.text);
   });
 });
+
+describe('link', () => {
+  test('the silence watchdog uses the proxy\'s heartbeat, not its own', async () => {
+    const { mcp } = await setup({ proxyEnv: { MONORAIL_HEARTBEAT_MS: '1500' }, env: { MONORAIL_HEARTBEAT_MS: '100' } });
+    await mcp.call('monorail_status');
+    await sleep(2500);
+    assert.equal(mcp.stderr.join('').includes('No word from the proxy'), false, 'a healthy link was not dropped');
+    assert.equal((await mcp.call('monorail_css', { node_id: 'n' })).isError, false);
+  });
+});

@@ -3009,8 +3009,14 @@ const TIMEOUT_OVERRIDE_MS = process.env.MONORAIL_TIMEOUT_MS ? envInt("MONORAIL_T
 const SERVER_TIMEOUT_GRACE_MS = 2_000;
 const RECONNECT_MIN_MS = envInt("MONORAIL_RECONNECT_MIN_MS", 250);
 const RECONNECT_MAX_MS = envInt("MONORAIL_RECONNECT_MAX_MS", 10_000);
-/** Don't start a proxy more often than this (per server) while none will stay up. */
-const SPAWN_COOLDOWN_MS = envInt("MONORAIL_SPAWN_COOLDOWN_MS", 15_000);
+/**
+ * Wait at least this long between starting proxies. It doubles with each
+ * spawn that doesn't come up (to SPAWN_COOLDOWN_MAX_MS) and resets once one
+ * does, so a proxy that dies twice in a row is replaced at once both times,
+ * but one that can't start at all isn't respawned forever at full speed.
+ */
+const SPAWN_COOLDOWN_MS = envInt("MONORAIL_SPAWN_COOLDOWN_MS", 1_000);
+const SPAWN_COOLDOWN_MAX_MS = 60_000;
 /** MONORAIL_PROXY_SPAWN=0: never start a proxy, only connect to one (e.g. one run by launchd). */
 const SPAWN_ALLOWED = process.env.MONORAIL_PROXY_SPAWN !== "0";
 /**
@@ -3022,8 +3028,12 @@ const SPAWN_ALLOWED = process.env.MONORAIL_PROXY_SPAWN !== "0";
 const DIRECT_ALLOWED = process.env.MONORAIL_DIRECT === "1";
 /** How long a tool call waits for a reconnect in progress before failing. */
 const LINK_WAIT_MS = envInt("MONORAIL_LINK_WAIT_MS", 3_000);
-/** The proxy pings every heartbeat; this long without a word from it means the link is dead. */
-const PROXY_SILENCE_MS = 3 * envInt("MONORAIL_HEARTBEAT_MS", 15_000);
+/**
+ * The proxy pings every heartbeat; three heartbeats without a word from it
+ * means the link is dead. The proxy says its interval in `registered`, so the
+ * two sides can't disagree; MONORAIL_HEARTBEAT_MS is the fallback.
+ */
+let proxySilenceMs = 3 * (envInt("MONORAIL_HEARTBEAT_MS", 15_000) || 15_000);
 
 let wsServer: WebSocketServer | null = null;
 let directServers: WebSocketServer[] = [];
@@ -3040,6 +3050,7 @@ let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let nextReconnectAt = 0;
 let lastSpawnAt = 0;
+let spawnFailures = 0;
 let lastLinkError: string | null = null;
 /** The proxy refused this server's registration (no or wrong token). */
 let authError: string | null = null;
@@ -3436,6 +3447,7 @@ function handlePluginMessage(data: string, sender: WebSocket) {
     case "registered":
       proxyProtocol = typeof parsed.protocol === "number" ? parsed.protocol : 1;
       authError = null;
+      if (typeof parsed.heartbeatMs === "number" && parsed.heartbeatMs > 0) proxySilenceMs = 3 * parsed.heartbeatMs;
       console.error(`[WebSocket] Registered with proxy as ${parsed.id} (protocol ${proxyProtocol})`);
       return;
     case "status-response": {
@@ -3595,6 +3607,7 @@ function setupProxySocket(ws: WebSocket) {
   linkMode = "proxy";
   proxyProtocol = 0;
   reconnectAttempt = 0;
+  spawnFailures = 0;
   lastLinkError = null;
   authError = null;
   lastProxyContact = Date.now();
@@ -3722,8 +3735,14 @@ async function spawnProxyAndConnect(): Promise<boolean> {
     await sleep(200);
     if (await connectToProxy()) return true;
   }
-  console.error("[WebSocket] Proxy spawned but failed to connect");
+  spawnFailures++;
+  lastLinkError = `a proxy was started but didn't come up; its reason is at the end of ${proxyLogPath()}`;
+  console.error(`[WebSocket] Proxy spawned but failed to connect (${spawnFailures} in a row)`);
   return false;
+}
+
+function spawnCooldown(): number {
+  return Math.min(SPAWN_COOLDOWN_MAX_MS, SPAWN_COOLDOWN_MS * 2 ** Math.min(spawnFailures, 10));
 }
 
 function scheduleReconnect(): void {
@@ -3747,7 +3766,7 @@ async function reconnect(): Promise<void> {
     return;
   }
   // Nothing listening: start a proxy, unless one was started moments ago.
-  if (SPAWN_ALLOWED && lastLinkError === "ECONNREFUSED" && Date.now() - lastSpawnAt >= SPAWN_COOLDOWN_MS) {
+  if (SPAWN_ALLOWED && lastLinkError === "ECONNREFUSED" && Date.now() - lastSpawnAt >= spawnCooldown()) {
     if (await spawnProxyAndConnect()) {
       console.error(`[WebSocket] Reconnected to a new proxy (attempt ${attempt})`);
       return;
@@ -3759,11 +3778,11 @@ async function reconnect(): Promise<void> {
 // A proxy that stops answering without closing (a half-open socket after
 // sleep, a wedged process) would otherwise hold this link forever.
 setInterval(() => {
-  if (linkMode === "proxy" && isLinkOpen() && Date.now() - lastProxyContact > PROXY_SILENCE_MS) {
+  if (linkMode === "proxy" && isLinkOpen() && Date.now() - lastProxyContact > proxySilenceMs) {
     console.error(`[WebSocket] No word from the proxy for ${secs(Date.now() - lastProxyContact)}; dropping the link`);
     connectedPlugin!.terminate();
   }
-}, Math.max(1000, Math.floor(PROXY_SILENCE_MS / 3))).unref();
+}, 1000).unref();
 
 /** Startup sequence: connect to proxy → spawn proxy → (direct, if MONORAIL_DIRECT=1) → keep retrying */
 async function startConnection() {
