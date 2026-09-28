@@ -4,6 +4,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
+  type CallToolRequest,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
@@ -1135,8 +1136,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-// Handle tool calls (14 total)
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+// Handle tool calls. Each runs with its call's abort signal in callContext,
+// so a cancelled call withdraws whatever it is waiting on from the plugin.
+server.setRequestHandler(CallToolRequestSchema, (request, extra) =>
+  callContext.run({ signal: extra?.signal }, () => handleToolCall(request)));
+
+async function handleToolCall(request: CallToolRequest) {
   const { name, arguments: args } = request.params;
 
   switch (name) {
@@ -2332,7 +2337,7 @@ ${createdList}${revealsText}${warningsText}
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
-});
+}
 
 // ── Motion result types + formatting ─────────────────────────────────────────
 interface RevealResult {
@@ -2959,10 +2964,12 @@ After pushing slides, use \`monorail_screenshot\` to see what was rendered:
 // by id: a late reply can't resolve a different call, and sibling sub-agents
 // sharing this process don't block each other. A protocol 3 proxy queues the
 // request until the plugin is free (`queued`), within its timeoutMs; an older
-// proxy answers `busy`, which is retried until that same deadline. See
+// proxy answers `busy`, which is retried until that same deadline. A tool call
+// that is cancelled withdraws its request (`cancel`). See
 // docs/proxy-wedge-2026-09.md.
 
 import { spawn } from "child_process";
+import { AsyncLocalStorage } from "async_hooks";
 import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
@@ -3054,7 +3061,8 @@ type Outcome =
   | { kind: "busy"; msg: any }
   | { kind: "error"; msg: any }
   | { kind: "timeout"; waitedMs: number }
-  | { kind: "closed"; why: string };
+  | { kind: "closed"; why: string }
+  | { kind: "cancelled" };
 
 interface PendingRequest {
   id: string;
@@ -3068,6 +3076,17 @@ interface PendingRequest {
   queued: { position: number; at: number; holder?: any } | null;
 }
 
+/** The tool call a request belongs to, so that cancelling the call withdraws the request. */
+const callContext = new AsyncLocalStorage<{ signal?: AbortSignal }>();
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    const done = () => { clearTimeout(t); signal?.removeEventListener("abort", done); resolve(); };
+    const t = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
 
 // Result types for each request (some imported from shared/types.ts)
 // These are local types not in shared:
@@ -3131,7 +3150,7 @@ function localHolder(): Outcome | null {
   return { kind: "busy", msg: { retryAfterMs: 250, holder: { type: h.type, label: CLIENT_LABEL, ageMs, ttlMs: h.timeoutMs, expiresInMs: Math.max(0, h.timeoutMs - ageMs) } } };
 }
 
-function sendOnce(message: Record<string, unknown> & { type: string }, timeoutMs: number): Promise<Outcome> {
+function sendOnce(message: Record<string, unknown> & { type: string }, timeoutMs: number, signal?: AbortSignal): Promise<Outcome> {
   return new Promise((resolve) => {
     const sock = connectedPlugin;
     // The link can close between linkReady() and here.
@@ -3139,19 +3158,30 @@ function sendOnce(message: Record<string, unknown> & { type: string }, timeoutMs
       resolve({ kind: "closed", why: `the link closed before ${message.type} could be sent; retry the call` });
       return;
     }
+    if (signal?.aborted) { resolve({ kind: "cancelled" }); return; }
     const id = `${process.pid}-${++requestSeq}`;
     const waitMs = timeoutMs + (linkMode === "proxy" ? SERVER_TIMEOUT_GRACE_MS : 0);
+    const onAbort = () => {
+      if (pendingRequests.get(id) !== p) return;
+      // Withdraw it, so the plugin isn't held for a call nobody is waiting on.
+      if (linkMode === "proxy" && proxyProtocol >= 3 && sock.readyState === WebSocket.OPEN) {
+        sock.send(JSON.stringify({ type: "cancel", requestId: id }));
+      }
+      p.settle({ kind: "cancelled" });
+    };
     const p: PendingRequest = {
       id, type: message.type, responseType: RESPONSE_FOR[message.type], sentAt: Date.now(), timeoutMs, queued: null,
       timer: setTimeout(() => p.settle({ kind: "timeout", waitedMs: waitMs }), waitMs),
       settle: (o) => {
         if (pendingRequests.get(id) !== p) return;
         clearTimeout(p.timer);
+        signal?.removeEventListener("abort", onAbort);
         pendingRequests.delete(id);
         resolve(o);
       },
     };
     pendingRequests.set(id, p);
+    signal?.addEventListener("abort", onAbort, { once: true });
     sock.send(JSON.stringify({ ...message, requestId: id, timeoutMs, clientLabel: CLIENT_LABEL }), (err) => {
       if (err) p.settle({ kind: "closed", why: `could not send ${message.type} (${err.message})` });
     });
@@ -3247,9 +3277,10 @@ function mapReply(type: string, p: any): unknown {
  * server gave up, with no word from the proxy), PROXY_DISCONNECTED,
  * NO_PLUGIN, NOT_CONNECTED, or PLUGIN_ERROR.
  */
-async function pluginRequest<T = any>(message: Record<string, unknown> & { type: string }, opts: { timeoutMs?: unknown } = {}): Promise<T> {
+async function pluginRequest<T = any>(message: Record<string, unknown> & { type: string }, opts: { timeoutMs?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const type = message.type;
   const timeoutMs = timeoutFor(type, opts.timeoutMs);
+  const signal = opts.signal ?? callContext.getStore()?.signal;
   const started = Date.now();
   // One deadline for the whole call: waiting for a busy plugin and the
   // plugin's own work both come out of timeoutMs.
@@ -3257,15 +3288,19 @@ async function pluginRequest<T = any>(message: Record<string, unknown> & { type:
   const busyDeadline = started + Math.min(BUSY_RETRY_MS ?? timeoutMs, timeoutMs);
   let busyTries = 0;
   let attempts = 0;
+  const cancelled = () => new PluginRequestError(`${type}: cancelled by the caller; the request was withdrawn`, "CANCELLED", false);
   for (;;) {
+    if (signal?.aborted) throw cancelled();
     if (!(await linkReady())) {
       throw new PluginRequestError(`${type}: ${notConnectedMessage().replace(/^Error: /, "")}`, "NOT_CONNECTED", true);
     }
     const left = attempts++ === 0 ? timeoutMs : Math.max(MIN_TIMEOUT_MS, deadline - Date.now());
-    const outcome = localHolder() ?? await sendOnce(message, left);
+    const outcome = localHolder() ?? await sendOnce(message, left, signal);
     switch (outcome.kind) {
       case "reply":
         return mapReply(type, outcome.msg) as T;
+      case "cancelled":
+        throw cancelled();
       case "busy": {
         busyTries++;
         const hint = Number(outcome.msg?.retryAfterMs);
@@ -3274,7 +3309,7 @@ async function pluginRequest<T = any>(message: Record<string, unknown> & { type:
         // Leave the last try enough time to be served.
         const room = Math.min(busyDeadline, deadline - MIN_TIMEOUT_MS) - Date.now();
         if (room > 0) {
-          await sleep(Math.min(wait, room));
+          await abortableSleep(Math.min(wait, room), signal);
           continue;
         }
         throw new PluginRequestError(busyMessage(type, outcome.msg, busyTries, Date.now() - started), "BUSY", true);
@@ -3286,7 +3321,7 @@ async function pluginRequest<T = any>(message: Record<string, unknown> & { type:
         const code = outcome.msg?.code;
         const retryableGap = code === "NO_PLUGIN" || (code === "PLUGIN_DISCONNECTED" && !WRITE_REQUEST_TYPES.has(type));
         if (retryableGap && proxyProtocol < 3 && Date.now() - started < LINK_WAIT_MS && deadline - Date.now() > MIN_TIMEOUT_MS) {
-          await sleep(250);
+          await abortableSleep(250, signal);
           continue;
         }
         throw errorFromProxy(type, outcome.msg);
@@ -3450,7 +3485,7 @@ async function statusText(): Promise<string> {
       lines.push(`  Plugin: ${p.plugin || "unknown"} ${p.version || ""}${p.fileName ? ` · file "${p.fileName}"` : ""}${p.pageName ? ` · page "${p.pageName}"` : ""} · connected ${p.connectedAt}${feats}`);
     }
     if (plugins.some((p) => !Array.isArray(p.features) || !p.features.includes("serial"))) {
-      lines.push("  Note: this plugin build predates its request queue (2026-09-28). Re-run the plugin in Figma once to load it.");
+      lines.push("  Note: this plugin build predates its request queue and cancelling (2026-09-28). Re-run the plugin in Figma once to load them.");
     }
   } else if (pluginCount > 0) {
     lines.push(`  Plugin: ${pluginInfo.name || "unknown"} ${pluginInfo.version || ""}`);

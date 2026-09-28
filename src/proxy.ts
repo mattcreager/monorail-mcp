@@ -101,12 +101,14 @@ interface Req {
   downstreamId: string | null;
   startedAt: number;
   ttlMs: number;
-  /** The sender disconnected: nobody is waiting for the reply. */
+  /** The sender cancelled or disconnected: nobody is waiting for the reply. */
   abandoned: boolean;
   /** The sender has already been told this request failed (its TTL ran out). */
   notified: boolean;
   requeued: number;
   noPluginSince: number | null;
+  /** Dispatched to a plugin build without request ids: its reply can only be matched by type. */
+  untagged: boolean;
 }
 
 interface HistoryEntry {
@@ -260,7 +262,7 @@ function newReq(msg: any, upstream: Upstream, ws: WebSocket, label: string, time
     upstreamId: upstream.id, upstreamWs: ws, label,
     arrivedAt: now, deadline: now + timeoutMs, timeoutMs,
     state: "queued", timer: null, downstreamId: null, startedAt: 0, ttlMs: 0,
-    abandoned: false, notified: false, requeued: 0, noPluginSince: null,
+    abandoned: false, notified: false, requeued: 0, noPluginSince: null, untagged: false,
   };
 }
 
@@ -271,6 +273,7 @@ function dispatch(r: Req, target: Downstream, ttlMs: number): void {
   r.downstreamId = target.id;
   r.startedAt = now;
   r.ttlMs = ttlMs;
+  r.untagged = !target.features.includes("request-id");
   if (r.timer) clearTimeout(r.timer);
   r.timer = setTimeout(() => expire(r.wireId), ttlMs);
   inflight.set(r.wireId, r);
@@ -395,6 +398,33 @@ function expire(wireId: string): void {
   pump();
 }
 
+/**
+ * Nobody is waiting for `r` any more (cancelled, or its sender disconnected).
+ * A queued request just leaves. A read the plugin is serving is let go at
+ * once, if the plugin tags its replies (so the late one can't be mistaken for
+ * the next request's). A write keeps the plugin until it answers: it can't be
+ * called back, and the next edit mustn't interleave with it.
+ */
+function abandon(r: Req, why: string): void {
+  if (r.state === "done") return;
+  r.abandoned = true;
+  if (r.state === "queued") {
+    dequeue(r);
+    log(`${why}: ${r.type} from "${r.label}" left the queue`);
+    return;
+  }
+  if (r.write || r.untagged) {
+    log(`${why}: ${r.type} from "${r.label}" stays in flight until the plugin answers (${r.write ? "a write" : "a plugin build without request ids"})`);
+    return;
+  }
+  const ds = r.downstreamId ? downstreams.get(r.downstreamId) : undefined;
+  const wireId = r.wireId;
+  release(r);
+  if (ds?.features.includes("cancel")) sendJson(ds.ws, { type: "cancel", requestId: wireId });
+  log(`${why}: ${r.type} from "${r.label}" released after ${secs(Date.now() - r.startedAt)}`);
+  pump();
+}
+
 // --- Servers ---
 //
 // Bind the upstream port first, then the downstream port. When several MCP servers
@@ -512,8 +542,9 @@ function onDownstreamConnection(ws: WebSocket): void {
         if (typeof msg.requestId === "string") {
           r = inflight.get(msg.requestId);
           if (!r || r.downstreamId !== id || r.responseType !== msg.type) {
-            // A reply to a request whose TTL already ran out, or an id we never issued.
-            remember(recentLate, { type: msg.type, label: "?", requestId: msg.requestId, ageMs: 0, at: new Date().toISOString(), note: "no request in flight with this id (expired?)" });
+            // A reply to a request whose TTL already ran out, or that was
+            // cancelled and released, or an id we never issued.
+            remember(recentLate, { type: msg.type, label: "?", requestId: msg.requestId, ageMs: 0, at: new Date().toISOString(), note: "no request in flight with this id (expired or cancelled?)" });
             log(`Late reply ${msg.type} (${msg.requestId}) from ${id}: no request in flight with that id; dropped`);
             return;
           }
@@ -534,7 +565,7 @@ function onDownstreamConnection(ws: WebSocket): void {
         const ageMs = Date.now() - r.startedAt;
         release(r);
         if (r.abandoned || r.notified) {
-          remember(recentLate, { type: msg.type, label: r.label, requestId: r.requestId, ageMs, at: new Date().toISOString(), note: r.notified ? `answered ${secs(ageMs - r.ttlMs)} after its TTL` : "answered after its sender left" });
+          remember(recentLate, { type: msg.type, label: r.label, requestId: r.requestId, ageMs, at: new Date().toISOString(), note: r.notified ? `answered ${secs(ageMs - r.ttlMs)} after its TTL` : "answered after its sender cancelled or left" });
           log(`Reply ${msg.type} for "${r.label}" after ${secs(ageMs)}: its sender ${r.notified ? "already heard the TTL expire" : "is gone"}; dropped`);
           pump();
           return;
@@ -707,6 +738,15 @@ function onUpstreamConnection(ws: WebSocket): void {
 
       upstream.lastActivity = Date.now();
 
+      // A sender withdrawing a request (a cancelled tool call)
+      if (msg.type === "cancel") {
+        if (!requestId) return;
+        const r = queue.find((q) => q.upstreamWs === ws && q.requestId === requestId)
+          ?? [...inflight.values()].find((q) => q.upstreamWs === ws && q.requestId === requestId);
+        if (r) abandon(r, "Cancelled");
+        return;
+      }
+
       // Request messages → route to downstream
       if (REQUEST_TYPES.has(msg.type)) {
         const label = typeof msg.clientLabel === "string" && msg.clientLabel ? msg.clientLabel : upstream.label;
@@ -759,11 +799,10 @@ function onUpstreamConnection(ws: WebSocket): void {
 
   ws.on("close", () => {
     upstreamSockets.delete(ws);
-    // Its queued requests leave the queue. One the plugin is serving stays in
-    // flight until the plugin answers or the TTL runs out: the plugin is still
-    // working on it either way.
-    for (const r of [...queue]) if (r.upstreamWs === ws) { r.abandoned = true; dequeue(r); }
-    for (const r of inflight.values()) if (r.upstreamWs === ws) r.abandoned = true;
+    // Requests from this socket have nobody waiting for them any more.
+    for (const r of [...queue, ...inflight.values()]) {
+      if (r.upstreamWs === ws) abandon(r, "Sender disconnected");
+    }
     if (!upstream) return;
     // A server that reconnected already replaced this entry; leave the new one alone.
     if (upstreams.get(upstream.id)?.ws === ws) {

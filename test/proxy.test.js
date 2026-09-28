@@ -210,34 +210,45 @@ describe('disconnects', () => {
     assert.equal(r.code, 'NO_PLUGIN');
   });
 
-  test('a sender disconnecting mid-request keeps the plugin until it answers', async () => {
-    const { upstream } = await setup({ plugin: { delayMs: 400 } });
+  test('a sender disconnecting mid-read releases the plugin at once', async () => {
+    const { upstream, plugin } = await setup({ plugin: { delayMs: 800, features: ['cancel'] } });
+    const a = await upstream('agent-a');
+    const b = await upstream('agent-b');
+    a.send({ type: 'get-css', nodeId: 'n', requestId: 'a1', timeoutMs: 5000 });
+    await waitUntil(() => plugin.requests.length === 1);
+    a.close();
+    await waitUntil(async () => (await b.status()).inflight.length === 0, { timeoutMs: 1000, what: 'the release' });
+    const wireId = plugin.requests[0].requestId;
+    await waitUntil(() => plugin.control.some((m) => m.type === 'cancel' && m.requestId === wireId), { what: 'a cancel to the plugin' });
+    b.send({ type: 'get-css', nodeId: 'm', requestId: 'b1', timeoutMs: 5000 });
+    const r = await reply(b, 'b1', ['css-extracted'], 3000);
+    assert.equal(r.echo.nodeId, 'm', 'b got its own reply, not a\'s late one');
+  });
+
+  test('a sender disconnecting mid-write keeps the plugin until it answers', async () => {
+    const { upstream } = await setup({ plugin: { delayMs: 600 } });
+    const a = await upstream('agent-a');
+    const b = await upstream('agent-b');
+    a.send({ type: 'patch-elements', patches: { changes: [] }, requestId: 'a1', timeoutMs: 5000 });
+    await sleep(50);
+    a.close();
+    await sleep(50);
+    const sent = Date.now();
+    b.send({ type: 'get-css', nodeId: 'm', requestId: 'b1', timeoutMs: 5000 });
+    const r = await reply(b, 'b1', null, 3000);
+    assert.equal(r.type, 'css-extracted');
+    assert.ok(r.at - sent >= 400, `b waited ${r.at - sent}ms for a's edit to finish`);
+  });
+
+  test('with a plugin build without ids, a sender disconnecting keeps the lock (its late reply could be mistaken)', async () => {
+    const { upstream } = await setup({ plugin: { delayMs: 500, echoRequestId: false } });
     const a = await upstream('agent-a');
     const b = await upstream('agent-b');
     a.send({ type: 'get-css', nodeId: 'n', requestId: 'a1', timeoutMs: 5000 });
     await sleep(50);
     a.close();
     await sleep(50);
-    assert.equal((await b.status()).inflight.length, 1, 'the plugin is still working on a\'s request');
-    b.send({ type: 'get-css', nodeId: 'm', requestId: 'b1', timeoutMs: 5000 });
-    const r = await reply(b, 'b1', null, 3000);
-    assert.equal(r.type, 'css-extracted');
-    assert.equal(r.echo.nodeId, 'm');
-  });
-
-  test('a sender disconnecting while queued leaves the queue', async () => {
-    const { upstream, plugin } = await setup({ plugin: { delayMs: 300 } });
-    const a = await p3(upstream, 'agent-a');
-    const b = await p3(upstream, 'agent-b');
-    a.send({ type: 'get-css', nodeId: 'first', requestId: 'a1', timeoutMs: 5000 });
-    await waitUntil(() => plugin.requests.length === 1);
-    b.send({ type: 'get-css', nodeId: 'gone', requestId: 'b1', timeoutMs: 5000 });
-    await reply(b, 'b1', ['queued']);
-    b.close();
-    await waitUntil(async () => (await a.status()).queue.length === 0, { what: 'the queue to empty' });
-    await reply(a, 'a1', ['css-extracted']);
-    await sleep(100);
-    assert.deepEqual(plugin.requests.map((r) => r.nodeId), ['first']);
+    assert.equal((await b.status()).inflight.length, 1);
   });
 
   test('a server re-registering with the same id replaces its old socket', async () => {
@@ -463,6 +474,58 @@ describe('queue (protocol 3 senders)', () => {
     for (const n of [1, 2, 3, 4]) a.send({ type: 'get-css', nodeId: 'hang', requestId: `a${n}`, timeoutMs: 5000 });
     const r = await reply(a, 'a4', ['error']);
     assert.equal(r.code, 'QUEUE_FULL');
+  });
+});
+
+describe('cancel', () => {
+  test('a cancelled queued request leaves the queue and never reaches the plugin', async () => {
+    const { upstream, plugin } = await setup({ plugin: { delayMs: 400 } });
+    const a = await p3(upstream, 'agent-a');
+    const b = await p3(upstream, 'agent-b');
+    a.send({ type: 'get-css', nodeId: 'first', requestId: 'a1', timeoutMs: 5000 });
+    await waitUntil(() => plugin.requests.length === 1);
+    b.send({ type: 'get-css', nodeId: 'withdrawn', requestId: 'b1', timeoutMs: 5000 });
+    await reply(b, 'b1', ['queued']);
+    b.send({ type: 'cancel', requestId: 'b1' });
+    await waitUntil(async () => (await b.status()).queue.length === 0, { what: 'the queue to empty' });
+    await reply(a, 'a1', ['css-extracted']);
+    await sleep(100);
+    assert.deepEqual(plugin.requests.map((r) => r.nodeId), ['first']);
+  });
+
+  test('a cancelled read in flight releases the plugin at once, and the next request goes through', async () => {
+    const { upstream, plugin } = await setup({ plugin: { features: ['cancel'] } });
+    const a = await p3(upstream, 'agent-a');
+    const b = await p3(upstream, 'agent-b');
+    a.send({ type: 'apply-probe', action: 'node', nodeId: 'hang', requestId: 'a1', timeoutMs: 30000 });
+    await waitUntil(() => plugin.requests.length === 1);
+    b.send({ type: 'get-css', nodeId: 'next', requestId: 'b1', timeoutMs: 5000 });
+    await reply(b, 'b1', ['queued']);
+    const cancelledAt = Date.now();
+    a.send({ type: 'cancel', requestId: 'a1' });
+    const r = await reply(b, 'b1', ['css-extracted'], 2000);
+    assert.ok(r.at - cancelledAt < 500, `b waited ${r.at - cancelledAt}ms after the cancel (was up to the 30s TTL)`);
+    assert.ok(plugin.control.some((m) => m.type === 'cancel' && m.requestId === plugin.requests[0].requestId), 'the plugin was told');
+    await sleep(100);
+    assert.equal(a.messages.filter((m) => m.requestId === 'a1' && m.type !== 'queued').length, 0, 'nothing more for the cancelled call');
+  });
+
+  test('a cancelled write keeps the plugin until it answers, and its reply goes nowhere', async () => {
+    const { upstream } = await setup({ plugin: { respond: (msg) => ({ delayMs: msg.type === 'patch-elements' ? 500 : 0 }) } });
+    const a = await p3(upstream, 'agent-a');
+    const b = await p3(upstream, 'agent-b');
+    a.send({ type: 'patch-elements', patches: { changes: [] }, requestId: 'a1', timeoutMs: 5000 });
+    await sleep(50);
+    a.send({ type: 'cancel', requestId: 'a1' });
+    await sleep(50);
+    const st = await b.status();
+    assert.equal(st.inflight.length, 1, 'the edit is still running');
+    assert.equal(st.inflight[0].abandoned, true);
+    const sent = Date.now();
+    b.send({ type: 'get-css', nodeId: 'm', requestId: 'b1', timeoutMs: 5000 });
+    const r = await reply(b, 'b1', ['css-extracted'], 2000);
+    assert.ok(r.at - sent >= 300, 'b waited for the edit to finish');
+    assert.equal(a.messages.filter((m) => m.type === 'patched').length, 0);
   });
 });
 

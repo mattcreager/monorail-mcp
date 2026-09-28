@@ -19,6 +19,8 @@
  *   queued       a request waits its turn in the proxy's queue instead of
  *                being answered `busy`; `queued` tells a protocol 3 sender
  *                where it stands
+ *   cancel       {type:'cancel', requestId} withdraws a request the sender
+ *                gave up on (a cancelled tool call)
  * Older senders wait in the same queue without being told. See
  * docs/proxy-wedge-2026-09.md.
  */
@@ -141,4 +143,5 @@ export type RequestErrorCode =
   | 'NOT_REGISTERED'
   | 'QUEUE_TIMEOUT'        // waited in the proxy's queue until its deadline; nothing reached Figma
   | 'QUEUE_FULL'
+  | 'CANCELLED'            // the caller cancelled the tool call
   | 'PLUGIN_ERROR';        // the plugin answered with an error

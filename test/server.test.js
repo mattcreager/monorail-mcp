@@ -303,3 +303,24 @@ describe('monorail_push', () => {
     assert.match(refused.text, /font missing/);
   });
 });
+
+describe('cancel', () => {
+  test('a cancelled call withdraws its request, so the next session gets the plugin at once', async () => {
+    const { proxy, mcp, plugin } = await setup({ plugin: { features: ['cancel'] } });
+    const other = await startMcp({ env: mcpEnv(proxy), label: 'other' });
+    later(() => other.close());
+    const ac = new AbortController();
+    const call = mcp.client.callTool({ name: 'monorail_probe', arguments: { action: 'node', node_id: 'hang', timeout_ms: 30000 } }, undefined, { signal: ac.signal, timeout: 60000 })
+      .then(() => 'resolved', (e) => `rejected: ${e.message}`);
+    await waitUntil(() => plugin.requests.length === 1);
+    ac.abort('user pressed Esc');
+    assert.match(await call, /rejected/);
+    const probe = await connectUpstream(proxy.proxyPort, { register: false });
+    later(() => probe.close());
+    await waitUntil(async () => (await probe.status()).inflight.length === 0, { timeoutMs: 2000, what: 'the proxy to release the plugin' });
+    const r = await timed(() => other.call('monorail_css', { node_id: 'n1' }));
+    assert.equal(r.isError, false, r.text);
+    assert.ok(r.ms < 2000, `took ${r.ms}ms (was up to the 30s TTL, then BUSY)`);
+    assert.ok(plugin.control.some((m) => m.type === 'cancel' && m.requestId === plugin.requests[0].requestId));
+  });
+});
